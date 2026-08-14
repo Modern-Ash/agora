@@ -5,6 +5,7 @@ name: "Kanban"
 required-roles: ["service-request-manager", "flow-manager", "delivery"]
 work-states: ["requested", "ready", "in-progress", "review", "done"]
 terminal-state: "done"
+wip-limits: {"in-progress":2,"review":2}
 ---
 
 # Kanban Method Pack

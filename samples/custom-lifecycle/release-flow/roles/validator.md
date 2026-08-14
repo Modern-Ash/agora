@@ -3,7 +3,8 @@ schema: "agora/role/v1"
 id: "validator"
 required-capabilities: ["validation"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm", "service", "automation"]
-allowed-actions: ["work.transition", "evidence.add"]
+allowed-actions: ["work.transition", "evidence.add", "handoff.create"]
+allowed-tool-capabilities: ["repository.read", "ci.read", "docs.read"]
 ---
 
 # Validator

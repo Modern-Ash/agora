@@ -3,9 +3,9 @@
 ## Method Pack
 
 A Method Pack is the unit of lifecycle customization. It defines required roles, allowed actor kinds
-and actions, ordered work states, terminal state, protocol, tool policy, artifacts, evidence, and
-gates. Its identifier is open: Scrum and Kanban are installed, editable presets, while any custom
-pack may implement the same Markdown contract.
+and actions, work states, explicit transitions, WIP limits, gates, approval requirements, protocol,
+and tool policy. Its identifier is open: Scrum and Kanban are installed, editable presets, while any
+custom pack may implement the same Markdown contract.
 
 No Method Pack is privileged by the core. A project can model a standard methodology, an internal
 software delivery process, an operational runbook, or a purpose-built hybrid lifecycle.
@@ -19,6 +19,27 @@ An **Assignment** temporarily links an actor to a role within a swarm.
 Identity does not change when work moves from a person to an AI agent or swarm. The assignment changes
 and the handoff is preserved. A swarm can act as a composite actor inside another swarm.
 
+A project-scoped swarm actor may identify a `represented-swarm`. This creates a directed delegation
+edge when the actor receives a parent role. The referenced child retains its own domain records and
+must be ready or running. Agora rejects delegation cycles and chains beyond the configured maximum
+depth. An unlinked swarm actor remains a valid opaque composite team.
+
+A **Handoff** transfers one current role assignment between compatible actors. The outgoing holder
+may initiate its own transfer with `handoff.create`; a governance actor may coordinate another role
+with `handoff.manage`. The record attributes both actors, the authorizer, reason, optional work, and
+time. Prior events and sessions retain their original actor identity.
+
+## Delegation
+
+A **Delegation** binds nonterminal parent work to a proposed child work item through the linked swarm
+actor assigned in the parent. It records the child contract, including title, description,
+acceptance criteria, required artifacts, and the result artifact kind expected by the parent.
+
+The record moves from `proposed` to `accepted` to `collected`. Acceptance creates child work under
+the child's own Method Pack. Collection requires that work to reach its terminal state, then adds an
+`agora://` child-work artifact reference and successful delegated-work evidence to the parent.
+Child artifacts remain authoritative in the child and parent completion gates remain independent.
+
 ## Swarm
 
 A swarm is a temporary team associated with an objective, Method Pack, and branch. It starts as
@@ -29,6 +50,10 @@ and becomes `completed` when every work item reaches the terminal state.
 
 A work item is a Markdown directory containing description, state, criteria, artifacts, and evidence.
 Its workflow comes from `METHOD.md`; it is not hard-coded into an LLM integration.
+
+Transition documents connect source and target states and restrict the roles allowed to traverse
+each edge. A graph may contain review or verification loops. WIP limits reject entry into a state
+whose configured capacity is full.
 
 Work content and artifact references are opaque to the core. Agora can govern a Python service, a
 Java application, infrastructure definitions, documentation, or a polyglot system without changing
@@ -41,17 +66,27 @@ To act, an actor must:
 3. Have a kind and capabilities accepted by that role.
 4. Have the action listed in the role's `allowed-actions`.
 
-## Artifact and evidence
+## Artifact, evidence, and approval
 
 An artifact is a durable output or external reference, such as code, a specification, ticket, build,
-review, approval, or deployment. Evidence records a verifiable result and its producer. The terminal
-gate requires satisfied criteria, required artifact kinds, and successful evidence.
+review, approval, or deployment. Evidence records a verifiable result and its producer. An approval
+is a separate attributed decision made under an assigned role. Gate documents choose whether to
+require criteria, artifacts, successful evidence, and approvals from specific roles.
 
 ## Tool
 
 A tool represents a capability in the developer's daily ecosystem: repository, Jira, CI/CD,
 Confluence, cloud, observability, or communication. Method Pack, project, role, and actor restrict its
 use. Authentication and secrets remain outside versioned documents.
+
+A **Tool Pack** declares one executable and a catalog of structured operations. An operation has a
+provider-neutral capability, risk classification, arguments, required inputs, optional approval role,
+and result kind. A role grants exact values through `allowed-tool-capabilities`; installing a pack
+does not grant authority.
+
+A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
+It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
+and command metadata, while `RESULT.md` captures status, output, and exit code.
 
 ## Environment
 
@@ -63,3 +98,15 @@ environment reads and writes the same workspace protocol and synchronizes throug
 Provider and model identify the selected execution environment. They are strings in configuration,
 not a closed list or a core SDK dependency. Changing an LLM must not change actor identity, workflow
 state, artifacts, or governance history.
+
+An actor may override the project integration, provider, and model. `agora start` resolves the
+effective runtime, persists a session context, detects the external executable, and optionally
+delegates execution to it. Agora provides context through files and environment variables rather
+than invoking a model SDK.
+
+## Session
+
+A session binds an assigned actor, its active roles, a swarm, optional work, and effective runtime.
+`SESSION.md` records the selection and launch result; `CONTEXT.md` lists the project, method, roles,
+work, related delegations, policies, and operating rules the external agent must read. Conversation
+history remains external unless a material outcome is persisted in Agora files.

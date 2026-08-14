@@ -8,5 +8,8 @@
 - Update templates and documentation whenever the installed protocol changes.
 - Treat filesystem and Git as the persistent collaboration substrate.
 - Keep environment-specific output in integration adapters.
+- Keep Tool Pack commands structured, shell-free, and free of credential inputs.
 - Treat Scrum and Kanban as bundled examples, never as privileged core workflows.
+- Preserve recursive swarm cycle checks and configured delegation depth.
+- Preserve explicit child-work acceptance and reference-based result collection across swarms.
 - Prefer small, reviewable changes and abstractions backed by a concrete lifecycle requirement.

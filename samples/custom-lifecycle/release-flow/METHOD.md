@@ -5,6 +5,7 @@ name: "Release Flow"
 required-roles: ["cycle-owner", "maker", "validator"]
 work-states: ["proposed", "accepted", "active", "validated", "released"]
 terminal-state: "released"
+wip-limits: {"active":2,"validated":2}
 ---
 
 # Release Flow Method Pack

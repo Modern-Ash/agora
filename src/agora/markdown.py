@@ -1,9 +1,11 @@
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 Attributes = dict[str, Any]
+JSON_NUMBER_PATTERN = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
 
 
 @dataclass
@@ -54,6 +56,15 @@ def string_attribute(attributes: Attributes, key: str) -> str:
     return value
 
 
+def optional_string_attribute(attributes: Attributes, key: str) -> str | None:
+    value = attributes.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Expected non-empty string attribute or null: {key}")
+    return value
+
+
 def strings_attribute(attributes: Attributes, key: str) -> list[str]:
     value = attributes.get(key)
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
@@ -73,7 +84,11 @@ def record_attribute(attributes: Attributes, key: str) -> dict[str, str]:
 def _parse_value(value: str) -> Any:
     if not value:
         return ""
-    if value[0] in {'"', "[", "{"} or value in {"true", "false", "null"}:
+    if (
+        value[0] in {'"', "[", "{"}
+        or value in {"true", "false", "null"}
+        or JSON_NUMBER_PATTERN.fullmatch(value)
+    ):
         try:
             return json.loads(value)
         except json.JSONDecodeError as error:

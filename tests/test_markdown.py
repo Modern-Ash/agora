@@ -10,6 +10,8 @@ def test_round_trips_protocol_metadata_and_readable_content() -> None:
                 "schema": "agora/example/v1",
                 "states": ["ready", "running"],
                 "assignments": {"developer": "project:ada"},
+                "limit": 3,
+                "version-label": "0.1.0",
             },
             body="# Example\n\nDurable collaboration context.",
         )
@@ -20,6 +22,8 @@ def test_round_trips_protocol_metadata_and_readable_content() -> None:
             "schema": "agora/example/v1",
             "states": ["ready", "running"],
             "assignments": {"developer": "project:ada"},
+            "limit": 3,
+            "version-label": "0.1.0",
         },
         body="# Example\n\nDurable collaboration context.\n",
     )

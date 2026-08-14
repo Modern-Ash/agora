@@ -14,6 +14,7 @@ status: "draft"
 - Project language, runtime, LLM, and development process are configuration, not core assumptions.
 - Decisions, handoffs, artifacts, and evidence remain reviewable in Git.
 - Production-impacting actions require an explicit project policy.
+- Recursive delegation must remain acyclic and within the configured maximum depth.
 
 ## Local amendments
 

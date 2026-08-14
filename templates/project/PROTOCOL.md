@@ -11,7 +11,9 @@ project: "{{PROJECT_NAME}}"
 4. Record material interactions and decisions in the active swarm.
 5. Register produced artifacts and evidence before requesting completion.
 6. Use a handoff when responsibility moves between a human, AI agent, service, or swarm.
-7. Stop and request approval when a policy or gate cannot be satisfied.
+7. Use a delegation record when linked child work is proposed, accepted, or collected.
+8. Stop and request approval when a policy or gate cannot be satisfied.
+9. Use installed Tool Pack operations for governed external actions and retain their results.
 
 The repository and its active branch are the shared source of truth. Chat history is not durable
 project state unless its relevant outcome is recorded in Agora files.

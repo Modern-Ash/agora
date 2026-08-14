@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agora.model import (
     AddActorInput,
+    AddApprovalInput,
     AddArtifactInput,
     AddEvidenceInput,
     AssignActorInput,
@@ -12,6 +13,7 @@ from agora.model import (
     CreateSwarmInput,
     CreateWorkInput,
     InitInput,
+    StartSessionInput,
     TransitionWorkInput,
     WorkActorInput,
 )
@@ -79,7 +81,7 @@ def main() -> None:
         AssignActorInput(swarm_id="first-slice", role_id="developer", actor_id="delivery-swarm")
     )
 
-    print("4. Create work and advance through the installed Scrum Method Pack")
+    print("4. Create work and prepare a governed Codex session")
     agora.create_work(
         CreateWorkInput(
             swarm_id="first-slice",
@@ -90,7 +92,18 @@ def main() -> None:
             required_artifacts=["source-code"],
         )
     )
-    for state in ("planned", "implementing", "reviewing", "verifying"):
+    session = agora.start_session(
+        StartSessionInput(
+            id="bootstrap-session",
+            actor_id="delivery-swarm",
+            swarm_id="first-slice",
+            work_id="bootstrap",
+        )
+    )
+    print(f"   Session context: {session.context_path}")
+
+    print("5. Advance through the graph, including Scrum Master verification")
+    for state in ("planned", "implementing", "reviewing"):
         agora.transition_work(
             TransitionWorkInput(
                 swarm_id="first-slice",
@@ -99,8 +112,16 @@ def main() -> None:
                 target_state=state,
             )
         )
+    agora.transition_work(
+        TransitionWorkInput(
+            swarm_id="first-slice",
+            work_id="bootstrap",
+            actor_id="facilitator",
+            target_state="verifying",
+        )
+    )
 
-    print("5. Confirm that completion is rejected without artifacts and evidence")
+    print("6. Confirm that completion is rejected without artifacts and evidence")
     try:
         agora.transition_work(
             TransitionWorkInput(
@@ -113,7 +134,7 @@ def main() -> None:
     except ValueError as error:
         print(f"   Rejected: {error}")
 
-    print("6. Satisfy the gate and complete")
+    print("7. Satisfy the gate and complete")
     agora.satisfy_criterion(
         WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="owner"),
         "installable",
@@ -135,6 +156,15 @@ def main() -> None:
             type="test-run",
             result="success",
             artifact_refs=["repo://src/agora/workspace.py"],
+        )
+    )
+    agora.add_approval(
+        AddApprovalInput(
+            swarm_id="first-slice",
+            work_id="bootstrap",
+            actor_id="owner",
+            role_id="product-owner",
+            note="The increment satisfies the objective",
         )
     )
     agora.transition_work(

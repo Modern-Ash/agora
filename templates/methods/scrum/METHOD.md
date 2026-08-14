@@ -5,6 +5,7 @@ name: "Scrum"
 required-roles: ["product-owner", "scrum-master", "developer"]
 work-states: ["specified", "planned", "implementing", "reviewing", "verifying", "completed"]
 terminal-state: "completed"
+wip-limits: {"implementing":2,"reviewing":2}
 ---
 
 # Scrum Method Pack

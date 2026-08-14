@@ -3,7 +3,8 @@ schema: "agora/role/v1"
 id: "scrum-master"
 required-capabilities: ["facilitation", "governance"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm"]
-allowed-actions: ["work.transition", "evidence.add"]
+allowed-actions: ["work.transition", "delegation.manage", "evidence.add", "handoff.create", "handoff.manage"]
+allowed-tool-capabilities: ["repository.read", "issue.read", "ci.read", "docs.read"]
 ---
 
 # Scrum Master

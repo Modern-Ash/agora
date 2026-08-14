@@ -3,7 +3,8 @@ schema: "agora/role/v1"
 id: "maker"
 required-capabilities: ["delivery"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm", "automation"]
-allowed-actions: ["work.transition", "artifact.add", "evidence.add"]
+allowed-actions: ["work.transition", "work.delegate", "delegation.collect", "artifact.add", "evidence.add", "handoff.create"]
+allowed-tool-capabilities: ["repository.read", "repository.write", "ci.read", "ci.run"]
 ---
 
 # Maker

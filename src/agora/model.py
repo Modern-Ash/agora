@@ -4,6 +4,8 @@ from typing import Literal
 ActorKind = Literal["human", "ai-agent", "swarm", "service", "automation"]
 Integration = Literal["generic", "codex", "claude"]
 Method = str
+ToolRisk = Literal["read", "write", "destructive"]
+DelegationStatus = Literal["proposed", "accepted", "collected"]
 
 ACTOR_KINDS: tuple[ActorKind, ...] = (
     "human",
@@ -22,6 +24,7 @@ class UserConfiguration:
     provider: str
     model: str
     default_method: Method
+    max_delegation_depth: int
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,39 @@ class ActorRecord:
     capabilities: list[str]
     path: str
     reference: str
+    integration: Integration | None = None
+    provider: str | None = None
+    model: str | None = None
+    represented_swarm: str | None = None
+
+
+@dataclass(frozen=True)
+class GatePolicy:
+    id: str
+    require_all_criteria: bool = True
+    require_required_artifacts: bool = True
+    require_successful_evidence: bool = True
+    required_approval_roles: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TransitionRule:
+    source: str
+    target: str
+    roles: list[str]
+    gate: str | None = None
+
+
+@dataclass(frozen=True)
+class MethodContract:
+    id: str
+    name: str
+    required_roles: list[str]
+    work_states: list[str]
+    terminal_state: str
+    transitions: list[TransitionRule]
+    gates: dict[str, GatePolicy]
+    wip_limits: dict[str, int]
 
 
 @dataclass
@@ -64,7 +100,27 @@ class WorkRecord:
     required_artifacts: list[str]
     artifact_kinds: list[str]
     evidence_results: list[str]
+    approval_roles: list[str]
     path: str
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    id: str
+    actor: str
+    swarm_id: str
+    work_id: str | None
+    roles: list[str]
+    integration: Integration
+    provider: str
+    model: str
+    status: str
+    path: str
+    context_path: str
+    launch_command: list[str]
+    runtime_available: bool
+    created_at: str
+    exit_code: int | None = None
 
 
 @dataclass(frozen=True)
@@ -86,11 +142,102 @@ class MethodPackRecord:
 
 
 @dataclass(frozen=True)
+class ToolOperation:
+    id: str
+    name: str
+    capability: str
+    risk: ToolRisk
+    arguments: list[str]
+    inputs: list[str]
+    approval_role: str | None = None
+    result_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolContract:
+    id: str
+    name: str
+    category: str
+    executable: str
+    authentication_reference: str | None
+    operations: dict[str, ToolOperation]
+
+
+@dataclass(frozen=True)
+class ToolPackRecord:
+    id: str
+    name: str
+    category: str
+    executable: str
+    scope: Literal["user", "project"]
+    path: str
+    operations: list[str]
+
+
+@dataclass(frozen=True)
+class ToolRunRecord:
+    id: str
+    tool_id: str
+    operation_id: str
+    actor: str
+    swarm_id: str
+    work_id: str | None
+    capability: str
+    risk: ToolRisk
+    inputs: dict[str, str]
+    command: list[str]
+    runtime_available: bool
+    status: str
+    path: str
+    created_at: str
+    result_kind: str | None = None
+    exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class HandoffRecord:
+    id: str
+    swarm_id: str
+    role_id: str
+    from_actor: str
+    to_actor: str
+    authorized_by: str
+    reason: str
+    work_id: str | None
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class DelegationRecord:
+    id: str
+    parent_swarm_id: str
+    parent_work_id: str
+    child_swarm_id: str
+    child_work_id: str
+    represented_by: str
+    requested_by: str
+    title: str
+    description: str
+    acceptance_criteria: dict[str, str]
+    required_artifacts: list[str]
+    result_kind: str
+    status: DelegationStatus
+    created_at: str
+    path: str
+    accepted_by: str | None = None
+    accepted_at: str | None = None
+    collected_by: str | None = None
+    collected_at: str | None = None
+
+
+@dataclass(frozen=True)
 class ConfigureInput:
     integration: Integration
     provider: str
     model: str
     default_method: Method
+    max_delegation_depth: int = 3
     force: bool = False
 
 
@@ -101,11 +248,19 @@ class InitInput:
     provider: str | None = None
     model: str | None = None
     default_method: Method | None = None
+    max_delegation_depth: int | None = None
     force: bool = False
 
 
 @dataclass(frozen=True)
 class InstallMethodInput:
+    source: str
+    scope: Literal["user", "project"]
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class InstallToolInput:
     source: str
     scope: Literal["user", "project"]
     force: bool = False
@@ -119,7 +274,20 @@ class AddActorInput:
     capabilities: list[str]
     scope: Literal["user", "project"]
     description: str | None = None
+    integration: Integration | None = None
+    provider: str | None = None
+    model: str | None = None
+    represented_swarm: str | None = None
     force: bool = False
+
+
+@dataclass(frozen=True)
+class SetActorRuntimeInput:
+    actor_id: str
+    integration: Integration | None = None
+    provider: str | None = None
+    model: str | None = None
+    clear: bool = False
 
 
 @dataclass(frozen=True)
@@ -135,6 +303,39 @@ class CreateSwarmInput:
 class AssignActorInput:
     swarm_id: str
     role_id: str
+    actor_id: str
+
+
+@dataclass(frozen=True)
+class HandoffActorInput:
+    swarm_id: str
+    role_id: str
+    from_actor_id: str
+    to_actor_id: str
+    authorized_by: str
+    reason: str
+    id: str | None = None
+    work_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CreateDelegationInput:
+    parent_swarm_id: str
+    parent_work_id: str
+    child_actor_id: str
+    child_work_id: str
+    actor_id: str
+    title: str
+    acceptance_criteria: list[tuple[str, str]] = field(default_factory=list)
+    required_artifacts: list[str] = field(default_factory=list)
+    result_kind: str = "delegated-result"
+    description: str = ""
+    id: str | None = None
+
+
+@dataclass(frozen=True)
+class DelegationActorInput:
+    delegation_id: str
     actor_id: str
 
 
@@ -172,3 +373,33 @@ class AddEvidenceInput(WorkActorInput):
     type: str = ""
     result: Literal["success", "failure"] = "failure"
     artifact_refs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AddApprovalInput(WorkActorInput):
+    role_id: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class StartSessionInput:
+    actor_id: str
+    swarm_id: str
+    id: str | None = None
+    work_id: str | None = None
+    runner: str | None = None
+    launch: bool = False
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class InvokeToolInput:
+    tool_id: str
+    operation_id: str
+    actor_id: str
+    swarm_id: str
+    id: str | None = None
+    work_id: str | None = None
+    inputs: dict[str, str] = field(default_factory=dict)
+    launch: bool = False
+    force: bool = False

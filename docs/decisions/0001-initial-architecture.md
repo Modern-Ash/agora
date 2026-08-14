@@ -39,7 +39,8 @@ gates remain executable.
 ## Future work
 
 - Installable registry of Method Packs and integrations.
-- Tool manifests for Jira, repositories, CI/CD, documentation, and cloud.
-- Executable handoffs and recursive swarms with delegation limits.
+- Published vendor Tool Packs for Jira, CI/CD, documentation, and cloud.
+- Delegation budgets, automatic child work decomposition, and child artifact copying. Explicit
+  reference-based result collection is part of the current filesystem protocol.
 - Locks or leases for distributed work.
-- Human approval policies, budgets, and environment-specific permissions.
+- Gate waivers, approval delegation, budgets, and environment-specific permissions.
