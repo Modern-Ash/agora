@@ -1,0 +1,12 @@
+.venv/
+node_modules/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+.agora/
+.agents/skills/agora-*/
+.claude/commands/agora.*.md

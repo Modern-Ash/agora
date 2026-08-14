@@ -1,0 +1,13 @@
+---
+schema: "agora/tool/v1"
+id: "repository"
+name: "Local Git repository"
+category: "repository"
+executable: "git"
+authentication-reference: "local-git-configuration"
+---
+
+# Local Git repository
+
+Provides governed, shell-free access to selected Git operations in the current project. Repository
+credentials and signing configuration remain under Git and operating-system control.
