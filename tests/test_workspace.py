@@ -694,7 +694,8 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
     )
     assert installed.executable == "gh"
     assert installed.implements == "ci-cd"
-    assert workspace.list_tool_adapters()[0].installed_scopes == ["project"]
+    adapters = {item.id: item for item in workspace.list_tool_adapters()}
+    assert adapters["github-actions"].installed_scopes == ["project"]
 
     calls: list[list[str]] = []
 
@@ -913,6 +914,87 @@ def test_installs_and_governs_the_github_issues_cli_adapter(
             )
         )
     assert not (root / ".agora" / "tool-runs" / "github-issue-unsafe-transition").exists()
+    assert workspace.validate().ok
+
+
+def test_governs_partial_aws_and_gcp_inventory_adapters(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    available_paths = {
+        "aws": "/usr/local/bin/aws",
+        "gcloud": "/usr/bin/gcloud",
+    }
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: available_paths.get(executable),
+    )
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.implements_operations) for item in available] == [
+        ("aws-resource-inventory", ["inspect-resource", "list-resources"]),
+        ("gcp-asset-inventory", ["inspect-resource", "list-resources"]),
+    ]
+
+    _prepare_scrum_team(workspace)
+    for adapter_id in ("aws-resource-inventory", "gcp-asset-inventory"):
+        workspace.install_tool_adapter(
+            InstallToolAdapterInput(adapter_id=adapter_id, scope="project")
+        )
+
+    aws_resources = workspace.invoke_tool(
+        InvokeToolInput(
+            id="aws-inventory",
+            tool_id="aws-resource-inventory",
+            operation_id="list-resources",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "us-east-1"},
+        )
+    )
+    gcp_resource = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gcp-resource",
+            tool_id="gcp-asset-inventory",
+            operation_id="inspect-resource",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={
+                "environment": "projects/agora-production",
+                "resource": (
+                    "//compute.googleapis.com/projects/agora-production/"
+                    "zones/us-central1-a/instances/api"
+                ),
+            },
+        )
+    )
+
+    assert aws_resources.command[:6] == [
+        "aws",
+        "resourcegroupstaggingapi",
+        "get-resources",
+        "--region",
+        "us-east-1",
+        "--max-items",
+    ]
+    assert gcp_resource.command[:5] == [
+        "gcloud",
+        "asset",
+        "search-all-resources",
+        "--scope=projects/agora-production",
+        "--query=name=//compute.googleapis.com/projects/agora-production/zones/us-central1-a/instances/api",
+    ]
+    for adapter_id in ("aws-resource-inventory", "gcp-asset-inventory"):
+        with pytest.raises(FileNotFoundError, match="plan"):
+            workspace.invoke_tool(
+                InvokeToolInput(
+                    id=f"{adapter_id}-unsupported-plan",
+                    tool_id=adapter_id,
+                    operation_id="plan",
+                    actor_id="developer",
+                    swarm_id="delivery",
+                    inputs={"environment": "production", "change": "change-42"},
+                )
+            )
     assert workspace.validate().ok
 
 

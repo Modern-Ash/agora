@@ -37,6 +37,18 @@ def load_tool_contract(root: Path) -> ToolContract:
     provider = optional_string_attribute(document.attributes, "provider")
     transport = optional_string_attribute(document.attributes, "transport")
     implements = optional_string_attribute(document.attributes, "implements")
+    implements_operations_value = document.attributes.get("implements-operations", [])
+    if not isinstance(implements_operations_value, list) or any(
+        not isinstance(operation_id, str) for operation_id in implements_operations_value
+    ):
+        raise ValueError("Tool adapter implements-operations must be a string array")
+    if "implements-operations" in document.attributes and not implements_operations_value:
+        raise ValueError("Tool adapter implements-operations must not be empty")
+    implements_operations = list(implements_operations_value)
+    if len(set(implements_operations)) != len(implements_operations):
+        raise ValueError("Tool adapter implements-operations must be unique")
+    for operation_id in implements_operations:
+        assert_slug(operation_id, "Implemented Tool operation id")
     adapter_values = (provider, transport, implements)
     if any(value is not None for value in adapter_values) and any(
         value is None for value in adapter_values
@@ -47,6 +59,8 @@ def load_tool_contract(root: Path) -> ToolContract:
         assert_slug(implements, "Tool adapter implementation")
         if transport not in TOOL_ADAPTER_TRANSPORTS:
             raise ValueError(f"Unsupported Tool adapter transport: {transport}")
+    elif implements_operations:
+        raise ValueError("Tool adapter implements-operations requires adapter metadata")
 
     operation_root = root / "operations"
     paths = sorted(operation_root.glob("*.md")) if operation_root.exists() else []
@@ -72,6 +86,7 @@ def load_tool_contract(root: Path) -> ToolContract:
         provider=provider,
         transport=transport,
         implements=implements,
+        implements_operations=implements_operations,
     )
 
 
@@ -193,13 +208,23 @@ def validate_tool_adapter_contract(adapter: ToolContract, implemented: ToolContr
         raise ValueError(
             f"Tool adapter {adapter.id} declares {adapter.implements}, not {implemented.id}"
         )
-    missing_operations = sorted(set(implemented.operations) - set(adapter.operations))
-    if missing_operations:
+    contracted_operations = set(adapter.implements_operations or implemented.operations)
+    unknown_operations = sorted(contracted_operations - set(implemented.operations))
+    if unknown_operations:
         raise ValueError(
-            f"Tool adapter {adapter.id} is missing operations from {implemented.id}: "
-            f"{', '.join(missing_operations)}"
+            f"Tool adapter {adapter.id} references unknown operations from {implemented.id}: "
+            f"{', '.join(unknown_operations)}"
         )
-    for operation_id, expected in implemented.operations.items():
+    missing_operations = sorted(contracted_operations - set(adapter.operations))
+    extra_operations = sorted(set(adapter.operations) - contracted_operations)
+    if missing_operations or extra_operations:
+        raise ValueError(
+            f"Tool adapter {adapter.id} operations must match its implemented contract: "
+            f"missing=[{', '.join(missing_operations)}], "
+            f"extra=[{', '.join(extra_operations)}]"
+        )
+    for operation_id in sorted(contracted_operations):
+        expected = implemented.operations[operation_id]
         actual = adapter.operations[operation_id]
         if actual.capability != expected.capability:
             raise ValueError(

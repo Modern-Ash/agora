@@ -108,6 +108,9 @@ provider-neutral contract it `implements`. The adapter changes command translati
 authority. Adapter discovery records whether its executable is available; installation and
 invocation remain separate explicit actions. Bundled adapters implement `ci-cd` and
 `work-management` for GitHub through `gh`, plus `cloud-infrastructure` through Terraform CLI.
+A partial adapter lists `implements-operations`; it must contain exactly that conforming subset and
+cannot be invoked for omitted operations. AWS and Google Cloud inventory use this form for read-only
+resource discovery.
 
 A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution

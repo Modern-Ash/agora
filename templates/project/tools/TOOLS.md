@@ -19,6 +19,8 @@ cloud providers, observability platforms, and communication services.
 - Prefer a reviewed native CLI adapter already used by the developer, then a reviewed team wrapper;
   use MCP only when it provides a required capability unavailable through the CLI.
 - Discovering an executable must never install an adapter, change transport, or grant authority.
+- A partial adapter must declare its exact implemented operations and must not imply unsupported
+  write or destructive behavior.
 - Create commits through `repository/commit`; its message must satisfy the configured Conventional
   Commits input rule.
 

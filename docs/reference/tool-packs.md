@@ -48,6 +48,7 @@ Describe installation, environment, and governance expectations here.
 | `provider` | Adapter-only provider slug; requires `transport` and `implements` |
 | `transport` | Adapter-only execution transport; currently `cli` |
 | `implements` | Adapter-only id of the provider-neutral Tool Pack contract |
+| `implements-operations` | Optional non-empty subset implemented by a deliberately partial adapter |
 
 The executable is resolved by the environment when `--launch` is used. A prepared invocation does
 not require it to be installed.
@@ -227,6 +228,17 @@ agora tool adapter install --id terraform --scope project
 
 See [CLI-first ecosystem adapters](../guides/cli-first-adapters.md) for transport selection,
 manifest metadata, and the MCP boundary.
+
+A full adapter omits `implements-operations` and must conform to every operation in the referenced
+contract. A partial adapter lists its exact subset:
+
+```markdown
+implements: "cloud-infrastructure"
+implements-operations: ["list-resources","inspect-resource"]
+```
+
+Its Tool Pack must contain exactly those operations. Installation and `agora validate` reject
+unknown, missing, or extra operations and any capability, risk, required-input, or result-kind drift.
 
 ## Bundled packs
 

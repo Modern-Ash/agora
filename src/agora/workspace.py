@@ -406,6 +406,9 @@ class AgoraWorkspace:
                     provider=contract.provider,
                     transport=contract.transport,
                     implements=contract.implements,
+                    implements_operations=sorted(
+                        contract.implements_operations or implemented.operations
+                    ),
                     executable=contract.executable,
                     runtime_available=runtime_available,
                     installed_scopes=installed_scopes,
@@ -4972,6 +4975,7 @@ class AgoraWorkspace:
             provider=contract.provider,
             transport=contract.transport,
             implements=contract.implements,
+            implements_operations=contract.implements_operations,
             source=source,
             updates=updates,
         )

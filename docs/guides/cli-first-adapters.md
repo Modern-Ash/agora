@@ -153,6 +153,32 @@ saved plan path, not free-form change text. Saved plan files can contain sensiti
 must remain outside Git or follow the project's protected artifact policy. Applying a saved plan and
 targeted destruction retain their separate capabilities and are not granted to bundled roles.
 
+## Partial AWS and Google Cloud inventory
+
+AWS CLI and gcloud do not expose one provider-wide plan/apply abstraction equivalent to Terraform.
+Agora therefore includes honest read-only adapters instead of mapping deployment capabilities to
+unrelated commands:
+
+```bash
+agora tool adapter install --id aws-resource-inventory --scope project
+agora tool adapter install --id gcp-asset-inventory --scope project
+```
+
+Both declare:
+
+```markdown
+implements: "cloud-infrastructure"
+implements-operations: ["list-resources","inspect-resource"]
+```
+
+The AWS adapter uses the Resource Groups Tagging API and treats `environment` as a Region. That API
+returns tagged or previously tagged resources, so the result is explicitly not a complete account
+inventory. The Google Cloud adapter uses Cloud Asset Inventory, treats `environment` as a project,
+folder, or organization scope, limits results, and persists only a bounded field projection.
+
+Neither adapter contains `plan`, `apply-plan`, or `destroy-resource`. Calling those operation ids
+fails as unsupported rather than falling through to another tool or transport.
+
 ## Adapter contract
 
 A CLI adapter is an ordinary Tool Pack with three additional manifest attributes:
@@ -173,9 +199,10 @@ implements: "ci-cd"
 
 `provider` identifies the external ecosystem, `transport` identifies how operations execute, and
 `implements` identifies the provider-neutral Tool Pack contract. All three are required together.
-The current executable adapter transport is `cli`. Installation verifies that every operation from
-the implemented contract remains present with the same capability, risk, required inputs, and
-result kind; adapters may add provider context inputs but cannot weaken the contract.
+The current executable adapter transport is `cli`. Full adapters must preserve every operation;
+partial adapters declare `implements-operations`. Installation verifies the exact claimed set with
+the same capability, risk, required inputs, and result kind. Adapters may add provider context inputs
+but cannot weaken the contract.
 
 Adapter operations must remain shell-free, non-interactive, credential-free, and bounded. Output
 that may contain secrets or excessive logs should be filtered by the native CLI or a reviewed Python

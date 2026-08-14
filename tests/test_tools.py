@@ -104,6 +104,36 @@ def test_loads_the_github_issues_cli_adapter_and_restricts_transitions() -> None
         validate_operation_inputs(transition, {"issue": "42", "state": "delete"})
 
 
+@pytest.mark.parametrize(
+    ("adapter_id", "provider", "executable"),
+    [
+        ("aws-resource-inventory", "aws", "aws"),
+        ("gcp-asset-inventory", "google-cloud", "gcloud"),
+    ],
+)
+def test_loads_a_read_only_cloud_inventory_adapter(
+    adapter_id: str, provider: str, executable: str
+) -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / adapter_id)
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == provider
+    assert contract.executable == executable
+    assert contract.implements_operations == ["list-resources", "inspect-resource"]
+    assert sorted(contract.operations) == ["inspect-resource", "list-resources"]
+    assert all(operation.risk == "read" for operation in contract.operations.values())
+
+
+def test_rejects_an_extra_operation_in_a_partial_adapter() -> None:
+    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "aws-resource-inventory")
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    adapter.operations["plan"] = implemented.operations["plan"]
+
+    with pytest.raises(ValueError, match=r"extra=\[plan\]"):
+        validate_tool_adapter_contract(adapter, implemented)
+
+
 def test_loads_the_bundled_knowledge_base_contract() -> None:
     contract = load_tool_contract(template_root() / "tools" / "knowledge-base")
 

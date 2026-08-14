@@ -60,6 +60,23 @@ show`, avoiding raw resource attributes in durable output. A team needing detail
 use a reviewed redacting wrapper. Applying and targeted destruction retain `cloud.deploy` and
 `cloud.destroy`; installation grants neither.
 
+## Read-only AWS and Google Cloud inventory
+
+Install native inventory without pretending that either provider has a universal plan/apply command:
+
+```bash
+agora tool adapter install --id aws-resource-inventory --scope project
+agora tool adapter install --id gcp-asset-inventory --scope project
+```
+
+These are partial adapters implementing only `list-resources` and `inspect-resource`. AWS uses
+`resourcegroupstaggingapi get-resources`; `environment` is a Region and the inventory only covers
+tagged or previously tagged resources. Google Cloud uses `gcloud asset search-all-resources`;
+`environment` is a project, folder, or organization scope and output is a bounded JSON projection.
+
+The manifests contain no plan, apply, or destruction operations. Conformance validation ensures the
+adapters cannot claim those capabilities through metadata or accidental extra files.
+
 ## Default authority
 
 Bundled methods use conservative cloud permissions:
@@ -166,4 +183,10 @@ Run the native Terraform command preparation example:
 
 ```bash
 uv run python samples/terraform-cli/run.py
+```
+
+Run the read-only native cloud inventory example:
+
+```bash
+uv run python samples/cloud-inventory-cli/run.py
 ```

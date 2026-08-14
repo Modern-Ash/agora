@@ -90,6 +90,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   require approval before publication, and reject unauthorized archival.
 - [Governed cloud infrastructure](../samples/cloud-infrastructure/README.md): plan a cloud change,
   require approval before apply, and reject unauthorized destruction.
+- [Native cloud inventory](../samples/cloud-inventory-cli/README.md): prepare bounded AWS and Google
+  Cloud reads while proving partial adapters expose no deployment operation.
 - [Governed observability](../samples/observability/README.md): inspect health, declare an incident,
   and require approval before external resolution.
 - [Governed handoffs](../samples/handoffs/README.md): preserve one work item while its Developer role

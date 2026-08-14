@@ -295,6 +295,8 @@ agora tool adapter list --available
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id github-issues --scope project
 agora tool adapter install --id terraform --scope project
+agora tool adapter install --id aws-resource-inventory --scope project
+agora tool adapter install --id gcp-asset-inventory --scope project
 ```
 
 Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`,
@@ -364,7 +366,9 @@ documentation. Draft access remains separate from publication and destructive ar
 The `cloud-infrastructure` pack defines `cloudctl` for AWS, Azure, Google Cloud, infrastructure as
 code, or internal platforms. Inspection and planning remain distinct from apply and destruction.
 The independently installable `terraform` adapter uses the developer's existing Terraform CLI and
-applies only saved plans. See the [cloud integration guide](docs/guides/cloud-integrations.md).
+applies only saved plans. Partial AWS and Google Cloud adapters expose bounded inventory reads
+without plan, apply, or destruction operations. See the
+[cloud integration guide](docs/guides/cloud-integrations.md).
 
 The `observability` pack defines `observectl` for monitoring and incident systems. Reading signals
 and declaring incidents remain separate from resolution authority. See the
@@ -586,7 +590,7 @@ versioned registry snapshot without persisting a private key.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD, and
   knowledge-base, cloud-infrastructure, and observability packs are implemented; vendor
   distributions remain future work except for the bundled GitHub Actions, GitHub Issues, and
-  Terraform CLI adapters.
+  Terraform CLI adapters plus partial AWS and Google Cloud inventory adapters.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

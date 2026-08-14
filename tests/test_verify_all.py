@@ -18,6 +18,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: basic-swarm",
         "sample: ci-cd",
         "sample: cloud-infrastructure",
+        "sample: cloud-inventory-cli",
         "sample: concurrent-writes",
         "sample: custom-lifecycle",
         "sample: delegated-work",

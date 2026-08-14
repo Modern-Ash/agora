@@ -163,6 +163,9 @@ needed. MCP remains an optional external transport and never replaces Markdown o
 of truth. Adapter discovery only checks executable availability; selection, installation, and every
 invocation remain explicit. The bundled `github-actions`, `github-issues`, and `terraform` adapters
 are concrete CLI-first implementations that delegate directly to `gh` and Terraform CLI.
+Partial adapters declare the exact operations they implement. The AWS and Google Cloud inventory
+adapters use this mechanism to provide bounded native reads without claiming plan, deployment, or
+destruction behavior that the provider-wide CLIs do not possess.
 
 ## Recursive delegation
 

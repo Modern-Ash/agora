@@ -243,6 +243,7 @@ class ToolContract:
     provider: str | None = None
     transport: str | None = None
     implements: str | None = None
+    implements_operations: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -259,6 +260,7 @@ class ToolPackRecord:
     provider: str | None = None
     transport: str | None = None
     implements: str | None = None
+    implements_operations: list[str] = field(default_factory=list)
     source: PackSourceRecord | None = None
     updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
@@ -271,6 +273,7 @@ class ToolAdapterRecord:
     provider: str
     transport: str
     implements: str
+    implements_operations: list[str]
     executable: str
     runtime_available: bool
     installed_scopes: list[str]
