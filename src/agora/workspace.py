@@ -70,6 +70,8 @@ from agora.model import (
     RegistryRecord,
     RegistrySourceRecord,
     RegistryTrustKeyRecord,
+    RegistryUpdateRecord,
+    RegistryUpdateResult,
     RevokeRegistryTrustKeyInput,
     SessionRecord,
     SetActorRuntimeInput,
@@ -81,6 +83,7 @@ from agora.model import (
     ToolRisk,
     ToolRunRecord,
     TransitionWorkInput,
+    UpdateRegistryInput,
     UpgradeInput,
     UpgradeResult,
     UserConfiguration,
@@ -97,8 +100,13 @@ from agora.registries import (
     discover_registry_packs,
     load_registry,
     render_registry_source,
+    render_registry_update,
 )
-from agora.registry_distribution import download_registry_release
+from agora.registry_distribution import (
+    compare_registry_versions,
+    download_registry_release,
+    inspect_registry_release,
+)
 from agora.tools import load_tool_contract, validate_operation_inputs
 from agora.trust import load_trust_key, render_trust_key, revoke_trust_key, trust_key_from_pem
 from agora.upgrades import (
@@ -357,9 +365,9 @@ class AgoraWorkspace:
             allow_insecure_http=data.allow_insecure_http,
             trusted_keys=self.list_registry_trust_keys(),
         ) as (registry_root, index, release, signature_verified, archive):
-            if (registry_root / "SOURCE.md").exists():
+            if (registry_root / "SOURCE.md").exists() or (registry_root / "updates").exists():
                 raise ValueError(
-                    "Remote registry archives must not contain installer-owned SOURCE.md"
+                    "Remote registry archives must not contain installer-owned SOURCE.md or updates"
                 )
             registry = load_registry(registry_root, data.scope)
             if registry.id != index.id:
@@ -395,6 +403,7 @@ class AgoraWorkspace:
         force: bool,
         *,
         provenance: RegistrySourceRecord | None = None,
+        update: RegistryUpdateRecord | None = None,
     ) -> RegistryRecord:
         registry = load_registry(source, scope)
         destination_root = agora_home() if scope == "user" else self.project_root() / ".agora"
@@ -411,6 +420,14 @@ class AgoraWorkspace:
             copy_template_tree(source, staged, {}, False)
             if provenance is not None:
                 atomic_write(staged / "SOURCE.md", render_registry_source(provenance))
+            existing_updates = destination / "updates"
+            if update is not None and existing_updates.is_dir():
+                copy_template_tree(existing_updates, staged / "updates", {}, False)
+            if update is not None:
+                update_path = staged / "updates" / update.id / "UPDATE.md"
+                if update_path.exists():
+                    raise FileExistsError(f"Registry update record already exists: {update_path}")
+                atomic_write(update_path, render_registry_update(update))
             load_registry(staged, scope)
             backup = destination.with_name(f".{registry.id}-backup")
             if backup.exists():
@@ -426,6 +443,126 @@ class AgoraWorkspace:
             if backup.exists():
                 shutil.rmtree(backup)
         return load_registry(destination, scope)
+
+    @_locked_mutation("registry-update")
+    def update_registry(self, data: UpdateRegistryInput) -> RegistryUpdateResult:
+        assert_slug(data.id, "Registry id")
+        current, scope = self._installed_registry_for_update(data.id, data.scope)
+        if current.source is None or current.version is None or current.checksum is None:
+            raise ValueError(f"Registry is not a remotely installed release: {data.id}")
+        signature_required = current.signature_verified or data.require_signature
+        trusted_keys = self.list_registry_trust_keys()
+        index, release, signature_verified = inspect_registry_release(
+            current.source,
+            version=data.version,
+            public_key=data.public_key,
+            require_signature=signature_required,
+            allow_insecure_http=data.allow_insecure_http,
+            trusted_keys=trusted_keys,
+        )
+        if index.id != current.id:
+            raise ValueError(f"Registry index id changed from {current.id} to {index.id}")
+        relation = compare_registry_versions(release.version, current.version)
+        if relation < 0:
+            raise ValueError(
+                f"Registry updates cannot downgrade {current.id} from {current.version} "
+                f"to {release.version}"
+            )
+        if relation == 0:
+            if release.sha256 != current.checksum:
+                raise ValueError(
+                    f"Registry release {current.id}@{current.version} changed checksum in its index"
+                )
+            return RegistryUpdateResult(
+                registry=current.id,
+                scope=scope,
+                from_version=current.version,
+                to_version=release.version,
+                update_available=False,
+                applied=False,
+                index=index.source,
+                checksum=release.sha256,
+                signature_verified=signature_verified,
+            )
+        preview = RegistryUpdateResult(
+            registry=current.id,
+            scope=scope,
+            from_version=current.version,
+            to_version=release.version,
+            update_available=True,
+            applied=False,
+            index=index.source,
+            checksum=release.sha256,
+            signature_verified=signature_verified,
+        )
+        if not data.apply:
+            return preview
+        with download_registry_release(
+            current.source,
+            version=release.version,
+            public_key=data.public_key,
+            require_signature=signature_required,
+            allow_insecure_http=data.allow_insecure_http,
+            trusted_keys=trusted_keys,
+        ) as (registry_root, applied_index, applied_release, applied_signature, archive):
+            if applied_release != release:
+                raise RuntimeError("Registry index changed while applying the selected release")
+            if (registry_root / "SOURCE.md").exists() or (registry_root / "updates").exists():
+                raise ValueError(
+                    "Remote registry archives must not contain installer-owned SOURCE.md or updates"
+                )
+            candidate = load_registry(registry_root, scope)
+            if candidate.id != current.id or candidate.version != release.version:
+                raise ValueError(
+                    "Registry update archive does not match the selected id and version"
+                )
+            applied_at = self._timestamp()
+            update_id = self._now().astimezone(UTC).strftime("update-%Y%m%dt%H%M%S%fz")
+            destination_root = agora_home() if scope == "user" else self.project_root() / ".agora"
+            record_path = (
+                destination_root / "registries" / current.id / "updates" / update_id / "UPDATE.md"
+            )
+            update = RegistryUpdateRecord(
+                id=update_id,
+                registry=current.id,
+                from_version=current.version,
+                to_version=release.version,
+                from_sha256=current.checksum,
+                to_sha256=release.sha256,
+                index=applied_index.source,
+                signature_verified=applied_signature,
+                applied_at=applied_at,
+                path=str(record_path),
+            )
+            provenance = RegistrySourceRecord(
+                registry=current.id,
+                version=release.version,
+                index=applied_index.source,
+                archive=archive,
+                sha256=release.sha256,
+                signature_verified=applied_signature,
+                key_id=release.key_id if applied_signature else None,
+                installed_at=applied_at,
+            )
+            self._install_registry_snapshot(
+                registry_root,
+                scope,
+                True,
+                provenance=provenance,
+                update=update,
+            )
+        return RegistryUpdateResult(
+            registry=current.id,
+            scope=scope,
+            from_version=current.version,
+            to_version=release.version,
+            update_available=True,
+            applied=True,
+            index=applied_index.source,
+            checksum=release.sha256,
+            signature_verified=applied_signature,
+            record_path=str(record_path),
+        )
 
     @_locked_mutation("scoped")
     def add_registry_trust_key(self, data: AddRegistryTrustKeyInput) -> RegistryTrustKeyRecord:
@@ -2906,6 +3043,14 @@ class AgoraWorkspace:
             actor_id = getattr(data, "actor_id", None)
             actor = self._find_actor(root, str(actor_id))
             return (agora_home() if actor.reference.startswith("user:") else root,)
+        if scope == "registry-update":
+            requested_scope = getattr(data, "scope", None)
+            if requested_scope == "user":
+                return (agora_home(),)
+            if requested_scope == "project":
+                return (self.project_root(),)
+            project = self._optional_project_root()
+            return (agora_home(),) if project is None else (agora_home(), project)
         raise ValueError(f"Unsupported mutation lock scope: {scope}")
 
     @contextmanager
@@ -2954,6 +3099,27 @@ class AgoraWorkspace:
     @staticmethod
     def _registries_at(root: Path, scope: str) -> list[RegistryRecord]:
         return [load_registry(directory, scope) for directory in _child_directories(root)]
+
+    def _installed_registry_for_update(
+        self, registry_id: str, scope: str | None
+    ) -> tuple[RegistryRecord, str]:
+        if scope not in {None, "user", "project"}:
+            raise ValueError(f"Unsupported registry scope: {scope}")
+        candidates: list[tuple[Path, str]] = []
+        project = self._optional_project_root()
+        if scope in {None, "project"}:
+            if project is None:
+                if scope == "project":
+                    self.project_root()
+            else:
+                candidates.append((project / ".agora" / "registries" / registry_id, "project"))
+        if scope in {None, "user"}:
+            candidates.append((agora_home() / "registries" / registry_id, "user"))
+        for path, candidate_scope in candidates:
+            if path.is_dir():
+                return load_registry(path, candidate_scope), candidate_scope
+        qualifier = f" in {scope} scope" if scope else ""
+        raise FileNotFoundError(f"Installed registry not found: {registry_id}{qualifier}")
 
     @staticmethod
     def _trust_keys_at(root: Path, scope: str) -> list[RegistryTrustKeyRecord]:

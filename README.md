@@ -143,6 +143,8 @@ agora trust add --id team-release --registry team-catalog \
   --public-key ./team-release.pem --scope user
 agora registry install --source https://catalog.example.com/INDEX.md \
   --version 1.0.0 --require-signature --scope user
+agora registry update --id team-catalog
+agora registry update --id team-catalog --apply
 agora registry list
 agora pack search --kind method --query release
 agora pack install --kind method --id release-flow \
@@ -156,6 +158,9 @@ provenance beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
 Trusted public keys, rotations, and revocations can be persisted at user or project scope. See the
 [registry trust guide](docs/guides/registry-trust.md).
+Registry updates are preview-only unless `--apply` is passed, preserve provenance and history, and
+never update installed packs implicitly. See the
+[registry update guide](docs/guides/registry-updates.md).
 
 ## Actors and swarms
 
@@ -476,6 +481,7 @@ versioned registry snapshot without persisting a private key.
 - [Pack registries](docs/guides/pack-registries.md)
 - [Remote registry releases](docs/guides/remote-registries.md)
 - [Registry trust stores](docs/guides/registry-trust.md)
+- [Registry updates](docs/guides/registry-updates.md)
 - [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
 - [ADR 0001](docs/decisions/0001-initial-architecture.md)
 - [Contributing](CONTRIBUTING.md)
@@ -486,8 +492,8 @@ versioned registry snapshot without persisting a private key.
   implementations.
 - Method and Tool Packs can be discovered through bundled, user, project, and verified remote
   registry snapshots. Local and project trust stores, rotation, and revocation are implemented;
-  organization trust synchronization, transparency, dependency resolution, and update notifications
-  are not.
+  explicit update checks and transactional application are implemented. Organization trust
+  synchronization, transparency, dependency resolution, and background notifications are not.
 - The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
   Confluence, and cloud platforms are not bundled yet.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,

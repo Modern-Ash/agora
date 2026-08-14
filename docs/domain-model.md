@@ -128,6 +128,11 @@ A registry trust key authorizes one Ed25519 public key id for one registry. Its 
 fingerprint, active or revoked status, and optional replacement are durable Markdown. Rotation adds a
 new identity before revoking the previous identity; it never overwrites key history.
 
+A registry update is a forward-only transition between immutable semantic releases. Preview state is
+ephemeral; each applied transition persists its previous and target versions, checksums, index,
+signature result, and timestamp under the installed registry. Updating the catalog does not update a
+Method Pack or Tool Pack already copied into another scope.
+
 ## Environment
 
 IDE, CLI, runner, and cloud agent are execution environments. They do not own Agora state. Every

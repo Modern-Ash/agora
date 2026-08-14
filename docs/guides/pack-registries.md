@@ -112,3 +112,5 @@ Agora also accepts versioned remote indexes with mandatory checksums and optiona
 Ed25519 signatures. See [Remote registry releases](remote-registries.md). Dependency resolution,
 organization trust synchronization, revocation feeds, and update notifications are not implemented
 yet. Local and project trust stores are described in [Registry trust stores](registry-trust.md).
+Explicit release checks and transactional application are described in
+[Registry updates](registry-updates.md).

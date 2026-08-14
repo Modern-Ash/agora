@@ -45,21 +45,15 @@ def download_registry_release(
     allow_insecure_http: bool,
     trusted_keys: list[RegistryTrustKeyRecord] | None = None,
 ) -> Iterator[tuple[Path, RegistryIndexRecord, RegistryReleaseRecord, bool, str]]:
-    index_bytes, resolved_index = _read_source(
+    index, release, signature_verified = inspect_registry_release(
         source,
-        maximum=MAX_INDEX_BYTES,
-        allow_insecure_http=allow_insecure_http,
-        label="registry index",
-    )
-    index = load_registry_index(index_bytes, resolved_index)
-    release = select_registry_release(index, version)
-    signature_verified = verify_release_signature(
-        release,
+        version=version,
         public_key=public_key,
         require_signature=require_signature,
-        trusted_keys=trusted_keys or [],
+        allow_insecure_http=allow_insecure_http,
+        trusted_keys=trusted_keys,
     )
-    archive_source = _resolve_archive_source(resolved_index, release.archive)
+    archive_source = _resolve_archive_source(index.source, release.archive)
     archive_bytes, resolved_archive = _read_source(
         archive_source,
         maximum=MAX_ARCHIVE_BYTES,
@@ -77,6 +71,32 @@ def download_registry_release(
         _extract_archive(archive_bytes, resolved_archive, extraction_root)
         registry_root = _find_registry_root(extraction_root)
         yield registry_root, index, release, signature_verified, resolved_archive
+
+
+def inspect_registry_release(
+    source: str,
+    *,
+    version: str | None,
+    public_key: str | None,
+    require_signature: bool,
+    allow_insecure_http: bool,
+    trusted_keys: list[RegistryTrustKeyRecord] | None = None,
+) -> tuple[RegistryIndexRecord, RegistryReleaseRecord, bool]:
+    index_bytes, resolved_index = _read_source(
+        source,
+        maximum=MAX_INDEX_BYTES,
+        allow_insecure_http=allow_insecure_http,
+        label="registry index",
+    )
+    index = load_registry_index(index_bytes, resolved_index)
+    release = select_registry_release(index, version)
+    signature_verified = verify_release_signature(
+        release,
+        public_key=public_key,
+        require_signature=require_signature,
+        trusted_keys=trusted_keys or [],
+    )
+    return index, release, signature_verified
 
 
 def load_registry_index(contents: bytes, source: str) -> RegistryIndexRecord:
@@ -209,6 +229,12 @@ def validate_registry_version(value: str) -> str:
     if not VERSION_PATTERN.fullmatch(value):
         raise ValueError(f"Registry version must use MAJOR.MINOR.PATCH: {value}")
     return value
+
+
+def compare_registry_versions(left: str, right: str) -> int:
+    left_parts = _version_parts(left)
+    right_parts = _version_parts(right)
+    return (left_parts > right_parts) - (left_parts < right_parts)
 
 
 def _read_source(

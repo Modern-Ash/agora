@@ -16,6 +16,8 @@
   project-over-user-over-bundled precedence.
 - Keep registry trust public-only and Markdown-first; preserve project-over-user key precedence and
   never allow explicit key input to bypass a persisted revocation.
+- Keep registry updates preview-first, forward-only, authenticated, transactional, and historically
+  auditable; never refresh installed packs implicitly.
 - Treat Scrum and Kanban as bundled examples, never as privileged core workflows.
 - Preserve recursive swarm cycle checks and configured delegation depth.
 - Preserve explicit child-work acceptance and reference-based result collection across swarms.

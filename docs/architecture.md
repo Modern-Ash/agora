@@ -77,6 +77,10 @@ index remaining available.
 Registry trust uses the same scope rule: project keys precede user keys. Verification binds a key id
 to one registry id, and a matching revocation blocks both automatic resolution and an explicit PEM.
 
+Registry updates are read-only plans unless application is explicit. Update staging carries forward
+installer-owned history, adds the next transition record, validates the complete candidate, and only
+then replaces the installed snapshot. Registry updates never mutate separately installed packs.
+
 ### Git and filesystem
 
 Markdown is the durable contract and the filesystem represents current state. Git adds history,

@@ -105,6 +105,8 @@ archives always require SHA-256 verification and can require a trusted Ed25519 s
 [Remote registry releases](remote-registries.md).
 Trusted registry public keys can be persisted, rotated, and revoked as described in
 [Registry trust stores](registry-trust.md).
+Installed remote registries can be checked and updated explicitly as described in
+[Registry updates](registry-updates.md).
 
 ## Configuration scopes
 

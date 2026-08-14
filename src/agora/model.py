@@ -251,6 +251,34 @@ class RegistryTrustKeyRecord:
 
 
 @dataclass(frozen=True)
+class RegistryUpdateRecord:
+    id: str
+    registry: str
+    from_version: str
+    to_version: str
+    from_sha256: str
+    to_sha256: str
+    index: str
+    signature_verified: bool
+    applied_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class RegistryUpdateResult:
+    registry: str
+    scope: Literal["user", "project"]
+    from_version: str
+    to_version: str
+    update_available: bool
+    applied: bool
+    index: str
+    checksum: str
+    signature_verified: bool
+    record_path: str | None = None
+
+
+@dataclass(frozen=True)
 class CatalogPackRecord:
     kind: PackKind
     id: str
@@ -474,6 +502,17 @@ class RevokeRegistryTrustKeyInput:
     scope: Literal["user", "project"]
     reason: str
     replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class UpdateRegistryInput:
+    id: str
+    scope: Literal["user", "project"] | None = None
+    version: str | None = None
+    apply: bool = False
+    public_key: str | None = None
+    require_signature: bool = False
+    allow_insecure_http: bool = False
 
 
 @dataclass(frozen=True)

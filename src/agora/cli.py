@@ -32,6 +32,7 @@ from agora.model import (
     SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
+    UpdateRegistryInput,
     UpgradeInput,
     ValidationReport,
     WorkActorInput,
@@ -130,6 +131,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Permit HTTP for an explicitly trusted development registry",
     )
     registry_install.add_argument("--force", action="store_true")
+    registry_update = registry.add_parser(
+        "update", help="Check or apply a verified registry release update"
+    )
+    registry_update.add_argument("--id", required=True)
+    registry_update.add_argument("--scope", choices=("user", "project"))
+    registry_update.add_argument("--version", help="Target release version (default: latest)")
+    registry_update.add_argument("--public-key", help="Explicit trusted Ed25519 public key")
+    registry_update.add_argument("--require-signature", action="store_true")
+    registry_update.add_argument("--allow-insecure-http", action="store_true")
+    registry_update.add_argument("--apply", action="store_true")
     registry.add_parser("list", help="List bundled and installed registries")
 
     trust = commands.add_parser(
@@ -472,6 +483,18 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 scope=args.scope,
                 force=args.force,
                 version=args.version,
+                public_key=args.public_key,
+                require_signature=args.require_signature,
+                allow_insecure_http=args.allow_insecure_http,
+            )
+        )
+    if args.command == "registry" and args.registry_command == "update":
+        return workspace.update_registry(
+            UpdateRegistryInput(
+                id=args.id,
+                scope=args.scope,
+                version=args.version,
+                apply=args.apply,
                 public_key=args.public_key,
                 require_signature=args.require_signature,
                 allow_insecure_http=args.allow_insecure_http,
