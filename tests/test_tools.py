@@ -29,6 +29,26 @@ def test_loads_the_bundled_work_management_contract() -> None:
     assert contract.operations["transition"].risk == "write"
 
 
+def test_loads_the_bundled_ci_cd_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "ci-cd")
+
+    assert contract.id == "ci-cd"
+    assert contract.executable == "cictl"
+    assert list(contract.operations) == [
+        "cancel-run",
+        "create-deployment",
+        "list-runs",
+        "trigger",
+        "view-deployment",
+        "view-run",
+    ]
+    assert contract.operations["list-runs"].capability == "ci.read"
+    assert contract.operations["trigger"].capability == "ci.run"
+    assert contract.operations["cancel-run"].capability == "ci.cancel"
+    assert contract.operations["cancel-run"].risk == "destructive"
+    assert contract.operations["create-deployment"].capability == "deployment.create"
+
+
 @pytest.mark.parametrize(
     "message",
     [

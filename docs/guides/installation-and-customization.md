@@ -318,6 +318,11 @@ capabilities. See [Work-management integrations](work-management-integrations.md
 interface, existing-project installation command, role matrix, authentication boundary, and
 executable Python example.
 
+New projects also include the `ci-cd` pack with the stable executable name `cictl`. Its default role
+matrix permits technical roles to inspect and trigger pipelines but grants no cancellation or
+deployment authority. See [CI/CD integrations](ci-cd-integrations.md) for existing-project
+installation, provider mapping, guarded deployment approvals, and the executable Python example.
+
 ## Customize actors and responsibility
 
 Register a reusable human actor:

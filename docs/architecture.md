@@ -148,8 +148,9 @@ captured results remain in `.agora/tool-runs`; credentials are never copied into
 The kernel does not use a shell or vendor SDK. It performs exact argument substitution and delegates
 authentication to the executable environment. The bundled Git pack is a concrete implementation;
 the bundled work-management pack is a stable adapter interface whose `workctl` executable can wrap
-Jira, Linear, or an internal provider. Vendor-specific packs remain independently installable
-Markdown.
+Jira, Linear, or an internal provider. The bundled CI/CD pack applies the same pattern through
+`cictl`, with separate read, run, cancel, and deployment capabilities. Vendor-specific packs remain
+independently installable Markdown.
 
 ## Recursive delegation
 

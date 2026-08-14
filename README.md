@@ -285,7 +285,7 @@ observability, or communication CLIs. An operation declares structured arguments
 risk, a provider-neutral capability, and optional approval policy. Method Pack roles grant those
 capabilities explicitly.
 
-Agora includes Git-backed `repository` and provider-neutral `work-management` packs:
+Agora includes Git-backed `repository` plus provider-neutral `work-management` and `ci-cd` packs:
 
 ```bash
 agora tool show --tool repository
@@ -303,6 +303,12 @@ agora tool invoke --id inspect-payment-ticket \
   --tool work-management --operation view \
   --actor delivery-swarm --swarm payments \
   --input issue=PAY-42 --launch
+
+agora tool invoke --id verify-payments \
+  --tool ci-cd --operation trigger \
+  --actor delivery-swarm --swarm payments \
+  --input pipeline=verify --input ref=main \
+  --input parameters=suite=payments --launch
 ```
 
 The executable runs without a shell. Agora persists `RUN.md`, captures output and exit status in
@@ -314,6 +320,10 @@ The `work-management` pack defines a stable `workctl` interface for Jira, Linear
 tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
 Method Pack. See the
 [work-management integration guide](docs/guides/work-management-integrations.md).
+
+The `ci-cd` pack defines a stable `cictl` interface for GitHub Actions, GitLab CI/CD, Jenkins, or an
+internal platform. Routine pipeline access is separate from cancellation and deployment authority.
+See the [CI/CD integration guide](docs/guides/ci-cd-integrations.md).
 
 ## Governed work
 
@@ -528,8 +538,9 @@ versioned registry snapshot without persisting a private key.
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Organization trust synchronization, transparency, automatic background pack updates, and
   notifications are not.
-- The Tool Pack kernel, Git repository pack, and provider-neutral work-management pack are
-  implemented; vendor distributions and CI/CD, documentation, and cloud packs remain future work.
+- The Tool Pack kernel plus Git repository, provider-neutral work-management, and provider-neutral
+  CI/CD packs are implemented; vendor distributions and documentation and cloud packs remain future
+  work.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

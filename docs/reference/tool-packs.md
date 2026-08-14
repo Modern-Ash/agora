@@ -233,3 +233,9 @@ requires `issue.transition`. Configure a reviewed wrapper for Jira, Linear, or a
 without changing those Method Pack capabilities. See the
 [work-management integration guide](../guides/work-management-integrations.md) and its
 [executable sample](../../samples/work-management/README.md).
+
+The bundled `ci-cd` pack defines a stable `cictl` interface. Routine inspection uses `ci.read` and
+pipeline triggering uses `ci.run`; destructive cancellation uses `ci.cancel`, while deployment uses
+`deployment.create`. No bundled role receives the latter two capabilities. See the
+[CI/CD integration guide](../guides/ci-cd-integrations.md) and its
+[approval-focused sample](../../samples/ci-cd/README.md).

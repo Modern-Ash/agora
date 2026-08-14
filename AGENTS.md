@@ -13,6 +13,8 @@
 - Keep Tool Pack commands structured, shell-free, and free of credential inputs.
 - Keep ecosystem Tool Pack capabilities provider-neutral; place Jira, CI/CD, documentation, and
   cloud translation in reviewed external adapters rather than the kernel.
+- Keep CI cancellation and deployment capabilities opt-in; combine production authority with
+  explicit Method Pack policy, evidence, and operation approval requirements.
 - Keep registry indexes and snapshots Markdown-first; verify remote releases before extraction,
   validate every contained pack before copying, persist provenance, and preserve
   project-over-user-over-bundled precedence.

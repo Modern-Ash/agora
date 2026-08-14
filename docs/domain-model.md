@@ -111,6 +111,10 @@ The bundled **Work Management Tool Pack** separates `issue.read`, `issue.write`,
 `issue.transition` authority behind a stable `workctl` interface. External ticket state and Agora
 work state remain independent records; synchronization requires explicit governed operations.
 
+The bundled **CI/CD Tool Pack** separates routine inspection and execution from destructive
+cancellation and deployment creation. A project may combine role capability with an operation-level
+approval requirement; both must pass before a guarded deployment is prepared.
+
 ## Standard
 
 A standard is a versioned, provider-neutral rule enabled by `.agora/STANDARDS.md`. It applies across

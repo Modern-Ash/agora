@@ -16,6 +16,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
     assert names[-1] == "distribution build"
     assert [name for name in names if name.startswith("sample: ")] == [
         "sample: basic-swarm",
+        "sample: ci-cd",
         "sample: concurrent-writes",
         "sample: custom-lifecycle",
         "sample: delegated-work",

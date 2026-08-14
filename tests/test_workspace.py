@@ -716,6 +716,63 @@ def test_governs_work_management_capabilities_by_role(
     assert not (root / ".agora" / "tool-runs" / "developer-transition").exists()
 
 
+def test_governs_ci_cd_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    triggered = workspace.invoke_tool(
+        InvokeToolInput(
+            id="trigger-ci",
+            tool_id="ci-cd",
+            operation_id="trigger",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify", "ref": "main", "parameters": "suite=all"},
+        )
+    )
+    assert triggered.status == "prepared"
+    assert triggered.capability == "ci.run"
+    assert triggered.command == [
+        "cictl",
+        "pipeline",
+        "trigger",
+        "verify",
+        "--ref",
+        "main",
+        "--parameters",
+        "suite=all",
+        "--output",
+        "json",
+    ]
+
+    with pytest.raises(PermissionError, match="ci.cancel"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="cancel-ci",
+                tool_id="ci-cd",
+                operation_id="cancel-run",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"run": "run-42"},
+            )
+        )
+    with pytest.raises(PermissionError, match="deployment.create"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="deploy-ci",
+                tool_id="ci-cd",
+                operation_id="create-deployment",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"environment": "production", "artifact": "sha256:abc"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "cancel-ci").exists()
+    assert not (root / ".agora" / "tool-runs" / "deploy-ci").exists()
+
+
 def test_hands_a_running_role_from_ai_to_human_and_swarm(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -1285,7 +1342,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.counts == {
         "actors": 3,
         "methods": 2,
-        "tools": 2,
+        "tools": 3,
         "swarms": 1,
         "work": 1,
         "delegations": 0,
@@ -1297,7 +1354,11 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.attention["active-work"] == ["delivery/observable-work"]
     assert status.attention["unfinished-sessions"] == ["observable-session"]
     assert [item.id for item in workspace.list_methods()] == ["kanban", "scrum"]
-    assert [item.id for item in workspace.list_tools()] == ["repository", "work-management"]
+    assert [item.id for item in workspace.list_tools()] == [
+        "ci-cd",
+        "repository",
+        "work-management",
+    ]
     assert [item.id for item in workspace.list_actors("project")] == [
         "developer",
         "facilitator",
