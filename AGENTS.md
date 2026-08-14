@@ -24,6 +24,8 @@
   forward-only, composition-safe, and protective of local amendments.
 - Keep pack update histories continuous and pack composition locks deterministic; refresh locks only
   after successful managed mutations or an explicit reviewed lock command.
+- Keep pack removal preview-first and rollback-protected; block reverse dependents and durable
+  references, require explicit unused-dependency pruning, and preserve a scope-level audit record.
 - Treat Scrum and Kanban as bundled examples, never as privileged core workflows.
 - Preserve recursive swarm cycle checks and configured delegation depth.
 - Preserve explicit child-work acceptance and reference-based result collection across swarms.

@@ -16,6 +16,8 @@ from agora.model import (
     PackKind,
     PackLockEntry,
     PackLockRecord,
+    PackRemovalRecord,
+    PackRemovalStep,
     PackSourceRecord,
     PackUpdateHistoryRecord,
 )
@@ -366,6 +368,114 @@ def render_pack_lock(record: PackLockRecord) -> str:
             body=(
                 f"# {record.scope.title()} pack composition lock\n\n"
                 "Agora generated this deterministic inventory from the installed pack trees."
+            ),
+        )
+    )
+
+
+def read_pack_removal(path: Path) -> PackRemovalRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/pack-removal/v1":
+        raise ValueError(f"Expected schema agora/pack-removal/v1: {path}")
+    id_ = string_attribute(attributes, "id")
+    assert_slug(id_, "Pack removal id")
+    scope = string_attribute(attributes, "scope")
+    if scope not in {"user", "project"}:
+        raise ValueError(f"Pack removal scope is unsupported: {scope}")
+    requested_kind = string_attribute(attributes, "requested-kind")
+    if requested_kind not in PACK_KINDS:
+        raise ValueError(f"Pack removal requested kind is unsupported: {requested_kind}")
+    requested_id = string_attribute(attributes, "requested-id")
+    assert_slug(requested_id, "Pack removal requested id")
+    raw_packs = attributes.get("packs")
+    if not isinstance(raw_packs, list) or not raw_packs:
+        raise ValueError(f"Pack removal packs must be a non-empty array: {path}")
+    packs: list[PackRemovalStep] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_packs:
+        expected = {"kind", "id", "version", "sha256", "registry", "reason"}
+        if not isinstance(raw, dict) or set(raw) != expected:
+            raise ValueError(f"Pack removal entries have an invalid shape: {path}")
+        kind = raw["kind"]
+        pack_id = raw["id"]
+        version = raw["version"]
+        sha256 = raw["sha256"]
+        registry = raw["registry"]
+        reason = raw["reason"]
+        if kind not in PACK_KINDS or not isinstance(pack_id, str):
+            raise ValueError(f"Pack removal kind or id is invalid: {path}")
+        assert_slug(pack_id, "Removed pack id")
+        if not isinstance(version, str):
+            raise ValueError(f"Removed pack version is invalid: {path}")
+        validate_pack_version(version)
+        if not isinstance(sha256, str) or not PACK_SOURCE_SHA256_PATTERN.fullmatch(sha256):
+            raise ValueError(f"Removed pack sha256 is invalid: {path}")
+        if registry is not None and not isinstance(registry, str):
+            raise ValueError(f"Removed pack registry is invalid: {path}")
+        if isinstance(registry, str):
+            assert_slug(registry, "Removed pack registry")
+        if reason not in {"requested", "unused-dependency"}:
+            raise ValueError(f"Removed pack reason is invalid: {path}")
+        key = (kind, pack_id)
+        if key in seen:
+            raise ValueError(f"Pack removal contains a duplicate pack: {kind}/{pack_id}")
+        seen.add(key)
+        packs.append(
+            PackRemovalStep(
+                kind=kind,
+                id=pack_id,
+                version=version,
+                sha256=sha256,
+                registry=registry,
+                reason=reason,
+            )
+        )
+    requested = [item for item in packs if item.reason == "requested"]
+    if (
+        len(requested) != 1
+        or requested[0].kind != requested_kind
+        or requested[0].id != requested_id
+        or packs[0] != requested[0]
+    ):
+        raise ValueError(f"Pack removal does not include its requested pack: {path}")
+    return PackRemovalRecord(
+        id=id_,
+        scope=scope,
+        requested_kind=requested_kind,
+        requested_id=requested_id,
+        removed_at=string_attribute(attributes, "removed-at"),
+        packs=packs,
+        path=str(path),
+    )
+
+
+def render_pack_removal(record: PackRemovalRecord) -> str:
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/pack-removal/v1",
+                "id": record.id,
+                "scope": record.scope,
+                "requested-kind": record.requested_kind,
+                "requested-id": record.requested_id,
+                "removed-at": record.removed_at,
+                "packs": [
+                    {
+                        "kind": item.kind,
+                        "id": item.id,
+                        "version": item.version,
+                        "sha256": item.sha256,
+                        "registry": item.registry,
+                        "reason": item.reason,
+                    }
+                    for item in record.packs
+                ],
+            },
+            body=(
+                f"# Pack removal {record.id}\n\n"
+                "This installer-owned record preserves the composition change after the pack "
+                "directories are removed."
             ),
         )
     )

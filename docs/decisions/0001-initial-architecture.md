@@ -44,7 +44,8 @@ validation, so front matter preserves structured metadata and gates remain execu
   checks, transactional registry replacement, durable update history, dependency manifests, and
   compatibility-aware catalog installation are implemented. Installed pack provenance and explicit,
   dependency-aware pack updates are also implemented, including per-pack transition history and
-  deterministic scope composition locks.
+  deterministic scope composition locks. Preview-first, dependency-safe pack removal is implemented
+  with explicit orphan pruning, rollback protection, lock refresh, and durable audit records.
 - Published vendor Tool Packs for Jira, CI/CD, documentation, and cloud.
 - Delegation budgets, automatic child work decomposition, and child artifact copying. Explicit
   reference-based result collection is part of the current filesystem protocol.

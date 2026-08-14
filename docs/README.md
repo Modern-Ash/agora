@@ -21,6 +21,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   upgrades, and protect local pack amendments.
 - [Pack composition locks](guides/pack-locks.md): inventory installed trees and validate durable,
   continuous per-pack update histories.
+- [Pack removal](guides/pack-removal.md): preview safe removals, protect dependents and durable
+  references, and explicitly prune unused dependency closures.
 - [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
   checksum-pinned and Ed25519-signed registry snapshots.
 - [Registry trust stores](guides/registry-trust.md): approve, resolve, rotate, and revoke registry
@@ -80,6 +82,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   user-scoped Markdown catalog.
 - [Pack dependencies](../samples/pack-dependencies/README.md): install a Method Pack and recursively
   resolve its compatible Tool Pack dependency.
+- [Pack removal](../samples/pack-removal/README.md): preview and atomically apply a dependency-aware
+  composition removal with durable audit evidence.
 - [Remote registry](../samples/remote-registry/README.md): verify a signed, versioned registry release
   and persist its provenance.
 

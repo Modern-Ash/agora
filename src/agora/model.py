@@ -382,6 +382,37 @@ class PackUpdateResult:
 
 
 @dataclass(frozen=True)
+class PackRemovalStep:
+    kind: PackKind
+    id: str
+    version: str
+    sha256: str
+    registry: str | None
+    reason: Literal["requested", "unused-dependency"]
+
+
+@dataclass(frozen=True)
+class PackRemovalRecord:
+    id: str
+    scope: Literal["user", "project"]
+    requested_kind: PackKind
+    requested_id: str
+    removed_at: str
+    packs: list[PackRemovalStep]
+    path: str
+
+
+@dataclass(frozen=True)
+class PackRemovalResult:
+    kind: PackKind
+    id: str
+    scope: Literal["user", "project"]
+    applied: bool
+    packs: list[PackRemovalStep]
+    record_path: str | None = None
+
+
+@dataclass(frozen=True)
 class ToolRunRecord:
     id: str
     tool_id: str
@@ -629,6 +660,15 @@ class UpdateCatalogPackInput:
 @dataclass(frozen=True)
 class RefreshPackLockInput:
     scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class RemovePackInput:
+    kind: PackKind
+    pack_id: str
+    scope: Literal["user", "project"] | None = None
+    apply: bool = False
+    with_unused_dependencies: bool = False
 
 
 @dataclass(frozen=True)

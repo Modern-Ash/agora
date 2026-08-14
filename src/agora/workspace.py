@@ -69,6 +69,9 @@ from agora.model import (
     PackKind,
     PackLockEntry,
     PackLockRecord,
+    PackRemovalRecord,
+    PackRemovalResult,
+    PackRemovalStep,
     PackSourceRecord,
     PackUpdateHistoryRecord,
     PackUpdateResult,
@@ -80,6 +83,7 @@ from agora.model import (
     RegistryTrustKeyRecord,
     RegistryUpdateRecord,
     RegistryUpdateResult,
+    RemovePackInput,
     RevokeRegistryTrustKeyInput,
     SessionRecord,
     SetActorRuntimeInput,
@@ -110,8 +114,10 @@ from agora.packs import (
     pack_reference,
     pack_tree_sha256,
     read_pack_lock,
+    read_pack_removal,
     read_pack_source,
     render_pack_lock,
+    render_pack_removal,
     render_pack_source,
     render_pack_update,
     version_satisfies,
@@ -898,6 +904,186 @@ class AgoraWorkspace:
         return PackUpdateResult(
             **{**result.__dict__, "applied": True, "history_paths": history_paths}
         )
+
+    @_locked_mutation("pack-update")
+    def remove_pack(self, data: RemovePackInput) -> PackRemovalResult:
+        if data.kind not in {"method", "tool"}:
+            raise ValueError(f"Unsupported pack kind: {data.kind}")
+        if data.scope is not None and data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported pack scope: {data.scope}")
+        assert_slug(data.pack_id, "Pack id")
+        _, scope = self._installed_pack_for_update(data.kind, data.pack_id, data.scope)
+        steps = self._pack_removal_plan(
+            data.kind,
+            data.pack_id,
+            scope,
+            with_unused_dependencies=data.with_unused_dependencies,
+        )
+        result = PackRemovalResult(
+            kind=data.kind,
+            id=data.pack_id,
+            scope=scope,
+            applied=False,
+            packs=steps,
+        )
+        if not data.apply:
+            return result
+
+        root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        removal_id = self._now().astimezone(UTC).strftime("removal-%Y%m%dt%H%M%S%fz")
+        record_path = root / "pack-removals" / removal_id / "REMOVAL.md"
+        if record_path.parent.exists():
+            raise FileExistsError(f"Pack removal record already exists: {record_path}")
+        record = PackRemovalRecord(
+            id=removal_id,
+            scope=scope,
+            requested_kind=data.kind,
+            requested_id=data.pack_id,
+            removed_at=self._timestamp(),
+            packs=steps,
+            path=str(record_path),
+        )
+
+        with tempfile.TemporaryDirectory(prefix=".pack-removal-stage-", dir=root) as temporary:
+            staging_root = Path(temporary)
+            moved: list[tuple[Path, Path]] = []
+            published_record = False
+            published_lock = False
+            old_lock = root / "PACKS.lock.md"
+            lock_backup = staging_root / "previous-PACKS.lock.md"
+            try:
+                for step in steps:
+                    destination = self._pack_destination(step.kind, step.id, scope)
+                    backup = staging_root / "removed" / f"{step.kind}s" / step.id
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    destination.replace(backup)
+                    moved.append((destination, backup))
+
+                staged_record = staging_root / "record" / "REMOVAL.md"
+                atomic_write(staged_record, render_pack_removal(record))
+                staged_lock = staging_root / "next-PACKS.lock.md"
+                next_lock = self._build_pack_lock(scope, root, generated_at=self._timestamp())
+                atomic_write(staged_lock, render_pack_lock(next_lock))
+
+                record_path.parent.parent.mkdir(parents=True, exist_ok=True)
+                staged_record.parent.replace(record_path.parent)
+                published_record = True
+                if old_lock.exists():
+                    old_lock.replace(lock_backup)
+                staged_lock.replace(old_lock)
+                published_lock = True
+            except Exception:
+                if published_lock and old_lock.exists():
+                    old_lock.unlink()
+                if lock_backup.exists():
+                    lock_backup.replace(old_lock)
+                if published_record and record_path.parent.exists():
+                    shutil.rmtree(record_path.parent)
+                for destination, backup in reversed(moved):
+                    if backup.exists():
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        backup.replace(destination)
+                raise
+
+        return PackRemovalResult(
+            **{**result.__dict__, "applied": True, "record_path": str(record_path)}
+        )
+
+    def _pack_removal_plan(
+        self,
+        kind: PackKind,
+        id_: str,
+        scope: str,
+        *,
+        with_unused_dependencies: bool,
+    ) -> list[PackRemovalStep]:
+        installed = self._installed_pack_contracts(scope)
+        requested_key = (kind, id_)
+        requested = installed.get(requested_key)
+        if requested is None:
+            raise FileNotFoundError(f"Installed pack not found: {kind}/{id_} at {scope} scope")
+
+        dependents: dict[tuple[str, str], set[tuple[str, str]]] = {key: set() for key in installed}
+        for owner_key, contract in installed.items():
+            for dependency in contract.dependencies:
+                dependency_key = (dependency.kind, dependency.id)
+                if dependency_key in dependents:
+                    dependents[dependency_key].add(owner_key)
+        blockers = sorted(dependents[requested_key])
+        if blockers:
+            rendered = ", ".join(f"{owner_kind}/{owner_id}" for owner_kind, owner_id in blockers)
+            raise ValueError(f"Cannot remove {kind}/{id_}; required by installed packs: {rendered}")
+
+        dependency_order: list[tuple[str, str]] = []
+        visited: set[tuple[str, str]] = set()
+
+        def visit(key: tuple[str, str]) -> None:
+            contract = installed[key]
+            for dependency in contract.dependencies:
+                dependency_key = (dependency.kind, dependency.id)
+                if dependency_key not in installed or dependency_key in visited:
+                    continue
+                visited.add(dependency_key)
+                dependency_order.append(dependency_key)
+                visit(dependency_key)
+
+        visit(requested_key)
+        removal_keys = {requested_key}
+        if with_unused_dependencies:
+            changed = True
+            while changed:
+                changed = False
+                for dependency_key in dependency_order:
+                    if dependency_key in removal_keys:
+                        continue
+                    if dependents[dependency_key].issubset(removal_keys):
+                        removal_keys.add(dependency_key)
+                        changed = True
+
+        ordered_keys = [requested_key] + [
+            key for key in dependency_order if key in removal_keys and key != requested_key
+        ]
+        self._assert_packs_not_in_use(scope, ordered_keys)
+        steps: list[PackRemovalStep] = []
+        for key in ordered_keys:
+            contract = installed[key]
+            destination = self._pack_destination(key[0], key[1], scope)
+            source_path = destination / "SOURCE.md"
+            source = read_pack_source(source_path) if source_path.is_file() else None
+            steps.append(
+                PackRemovalStep(
+                    kind=key[0],
+                    id=key[1],
+                    version=contract.version,
+                    sha256=pack_tree_sha256(destination),
+                    registry=source.registry if source is not None else None,
+                    reason="requested" if key == requested_key else "unused-dependency",
+                )
+            )
+        return steps
+
+    def _assert_packs_not_in_use(self, scope: str, keys: list[tuple[str, str]]) -> None:
+        key_set = set(keys)
+        references: list[str] = []
+        if scope == "user":
+            user = self._load_user_configuration()
+            if user is not None and ("method", user.default_method) in key_set:
+                references.append(f"user default method {user.default_method}")
+        else:
+            root = self.project_root()
+            project = self._load_project_configuration(root)
+            if ("method", project.default_method) in key_set:
+                references.append(f"project default method {project.default_method}")
+            for swarm in self.list_swarms():
+                if ("method", swarm.method) in key_set:
+                    references.append(f"swarm {swarm.id} method {swarm.method}")
+            for run in self.list_tool_runs():
+                if ("tool", run.tool_id) in key_set:
+                    references.append(f"tool run {run.id} tool {run.tool_id}")
+        if references:
+            raise ValueError(
+                "Cannot remove packs referenced by durable state: " + ", ".join(references)
+            )
 
     def _apply_catalog_plan(
         self,
@@ -2663,6 +2849,7 @@ class AgoraWorkspace:
             "pack-sources": 0,
             "pack-histories": 0,
             "pack-locks": 0,
+            "pack-removals": 0,
         }
         issues: list[ValidationIssue] = []
 
@@ -2934,6 +3121,29 @@ class AgoraWorkspace:
                         "Project pack composition differs from PACKS.lock.md; "
                         "review and refresh it",
                     )
+
+        for directory in _child_directories(root / ".agora" / "pack-removals"):
+            path = directory / "REMOVAL.md"
+            removal = inspect(
+                "pack-removals",
+                "pack-removal.invalid",
+                path,
+                lambda path=path: read_pack_removal(path),
+            )
+            if not isinstance(removal, PackRemovalRecord):
+                continue
+            if removal.id != directory.name:
+                issue(
+                    "pack-removal.id-mismatch",
+                    path,
+                    f"Pack removal id {removal.id} does not match directory {directory.name}",
+                )
+            if removal.scope != "project":
+                issue(
+                    "pack-removal.scope-mismatch",
+                    path,
+                    f"Project pack removal has unexpected scope: {removal.scope}",
+                )
 
         actor_cache: dict[str, ActorRecord] = {}
         actor_root = root / ".agora" / "actors"

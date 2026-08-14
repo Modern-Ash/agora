@@ -37,6 +37,7 @@ Agora distribution
 <project>/.agora/
   project.md            Effective project configuration
   PACKS.lock.md         Exact installed Method and Tool Pack composition
+  pack-removals/        Auditable records for applied composition removals
   constitution.md       Local principles and restrictions
   PROTOCOL.md           Shared collaboration protocol
   STANDARDS.md          Enforced cross-actor engineering standards
@@ -111,6 +112,10 @@ agora validate
 
 Each applied migration is recorded under `.agora/upgrades` with backups of every updated file. See
 the [project upgrade guide](docs/guides/project-upgrades.md) for compatibility and recovery rules.
+
+Pack lifecycle changes are also preview-first. Removing a pack checks reverse dependencies and
+durable project references before deleting files, updates `PACKS.lock.md`, and writes an auditable
+record under `.agora/pack-removals`. See the [pack removal guide](docs/guides/pack-removal.md).
 
 ## Customize the lifecycle
 

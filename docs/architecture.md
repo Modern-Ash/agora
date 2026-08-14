@@ -99,6 +99,11 @@ mutations regenerate it; validation compares it with installed trees, while `ago
 a reviewed manual composition. Catalog updates preserve and extend per-pack `updates/*/UPDATE.md`
 chains, then swap the dependency plan as one rollback-protected operation before refreshing the lock.
 
+Pack removal uses the same preview/apply boundary. It rejects installed reverse dependents and
+durable runtime references, optionally derives unused packs only from the requested pack's
+dependency closure, and stages removed trees until both `REMOVAL.md` and `PACKS.lock.md` are safely
+published. A failed multi-pack removal restores the previous trees and lock.
+
 ### Git and filesystem
 
 Markdown is the durable contract and the filesystem represents current state. Git adds history,

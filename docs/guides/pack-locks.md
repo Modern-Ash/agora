@@ -23,7 +23,8 @@ the two checksums differ, the lock intentionally captures a reviewed local amend
 `SOURCE.md` continues to describe the published source.
 
 Agora regenerates the appropriate lock after configuration, project initialization, direct pack
-installation, catalog installation, and applied pack updates. Preview commands never change it.
+installation, catalog installation, applied pack updates, and applied pack removals. Preview
+commands never change it.
 
 Manual filesystem edits cause `agora validate` to report `pack-lock.drift` until the new composition
 is reviewed and locked explicitly:
@@ -83,3 +84,5 @@ agora validate
 
 Commit the updated pack snapshots, `SOURCE.md`, `updates/*/UPDATE.md`, and `PACKS.lock.md` together so
 another environment can reconstruct both the current composition and its provenance transitions.
+Applied removals commit their `pack-removals/*/REMOVAL.md` record with the changed lock instead of
+retaining deleted pack-owned update histories in current state.

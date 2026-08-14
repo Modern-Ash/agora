@@ -231,6 +231,18 @@ and version the files that define the shared contract:
 mutations refresh it; use `agora pack lock` only after reviewing manual pack changes. See
 [Pack composition locks](pack-locks.md).
 
+Remove an installed pack through a read-only plan before applying the composition change:
+
+```bash
+agora pack remove --kind method --id retired-flow
+agora pack remove --kind method --id retired-flow --apply
+```
+
+Agora blocks installed dependents and durable runtime references. Optional dependency pruning must
+appear in both preview and apply commands as `--with-unused-dependencies`. Applied removals write
+`pack-removals/*/REMOVAL.md` and refresh the lock transactionally. See
+[Safe pack removal](pack-removal.md).
+
 Edit the constitution for engineering, security, compliance, and approval rules. Edit the protocol
 for handoffs, escalation, communication, and durable-record expectations. `STANDARDS.md` enables
 Conventional Commits 1.0.0 for repository history. Edit tool policy to name allowed external systems

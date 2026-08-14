@@ -29,6 +29,7 @@ from agora.model import (
     InstallToolInput,
     InvokeToolInput,
     RefreshPackLockInput,
+    RemovePackInput,
     RevokeRegistryTrustKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -161,7 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     trust_revoke.add_argument("--reason", required=True)
     trust_revoke.add_argument("--replaced-by")
 
-    pack = commands.add_parser("pack", help="Discover and install catalog packs").add_subparsers(
+    pack = commands.add_parser("pack", help="Manage installed and catalog packs").add_subparsers(
         dest="pack_command", required=True
     )
     pack_search = pack.add_parser("search", help="Search registered Method and Tool Packs")
@@ -183,6 +184,16 @@ def _build_parser() -> argparse.ArgumentParser:
     pack_update.add_argument("--force", action="store_true")
     pack_lock = pack.add_parser("lock", help="Refresh the installed pack composition lock")
     pack_lock.add_argument("--scope", choices=("user", "project"), default="project")
+    pack_remove = pack.add_parser("remove", help="Preview or apply a safe pack removal")
+    pack_remove.add_argument("--kind", choices=("method", "tool"), required=True)
+    pack_remove.add_argument("--id", required=True)
+    pack_remove.add_argument("--scope", choices=("user", "project"))
+    pack_remove.add_argument(
+        "--with-unused-dependencies",
+        action="store_true",
+        help="Also remove dependencies unused by the remaining pack composition",
+    )
+    pack_remove.add_argument("--apply", action="store_true")
 
     start = commands.add_parser("start", help="Prepare or launch a governed actor session")
     start.add_argument("--id")
@@ -558,6 +569,16 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         )
     if args.command == "pack" and args.pack_command == "lock":
         return workspace.refresh_pack_lock(RefreshPackLockInput(scope=args.scope))
+    if args.command == "pack" and args.pack_command == "remove":
+        return workspace.remove_pack(
+            RemovePackInput(
+                kind=args.kind,
+                pack_id=args.id,
+                scope=args.scope,
+                apply=args.apply,
+                with_unused_dependencies=args.with_unused_dependencies,
+            )
+        )
     if args.command == "start":
         return workspace.start_session(
             StartSessionInput(

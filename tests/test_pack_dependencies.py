@@ -13,9 +13,15 @@ from agora.model import (
     InstallRegistryInput,
     InstallToolInput,
     RefreshPackLockInput,
+    RemovePackInput,
     UpdateCatalogPackInput,
 )
-from agora.packs import compare_pack_versions, read_pack_lock, version_satisfies
+from agora.packs import (
+    compare_pack_versions,
+    read_pack_lock,
+    read_pack_removal,
+    version_satisfies,
+)
 from agora.tools import load_tool_contract
 from agora.workspace import AgoraWorkspace
 
@@ -558,3 +564,180 @@ def test_validation_rejects_pack_update_history_that_disagrees_with_source(
 
     assert report.ok is False
     assert any(issue.code == "pack-update.source-mismatch" for issue in report.issues)
+
+
+def test_pack_removal_previews_and_prunes_unused_dependencies(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    sources = tmp_path / "sources"
+    provider = _tool(sources / "provider", "provider", "1.0.0")
+    consumer = _method(
+        sources / "consumer",
+        "consumer",
+        "1.0.0",
+        [{"kind": "tool", "id": "provider", "version": "1.0.0"}],
+    )
+    registry = _registry(tmp_path / "registry", [("tool", provider), ("method", consumer)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="method", pack_id="consumer", scope="project")
+    )
+
+    preview = workspace.remove_pack(
+        RemovePackInput(kind="method", pack_id="consumer", scope="project")
+    )
+    assert preview.applied is False
+    assert [(item.kind, item.id, item.reason) for item in preview.packs] == [
+        ("method", "consumer", "requested")
+    ]
+    assert (workspace.project_root() / ".agora" / "methods" / "consumer").is_dir()
+
+    applied = workspace.remove_pack(
+        RemovePackInput(
+            kind="method",
+            pack_id="consumer",
+            scope="project",
+            with_unused_dependencies=True,
+            apply=True,
+        )
+    )
+    assert applied.applied is True
+    assert [(item.kind, item.id, item.reason) for item in applied.packs] == [
+        ("method", "consumer", "requested"),
+        ("tool", "provider", "unused-dependency"),
+    ]
+    assert applied.record_path is not None
+    removal = read_pack_removal(Path(applied.record_path))
+    assert removal.requested_id == "consumer"
+    assert removal.packs == applied.packs
+    lock = read_pack_lock(workspace.project_root() / ".agora" / "PACKS.lock.md")
+    assert not {("method", "consumer"), ("tool", "provider")} & {
+        (item.kind, item.id) for item in lock.packs
+    }
+    report = workspace.validate()
+    assert report.ok is True
+    assert report.checked["pack-removals"] == 1
+
+
+def test_pack_removal_blocks_dependents_and_preserves_shared_dependencies(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    sources = tmp_path / "sources"
+    provider = _tool(sources / "provider", "provider", "1.0.0")
+    consumer = _tool(
+        sources / "consumer",
+        "consumer",
+        "1.0.0",
+        [{"kind": "tool", "id": "provider", "version": "1.0.0"}],
+    )
+    observer = _tool(
+        sources / "observer",
+        "observer",
+        "1.0.0",
+        [{"kind": "tool", "id": "provider", "version": "1.0.0"}],
+    )
+    registry = _registry(
+        tmp_path / "registry",
+        [("tool", provider), ("tool", consumer), ("tool", observer)],
+    )
+    workspace.install_registry(InstallRegistryInput(source=str(registry), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="consumer", scope="project")
+    )
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="observer", scope="project")
+    )
+
+    with pytest.raises(
+        ValueError, match="required by installed packs: tool/consumer, tool/observer"
+    ):
+        workspace.remove_pack(RemovePackInput(kind="tool", pack_id="provider"))
+
+    removed = workspace.remove_pack(
+        RemovePackInput(
+            kind="tool",
+            pack_id="consumer",
+            with_unused_dependencies=True,
+            apply=True,
+        )
+    )
+    assert [(item.kind, item.id) for item in removed.packs] == [("tool", "consumer")]
+    assert workspace.show_tool("provider").version == "1.0.0"
+
+
+def test_pack_removal_blocks_durable_runtime_references(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+
+    with pytest.raises(ValueError, match="project default method scrum"):
+        workspace.remove_pack(RemovePackInput(kind="method", pack_id="scrum"))
+
+
+def test_pack_removal_rolls_back_a_multi_pack_failure(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    sources = tmp_path / "sources"
+    provider = _tool(sources / "provider", "provider", "1.0.0")
+    consumer = _tool(
+        sources / "consumer",
+        "consumer",
+        "1.0.0",
+        [{"kind": "tool", "id": "provider", "version": "1.0.0"}],
+    )
+    registry = _registry(tmp_path / "registry", [("tool", provider), ("tool", consumer)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="consumer", scope="project")
+    )
+    original_lock = (workspace.project_root() / ".agora" / "PACKS.lock.md").read_text()
+    original_replace = Path.replace
+
+    def fail_provider_move(path: Path, target: Path) -> Path:
+        if path.name == "provider" and ".pack-removal-stage-" in str(target):
+            raise OSError("simulated pack removal failure")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_provider_move)
+    with pytest.raises(OSError, match="simulated pack removal failure"):
+        workspace.remove_pack(
+            RemovePackInput(
+                kind="tool",
+                pack_id="consumer",
+                with_unused_dependencies=True,
+                apply=True,
+            )
+        )
+
+    assert workspace.show_tool("consumer").version == "1.0.0"
+    assert workspace.show_tool("provider").version == "1.0.0"
+    assert (workspace.project_root() / ".agora" / "PACKS.lock.md").read_text() == original_lock
+    assert not (workspace.project_root() / ".agora" / "pack-removals").exists()
+
+
+def test_cli_previews_and_applies_pack_removal(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    source = _tool(tmp_path / "temporary", "temporary", "1.0.0")
+    workspace.install_tool(InstallToolInput(source=str(source), scope="project"))
+    output = io.StringIO()
+
+    assert (
+        main(
+            ["pack", "remove", "--kind", "tool", "--id", "temporary"],
+            cwd=workspace.project_root(),
+            stdout=output,
+        )
+        == 0
+    )
+    assert '"applied": false' in output.getvalue()
+    assert workspace.show_tool("temporary").version == "1.0.0"
+    output.seek(0)
+    output.truncate(0)
+
+    assert (
+        main(
+            ["pack", "remove", "--kind", "tool", "--id", "temporary", "--apply"],
+            cwd=workspace.project_root(),
+            stdout=output,
+        )
+        == 0
+    )
+    assert '"applied": true' in output.getvalue()
+    assert '"record_path":' in output.getvalue()
