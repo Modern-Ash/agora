@@ -328,6 +328,11 @@ internal documentation platform. Draft access is distinct from publication and a
 See [Knowledge-base integrations](knowledge-base-integrations.md) for existing-project installation,
 content sensitivity, guarded publication, provider mapping, and the executable Python example.
 
+The bundled `cloud-infrastructure` pack uses `cloudctl` as a stable adapter for cloud providers and
+infrastructure tools. Default roles can inspect and plan, but cannot apply or destroy. See
+[Cloud integrations](cloud-integrations.md) for existing-project installation, workload identity,
+immutable plans, guarded apply, provider mapping, and the executable Python example.
+
 ## Customize actors and responsibility
 
 Register a reusable human actor:

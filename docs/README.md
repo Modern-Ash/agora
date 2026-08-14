@@ -19,6 +19,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   cancellation, and guard deployments with explicit role approval.
 - [Knowledge-base integrations](guides/knowledge-base-integrations.md): connect Confluence, Notion,
   or internal documentation while separating drafts, publication, and archival authority.
+- [Cloud integrations](guides/cloud-integrations.md): inspect and plan infrastructure while keeping
+  apply and destruction behind explicit role and approval policy.
 - [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
@@ -76,6 +78,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   plus Product Owner approval before deployment.
 - [Governed knowledge base](../samples/knowledge-base/README.md): draft external documentation,
   require approval before publication, and reject unauthorized archival.
+- [Governed cloud infrastructure](../samples/cloud-infrastructure/README.md): plan a cloud change,
+  require approval before apply, and reject unauthorized destruction.
 - [Governed handoffs](../samples/handoffs/README.md): preserve one work item while its Developer role
   moves from a human to an AI agent and a swarm.
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child

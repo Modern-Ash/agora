@@ -4,7 +4,7 @@ id: "scrum-master"
 required-capabilities: ["facilitation", "governance"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm"]
 allowed-actions: ["work.transition", "work.block", "work.resume", "delegation.manage", "delegation.block", "delegation.resume", "evidence.add", "handoff.create", "handoff.manage"]
-allowed-tool-capabilities: ["repository.read", "issue.read", "ci.read", "docs.read"]
+allowed-tool-capabilities: ["repository.read", "issue.read", "ci.read", "docs.read", "cloud.read"]
 ---
 
 # Scrum Master

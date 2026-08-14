@@ -245,3 +245,9 @@ internal documentation services. Reads use `docs.read`, drafts use `docs.write`,
 `docs.publish`, and destructive archival uses `docs.archive`. The latter two are not granted by
 default. See the [knowledge-base integration guide](../guides/knowledge-base-integrations.md) and
 [publication sample](../../samples/knowledge-base/README.md).
+
+The bundled `cloud-infrastructure` pack defines a stable `cloudctl` interface. Inspection uses
+`cloud.read`, non-mutating plans use `cloud.plan`, apply uses `cloud.deploy`, and destruction uses
+`cloud.destroy`. Apply and destruction have no default role authority. See the
+[cloud integration guide](../guides/cloud-integrations.md) and
+[guarded apply sample](../../samples/cloud-infrastructure/README.md).

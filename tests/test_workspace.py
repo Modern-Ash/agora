@@ -824,6 +824,62 @@ def test_governs_knowledge_base_capabilities_by_role(
     assert not (root / ".agora" / "tool-runs" / "archive-documentation").exists()
 
 
+def test_governs_cloud_infrastructure_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    plan = workspace.invoke_tool(
+        InvokeToolInput(
+            id="plan-cloud-change",
+            tool_id="cloud-infrastructure",
+            operation_id="plan",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "staging", "change": "increase-api-capacity"},
+        )
+    )
+    assert plan.status == "prepared"
+    assert plan.capability == "cloud.plan"
+    assert plan.command == [
+        "cloudctl",
+        "change",
+        "plan",
+        "--environment",
+        "staging",
+        "--change",
+        "increase-api-capacity",
+        "--output",
+        "json",
+    ]
+
+    with pytest.raises(PermissionError, match="cloud.deploy"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="apply-cloud-change",
+                tool_id="cloud-infrastructure",
+                operation_id="apply-plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"plan": "plan-42", "environment": "staging"},
+            )
+        )
+    with pytest.raises(PermissionError, match="cloud.destroy"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="destroy-cloud-resource",
+                tool_id="cloud-infrastructure",
+                operation_id="destroy-resource",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"resource": "service/api", "environment": "staging"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "apply-cloud-change").exists()
+    assert not (root / ".agora" / "tool-runs" / "destroy-cloud-resource").exists()
+
+
 def test_hands_a_running_role_from_ai_to_human_and_swarm(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -1393,7 +1449,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.counts == {
         "actors": 3,
         "methods": 2,
-        "tools": 4,
+        "tools": 5,
         "swarms": 1,
         "work": 1,
         "delegations": 0,
@@ -1407,6 +1463,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert [item.id for item in workspace.list_methods()] == ["kanban", "scrum"]
     assert [item.id for item in workspace.list_tools()] == [
         "ci-cd",
+        "cloud-infrastructure",
         "knowledge-base",
         "repository",
         "work-management",

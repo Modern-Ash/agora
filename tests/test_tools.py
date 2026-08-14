@@ -62,6 +62,25 @@ def test_loads_the_bundled_knowledge_base_contract() -> None:
     assert contract.operations["archive"].risk == "destructive"
 
 
+def test_loads_the_bundled_cloud_infrastructure_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+
+    assert contract.id == "cloud-infrastructure"
+    assert contract.executable == "cloudctl"
+    assert list(contract.operations) == [
+        "apply-plan",
+        "destroy-resource",
+        "inspect-resource",
+        "list-resources",
+        "plan",
+    ]
+    assert contract.operations["list-resources"].capability == "cloud.read"
+    assert contract.operations["plan"].capability == "cloud.plan"
+    assert contract.operations["apply-plan"].capability == "cloud.deploy"
+    assert contract.operations["destroy-resource"].capability == "cloud.destroy"
+    assert contract.operations["destroy-resource"].risk == "destructive"
+
+
 @pytest.mark.parametrize(
     "message",
     [

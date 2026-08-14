@@ -152,6 +152,8 @@ Jira, Linear, or an internal provider. The bundled CI/CD pack applies the same p
 `cictl`, with separate read, run, cancel, and deployment capabilities. Vendor-specific packs remain
 independently installable Markdown. The bundled knowledge-base pack similarly separates reading and
 drafting from publication and archival through a stable `docsctl` adapter boundary.
+The bundled cloud-infrastructure pack uses `cloudctl` to separate inspection and planning from
+deployment and destructive operations, while provider identity and state remain external.
 
 ## Recursive delegation
 

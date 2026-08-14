@@ -17,6 +17,8 @@
   explicit Method Pack policy, evidence, and operation approval requirements.
 - Keep documentation publication and archival opt-in; treat remote pages as external state and
   persist their identifiers as Agora artifacts or evidence when lifecycle gates require them.
+- Keep cloud apply and destruction opt-in; require reviewed immutable plans, external workload
+  identity, explicit approvals, and durable evidence appropriate to the target environment.
 - Keep registry indexes and snapshots Markdown-first; verify remote releases before extraction,
   validate every contained pack before copying, persist provenance, and preserve
   project-over-user-over-bundled precedence.

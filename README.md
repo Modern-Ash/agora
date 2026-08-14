@@ -286,7 +286,7 @@ risk, a provider-neutral capability, and optional approval policy. Method Pack r
 capabilities explicitly.
 
 Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`, and
-`knowledge-base` packs:
+`knowledge-base` and `cloud-infrastructure` packs:
 
 ```bash
 agora tool show --tool repository
@@ -315,6 +315,12 @@ agora tool invoke --id inspect-payment-guide \
   --tool knowledge-base --operation view \
   --actor delivery-swarm --swarm payments \
   --input document=DOC-42 --launch
+
+agora tool invoke --id plan-payment-capacity \
+  --tool cloud-infrastructure --operation plan \
+  --actor delivery-swarm --swarm payments \
+  --input environment=staging \
+  --input change=increase-payment-capacity --launch
 ```
 
 The executable runs without a shell. Agora persists `RUN.md`, captures output and exit status in
@@ -334,6 +340,10 @@ See the [CI/CD integration guide](docs/guides/ci-cd-integrations.md).
 The `knowledge-base` pack defines a stable `docsctl` interface for Confluence, Notion, and internal
 documentation. Draft access remains separate from publication and destructive archival. See the
 [knowledge-base integration guide](docs/guides/knowledge-base-integrations.md).
+
+The `cloud-infrastructure` pack defines `cloudctl` for AWS, Azure, Google Cloud, infrastructure as
+code, or internal platforms. Inspection and planning remain distinct from apply and destruction.
+See the [cloud integration guide](docs/guides/cloud-integrations.md).
 
 ## Governed work
 
@@ -549,7 +559,8 @@ versioned registry snapshot without persisting a private key.
   Organization trust synchronization, transparency, automatic background pack updates, and
   notifications are not.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD, and
-  knowledge-base packs are implemented; vendor distributions and cloud packs remain future work.
+  knowledge-base and cloud-infrastructure packs are implemented; vendor distributions remain future
+  work.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

@@ -119,6 +119,10 @@ The bundled **Knowledge Base Tool Pack** grants reading, drafting, publication, 
 separate authorities. Remote publication can become an artifact or evidence reference, but it never
 replaces Agora's local work and governance state.
 
+The bundled **Cloud Infrastructure Tool Pack** makes inspection, planning, deployment, and
+destruction separate authorities. A plan identity connects review evidence to apply without making
+remote provider state the Agora source of truth.
+
 ## Standard
 
 A standard is a versioned, provider-neutral rule enabled by `.agora/STANDARDS.md`. It applies across
