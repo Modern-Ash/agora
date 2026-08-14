@@ -24,6 +24,7 @@ cloud providers, observability platforms, and communication services.
 | Tool | Capabilities | Authentication reference | Approval |
 | --- | --- | --- | --- |
 | repository | `repository.read`, `repository.write` | local Git configuration | operation policy |
+| work-management | `issue.read`, `issue.write`, `issue.transition` | external CLI profile | role capability |
 
 Installed Tool Packs live in subdirectories of `.agora/tools`. Presence in this catalog does not
 grant authority; active Method Pack roles must list each allowed tool capability.

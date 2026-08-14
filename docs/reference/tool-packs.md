@@ -206,7 +206,7 @@ A team can point `executable` at a vendor CLI or at a reviewed internal wrapper 
 multiple vendors. The Method Pack continues to grant `issue.read` or `ci.run`, not vendor product
 names, so changing Jira, repository host, CI service, or cloud does not rewrite lifecycle policy.
 
-## Bundled repository pack
+## Bundled packs
 
 Agora includes a `repository` pack backed by Git. It demonstrates read and write operations without
 making Git special in the kernel:
@@ -226,3 +226,10 @@ agora tool invoke --id governed-commit --tool repository --operation commit \
 The commit operation acts only on already staged files and validates its message against Conventional
 Commits 1.0.0. Run the [governed tool sample](../../samples/tool-integration/README.md) for an
 executable example.
+
+Agora also includes `work-management`, a stable `workctl` interface for external issue trackers. Its
+search and view operations require `issue.read`; create and comment require `issue.write`; transition
+requires `issue.transition`. Configure a reviewed wrapper for Jira, Linear, or another provider
+without changing those Method Pack capabilities. See the
+[work-management integration guide](../guides/work-management-integrations.md) and its
+[executable sample](../../samples/work-management/README.md).

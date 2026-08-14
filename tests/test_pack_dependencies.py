@@ -515,6 +515,7 @@ def test_pack_lock_tracks_managed_mutations_and_cli_refreshes_manual_changes(
         ("method", "kanban"),
         ("method", "scrum"),
         ("tool", "repository"),
+        ("tool", "work-management"),
     ]
     direct = _tool(tmp_path / "direct", "direct", "1.0.0")
     workspace.install_tool(InstallToolInput(source=str(direct), scope="project"))

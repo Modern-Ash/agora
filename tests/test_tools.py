@@ -17,6 +17,18 @@ def test_loads_a_provider_neutral_tool_pack() -> None:
     assert contract.operations["commit"].input_rules == {"message": "conventional-commits/v1.0.0"}
 
 
+def test_loads_the_bundled_work_management_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "work-management")
+
+    assert contract.id == "work-management"
+    assert contract.executable == "workctl"
+    assert list(contract.operations) == ["comment", "create", "search", "transition", "view"]
+    assert contract.operations["search"].capability == "issue.read"
+    assert contract.operations["create"].capability == "issue.write"
+    assert contract.operations["transition"].capability == "issue.transition"
+    assert contract.operations["transition"].risk == "write"
+
+
 @pytest.mark.parametrize(
     "message",
     [

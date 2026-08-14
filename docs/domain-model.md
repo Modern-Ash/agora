@@ -107,6 +107,10 @@ A **Tool Run** binds the pack and operation to an assigned actor, swarm, optiona
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
 and command metadata, while `RESULT.md` captures status, output, and exit code.
 
+The bundled **Work Management Tool Pack** separates `issue.read`, `issue.write`, and
+`issue.transition` authority behind a stable `workctl` interface. External ticket state and Agora
+work state remain independent records; synchronization requires explicit governed operations.
+
 ## Standard
 
 A standard is a versioned, provider-neutral rule enabled by `.agora/STANDARDS.md`. It applies across

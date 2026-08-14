@@ -312,6 +312,12 @@ result but leaves authentication in that CLI's profile, environment, workload id
 manager. Never use durable Tool Pack inputs for credentials. See the
 [Tool Pack reference](../reference/tool-packs.md) for the complete contract.
 
+New projects include the `work-management` pack with the stable executable name `workctl`. Point a
+reviewed wrapper at Jira, Linear, or an internal tracker while preserving the pack's provider-neutral
+capabilities. See [Work-management integrations](work-management-integrations.md) for the operation
+interface, existing-project installation command, role matrix, authentication boundary, and
+executable Python example.
+
 ## Customize actors and responsibility
 
 Register a reusable human actor:

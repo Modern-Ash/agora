@@ -146,8 +146,10 @@ optional approval role. Role policies determine which operations may be invoked.
 captured results remain in `.agora/tool-runs`; credentials are never copied into Git.
 
 The kernel does not use a shell or vendor SDK. It performs exact argument substitution and delegates
-authentication to the executable environment. The bundled Git pack is a reference implementation;
-vendor-specific packs remain independently installable Markdown.
+authentication to the executable environment. The bundled Git pack is a concrete implementation;
+the bundled work-management pack is a stable adapter interface whose `workctl` executable can wrap
+Jira, Linear, or an internal provider. Vendor-specific packs remain independently installable
+Markdown.
 
 ## Recursive delegation
 

@@ -4,7 +4,7 @@ id: "service-request-manager"
 required-capabilities: ["demand-management", "acceptance"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm"]
 allowed-actions: ["work.create", "work.cancel", "delegation.accept", "delegation.reject", "delegation.cancel", "criterion.satisfy", "work.transition", "evidence.add", "approval.add", "handoff.create"]
-allowed-tool-capabilities: ["repository.read", "issue.read", "issue.write", "docs.read", "docs.write"]
+allowed-tool-capabilities: ["repository.read", "issue.read", "issue.write", "issue.transition", "docs.read", "docs.write"]
 ---
 
 # Service Request Manager

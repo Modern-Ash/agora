@@ -13,6 +13,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   and configure bounded contention waits.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
+- [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
+  internal trackers through one provider-neutral, role-governed operation contract.
 - [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
@@ -64,6 +66,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   or Kanban.
 - [Governed tool integration](../samples/tool-integration/README.md): invoke Git through a
   role-authorized Tool Pack and inspect its durable result.
+- [Governed work management](../samples/work-management/README.md): execute a provider-neutral issue
+  tracker contract through a local Python adapter and reject unauthorized transitions.
 - [Governed handoffs](../samples/handoffs/README.md): preserve one work item while its Developer role
   moves from a human to an AI agent and a swarm.
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child

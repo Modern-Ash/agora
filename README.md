@@ -285,7 +285,7 @@ observability, or communication CLIs. An operation declares structured arguments
 risk, a provider-neutral capability, and optional approval policy. Method Pack roles grant those
 capabilities explicitly.
 
-Agora includes a Git-backed `repository` pack:
+Agora includes Git-backed `repository` and provider-neutral `work-management` packs:
 
 ```bash
 agora tool show --tool repository
@@ -298,12 +298,22 @@ agora tool invoke --id payment-commit \
   --tool repository --operation commit \
   --actor delivery-swarm --swarm payments \
   --input message="feat(payments): add governed payment API" --launch
+
+agora tool invoke --id inspect-payment-ticket \
+  --tool work-management --operation view \
+  --actor delivery-swarm --swarm payments \
+  --input issue=PAY-42 --launch
 ```
 
 The executable runs without a shell. Agora persists `RUN.md`, captures output and exit status in
 `RESULT.md`, and stores no credentials. Omitting `--launch` creates a portable invocation for an IDE,
 CI worker, or cloud executor. The commit operation validates Conventional Commits 1.0.0 before a run
 record or Git commit is created.
+
+The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
+tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
+Method Pack. See the
+[work-management integration guide](docs/guides/work-management-integrations.md).
 
 ## Governed work
 
@@ -518,8 +528,8 @@ versioned registry snapshot without persisting a private key.
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Organization trust synchronization, transparency, automatic background pack updates, and
   notifications are not.
-- The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
-  Confluence, and cloud platforms are not bundled yet.
+- The Tool Pack kernel, Git repository pack, and provider-neutral work-management pack are
+  implemented; vendor distributions and CI/CD, documentation, and cloud packs remain future work.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
