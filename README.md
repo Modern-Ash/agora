@@ -285,8 +285,8 @@ observability, or communication CLIs. An operation declares structured arguments
 risk, a provider-neutral capability, and optional approval policy. Method Pack roles grant those
 capabilities explicitly.
 
-Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`, and
-`knowledge-base` and `cloud-infrastructure` packs:
+Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`,
+`knowledge-base`, `cloud-infrastructure`, and `observability` packs:
 
 ```bash
 agora tool show --tool repository
@@ -321,6 +321,11 @@ agora tool invoke --id plan-payment-capacity \
   --actor delivery-swarm --swarm payments \
   --input environment=staging \
   --input change=increase-payment-capacity --launch
+
+agora tool invoke --id payment-health \
+  --tool observability --operation service-health \
+  --actor delivery-swarm --swarm payments \
+  --input service=payments --input environment=production --launch
 ```
 
 The executable runs without a shell. Agora persists `RUN.md`, captures output and exit status in
@@ -344,6 +349,10 @@ documentation. Draft access remains separate from publication and destructive ar
 The `cloud-infrastructure` pack defines `cloudctl` for AWS, Azure, Google Cloud, infrastructure as
 code, or internal platforms. Inspection and planning remain distinct from apply and destruction.
 See the [cloud integration guide](docs/guides/cloud-integrations.md).
+
+The `observability` pack defines `observectl` for monitoring and incident systems. Reading signals
+and declaring incidents remain separate from resolution authority. See the
+[observability integration guide](docs/guides/observability-integrations.md).
 
 ## Governed work
 
@@ -559,8 +568,8 @@ versioned registry snapshot without persisting a private key.
   Organization trust synchronization, transparency, automatic background pack updates, and
   notifications are not.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD, and
-  knowledge-base and cloud-infrastructure packs are implemented; vendor distributions remain future
-  work.
+  knowledge-base, cloud-infrastructure, and observability packs are implemented; vendor
+  distributions remain future work.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

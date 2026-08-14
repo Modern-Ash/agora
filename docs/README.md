@@ -21,6 +21,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   or internal documentation while separating drafts, publication, and archival authority.
 - [Cloud integrations](guides/cloud-integrations.md): inspect and plan infrastructure while keeping
   apply and destruction behind explicit role and approval policy.
+- [Observability integrations](guides/observability-integrations.md): query bounded health evidence,
+  declare incidents, and keep resolution behind explicit authority.
 - [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
@@ -80,6 +82,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   require approval before publication, and reject unauthorized archival.
 - [Governed cloud infrastructure](../samples/cloud-infrastructure/README.md): plan a cloud change,
   require approval before apply, and reject unauthorized destruction.
+- [Governed observability](../samples/observability/README.md): inspect health, declare an incident,
+  and require approval before external resolution.
 - [Governed handoffs](../samples/handoffs/README.md): preserve one work item while its Developer role
   moves from a human to an AI agent and a swarm.
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child

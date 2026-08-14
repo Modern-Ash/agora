@@ -251,3 +251,8 @@ The bundled `cloud-infrastructure` pack defines a stable `cloudctl` interface. I
 `cloud.destroy`. Apply and destruction have no default role authority. See the
 [cloud integration guide](../guides/cloud-integrations.md) and
 [guarded apply sample](../../samples/cloud-infrastructure/README.md).
+
+The bundled `observability` pack uses `observectl` for bounded health, metric, and log reads plus
+incident creation and updates. Resolution uses the separate `incident.resolve` capability and has no
+default authority. See the [observability integration guide](../guides/observability-integrations.md)
+and [incident sample](../../samples/observability/README.md).

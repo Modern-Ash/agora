@@ -81,6 +81,24 @@ def test_loads_the_bundled_cloud_infrastructure_contract() -> None:
     assert contract.operations["destroy-resource"].risk == "destructive"
 
 
+def test_loads_the_bundled_observability_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "observability")
+
+    assert contract.id == "observability"
+    assert contract.executable == "observectl"
+    assert list(contract.operations) == [
+        "create-incident",
+        "query-metrics",
+        "resolve-incident",
+        "search-logs",
+        "service-health",
+        "update-incident",
+    ]
+    assert contract.operations["service-health"].capability == "observability.read"
+    assert contract.operations["create-incident"].capability == "incident.write"
+    assert contract.operations["resolve-incident"].capability == "incident.resolve"
+
+
 @pytest.mark.parametrize(
     "message",
     [

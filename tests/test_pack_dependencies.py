@@ -517,6 +517,7 @@ def test_pack_lock_tracks_managed_mutations_and_cli_refreshes_manual_changes(
         ("tool", "ci-cd"),
         ("tool", "cloud-infrastructure"),
         ("tool", "knowledge-base"),
+        ("tool", "observability"),
         ("tool", "repository"),
         ("tool", "work-management"),
     ]

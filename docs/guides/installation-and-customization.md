@@ -333,6 +333,11 @@ infrastructure tools. Default roles can inspect and plan, but cannot apply or de
 [Cloud integrations](cloud-integrations.md) for existing-project installation, workload identity,
 immutable plans, guarded apply, provider mapping, and the executable Python example.
 
+The bundled `observability` pack uses `observectl` for health, metrics, logs, and incident records.
+Routine operational roles can read signals and declare incidents, while resolution remains opt-in.
+See [Observability integrations](observability-integrations.md) for bounded queries, redaction,
+guarded resolution, and the executable Python example.
+
 ## Customize actors and responsibility
 
 Register a reusable human actor:

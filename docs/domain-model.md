@@ -123,6 +123,10 @@ The bundled **Cloud Infrastructure Tool Pack** makes inspection, planning, deplo
 destruction separate authorities. A plan identity connects review evidence to apply without making
 remote provider state the Agora source of truth.
 
+The bundled **Observability Tool Pack** separates signal reads, incident updates, and incident
+resolution. External resolution is provider state; health results become durable Agora evidence only
+when explicitly recorded under the active lifecycle.
+
 ## Standard
 
 A standard is a versioned, provider-neutral rule enabled by `.agora/STANDARDS.md`. It applies across

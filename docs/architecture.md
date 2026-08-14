@@ -154,6 +154,8 @@ independently installable Markdown. The bundled knowledge-base pack similarly se
 drafting from publication and archival through a stable `docsctl` adapter boundary.
 The bundled cloud-infrastructure pack uses `cloudctl` to separate inspection and planning from
 deployment and destructive operations, while provider identity and state remain external.
+The observability pack applies the same adapter boundary to health signals and incidents, keeping
+resolution distinct from evidence that recovery actually occurred.
 
 ## Recursive delegation
 

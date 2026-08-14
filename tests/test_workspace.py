@@ -880,6 +880,56 @@ def test_governs_cloud_infrastructure_capabilities_by_role(
     assert not (root / ".agora" / "tool-runs" / "destroy-cloud-resource").exists()
 
 
+def test_governs_observability_and_incident_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    health = workspace.invoke_tool(
+        InvokeToolInput(
+            id="inspect-service-health",
+            tool_id="observability",
+            operation_id="service-health",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"service": "api", "environment": "production"},
+        )
+    )
+    assert health.status == "prepared"
+    assert health.capability == "observability.read"
+
+    incident = workspace.invoke_tool(
+        InvokeToolInput(
+            id="create-service-incident",
+            tool_id="observability",
+            operation_id="create-incident",
+            actor_id="facilitator",
+            swarm_id="delivery",
+            inputs={
+                "service": "api",
+                "severity": "high",
+                "title": "API errors",
+                "summary": "Error rate exceeded the reviewed threshold.",
+            },
+        )
+    )
+    assert incident.capability == "incident.write"
+
+    with pytest.raises(PermissionError, match="incident.resolve"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="resolve-service-incident",
+                tool_id="observability",
+                operation_id="resolve-incident",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"incident": "INC-42", "resolution": "Service recovered"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "resolve-service-incident").exists()
+
+
 def test_hands_a_running_role_from_ai_to_human_and_swarm(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -1449,7 +1499,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.counts == {
         "actors": 3,
         "methods": 2,
-        "tools": 5,
+        "tools": 6,
         "swarms": 1,
         "work": 1,
         "delegations": 0,
@@ -1465,6 +1515,7 @@ def test_lists_and_summarizes_operational_workspace_state(
         "ci-cd",
         "cloud-infrastructure",
         "knowledge-base",
+        "observability",
         "repository",
         "work-management",
     ]

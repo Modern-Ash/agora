@@ -28,6 +28,7 @@ cloud providers, observability platforms, and communication services.
 | ci-cd | `ci.read`, `ci.run`, `ci.cancel`, `deployment.create` | external CI/CD CLI profile | role capability and operation policy |
 | knowledge-base | `docs.read`, `docs.write`, `docs.publish`, `docs.archive` | external documentation CLI profile | role capability and operation policy |
 | cloud-infrastructure | `cloud.read`, `cloud.plan`, `cloud.deploy`, `cloud.destroy` | workload identity | role capability, evidence, and approval policy |
+| observability | `observability.read`, `incident.write`, `incident.resolve` | external observability CLI profile | role capability and incident policy |
 
 Installed Tool Packs live in subdirectories of `.agora/tools`. Presence in this catalog does not
 grant authority; active Method Pack roles must list each allowed tool capability.
