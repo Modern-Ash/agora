@@ -32,15 +32,15 @@ not invoke LLM SDKs directly, inspect source languages, or store credentials.
 The process is visible to humans, portable across agents, and recoverable without a database. Method
 Packs can be reviewed as code and each environment can install its own adapter.
 
-The CLI will need concurrency controls, document migrations, and template compatibility rules in
-future versions. Markdown does not replace validation: front matter preserves structured metadata and
-gates remain executable.
+The CLI needs concurrency controls and template compatibility rules as the format evolves. Versioned,
+transactional project migrations were introduced after the initial slice; Markdown does not replace
+validation, so front matter preserves structured metadata and gates remain executable.
 
 ## Future work
 
-- Installable registry of Method Packs and integrations.
+- Remote, signed distribution for the implemented local Method and Tool Pack registry contract.
 - Published vendor Tool Packs for Jira, CI/CD, documentation, and cloud.
 - Delegation budgets, automatic child work decomposition, and child artifact copying. Explicit
   reference-based result collection is part of the current filesystem protocol.
-- Locks or leases for distributed work.
+- Distributed leases for work coordinated across separate hosts. Local writer locks are implemented.
 - Gate waivers, approval delegation, budgets, and environment-specific permissions.

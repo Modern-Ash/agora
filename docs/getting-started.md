@@ -217,8 +217,15 @@ agora event list --swarm payment-api --work authenticated-endpoint --limit 20
 agora validate
 git status
 git add .agora
-git commit -m "record governed payment API delivery"
+agora tool invoke --id payment-api-commit \
+  --tool repository --operation commit \
+  --actor delivery --swarm payment-api \
+  --input message="feat(payment-api): record governed delivery" \
+  --launch
 ```
+
+The bundled commit operation accepts only Conventional Commits 1.0.0 messages. Git remains
+responsible for the staged set, author identity, signing, and hooks.
 
 The resulting work directory contains current state and append-only operational records:
 

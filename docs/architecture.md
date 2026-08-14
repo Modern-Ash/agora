@@ -27,7 +27,11 @@ gates, approvals, handoffs, interruptions, delegations, sessions, and tool runs.
 `src/agora/methods.py` loads
 transition graphs, WIP limits, and gate policies. `src/agora/tools.py` validates provider-neutral
 Tool Packs and structured external operations. `src/agora/markdown.py` implements the
-JSON-compatible front matter used by the protocol.
+JSON-compatible front matter used by the protocol. `src/agora/upgrades.py` plans ordered project
+migrations, preserves customization boundaries, backs up changed files, and writes durable upgrade
+manifests.
+`src/agora/registries.py` validates local registry snapshots and discovers Method and Tool Packs
+without introducing a network package manager.
 
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
@@ -37,7 +41,7 @@ without changing the source of truth.
 
 ### Templates
 
-`templates/project` contains the base constitution, protocol, and catalogs. `templates/methods`
+`templates/project` contains the base constitution, protocol, standards, and catalogs. `templates/methods`
 provides Scrum and Kanban as replaceable presets. User and project scopes may install any Method Pack
 that satisfies the Markdown contract. `templates/commands` contains portable instructions that
 adapters install as Codex skills or commands for other agents.
@@ -46,7 +50,8 @@ adapters install as Codex skills or commands for other agents.
 
 - Distribution: defaults versioned with the Python package.
 - User: reusable preferences and actors under `~/.agora` or `$AGORA_HOME`.
-- Project: shared constitution, integration, methods, policies, and maximum delegation depth.
+- Project: shared constitution, integration, standards, methods, policies, and maximum delegation
+  depth.
 - Swarm: objective, current assignments, handoff history, branch, work, and evidence.
 
 More specific scopes may restrict broader scopes. They must not silently grant permissions prohibited
@@ -56,11 +61,22 @@ Method Packs under `~/.agora/methods` are copied into a newly initialized projec
 the project remain local to it. The active pack, rather than the core CLI, supplies lifecycle roles,
 states, transitions, protocol, tool policy, and completion expectations.
 
+Registries are immutable-by-review catalog snapshots under user or project scope. Discovery keeps
+every matching provenance visible; installation resolves project before user before bundled unless a
+registry id is selected explicitly. Pack installation still copies through the ordinary Method or
+Tool Pack validation path.
+
 ### Git and filesystem
 
 Markdown is the durable contract and the filesystem represents current state. Git adds history,
 diffs, review, synchronization, and branches. There is no parallel JSON snapshot. Atomic replacement
 keeps the previous document intact when an operation fails.
+
+Project protocol versions are independent from individual Markdown schema identifiers. A CLI update
+does not mutate a workspace. `agora upgrade` first produces a read-only plan; `--apply` backs up all
+updated files, applies the supported ordered migration, and rolls back the complete change set if a
+write fails. Upgrade records live beside project state under `.agora/upgrades` and are validated like
+other Agora documents.
 
 ### Environment adapters
 
@@ -120,7 +136,13 @@ authority.
 This slice validates actor kind, capabilities, assignment, handoff authority, allowed action,
 transition-specific role, WIP, gates, approval records, Tool Pack inputs, tool capabilities,
 interruption edges, status attribution, sequence continuity, and derived swarm state.
+Mutating workspace operations hold a reentrant operating-system lock keyed by the canonical project
+or Agora home path. Initialization acquires home and target locks in deterministic order. Lock
+metadata is runtime-only Markdown outside the repository; atomic document replacement still protects
+readers. This prevents lost updates between local processes and releases automatically after process
+termination.
+
 External commands still run with the caller's operating-system permissions. Agora does not yet
-implement sandboxing, signatures, distributed locks, actor authentication, or concurrent writer
-protection. Those rules must be added without turning chat history or a proprietary service into the
-source of truth.
+implement sandboxing, signatures, distributed leases across separate hosts, or actor authentication.
+Those rules must be added without turning chat history or a proprietary service into the source of
+truth.

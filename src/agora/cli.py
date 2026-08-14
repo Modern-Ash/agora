@@ -22,12 +22,15 @@ from agora.model import (
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
+    InstallCatalogPackInput,
     InstallMethodInput,
+    InstallRegistryInput,
     InstallToolInput,
     InvokeToolInput,
     SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
+    UpgradeInput,
     ValidationReport,
     WorkActorInput,
 )
@@ -97,6 +100,37 @@ def _build_parser() -> argparse.ArgumentParser:
     commands.add_parser("doctor", help="Check environment prerequisites")
     commands.add_parser("status", help="Summarize operational project state")
     commands.add_parser("validate", help="Validate every Agora record and reference")
+    lock = commands.add_parser("lock", help="Inspect local writer coordination").add_subparsers(
+        dest="lock_command", required=True
+    )
+    lock_status = lock.add_parser("status", help="Show a project or user write lock")
+    lock_status.add_argument("--scope", choices=("project", "user"), default="project")
+    upgrade = commands.add_parser("upgrade", help="Plan or apply a safe project migration")
+    upgrade.add_argument("--apply", action="store_true", help="Apply the displayed migration")
+    upgrade.add_argument("--id", help="Stable id for the durable upgrade record")
+
+    registry = commands.add_parser(
+        "registry", help="Manage local Markdown pack registries"
+    ).add_subparsers(dest="registry_command", required=True)
+    registry_install = registry.add_parser("install", help="Install a registry snapshot")
+    registry_install.add_argument("--source", required=True)
+    registry_install.add_argument("--scope", choices=("user", "project"), default="user")
+    registry_install.add_argument("--force", action="store_true")
+    registry.add_parser("list", help="List bundled and installed registries")
+
+    pack = commands.add_parser("pack", help="Discover and install catalog packs").add_subparsers(
+        dest="pack_command", required=True
+    )
+    pack_search = pack.add_parser("search", help="Search registered Method and Tool Packs")
+    pack_search.add_argument("--kind", choices=("method", "tool"))
+    pack_search.add_argument("--query")
+    pack_search.add_argument("--registry")
+    pack_install = pack.add_parser("install", help="Install a pack selected from the catalog")
+    pack_install.add_argument("--kind", choices=("method", "tool"), required=True)
+    pack_install.add_argument("--id", required=True)
+    pack_install.add_argument("--registry")
+    pack_install.add_argument("--scope", choices=("user", "project"), default="project")
+    pack_install.add_argument("--force", action="store_true")
 
     start = commands.add_parser("start", help="Prepare or launch a governed actor session")
     start.add_argument("--id")
@@ -397,6 +431,28 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.status()
     if args.command == "validate":
         return workspace.validate()
+    if args.command == "lock" and args.lock_command == "status":
+        return workspace.lock_status(args.scope)
+    if args.command == "upgrade":
+        return workspace.upgrade(UpgradeInput(apply=args.apply, id=args.id))
+    if args.command == "registry" and args.registry_command == "install":
+        return workspace.install_registry(
+            InstallRegistryInput(source=args.source, scope=args.scope, force=args.force)
+        )
+    if args.command == "registry" and args.registry_command == "list":
+        return workspace.list_registries()
+    if args.command == "pack" and args.pack_command == "search":
+        return workspace.search_catalog(args.kind, args.query, args.registry)
+    if args.command == "pack" and args.pack_command == "install":
+        return workspace.install_catalog_pack(
+            InstallCatalogPackInput(
+                kind=args.kind,
+                pack_id=args.id,
+                registry_id=args.registry,
+                scope=args.scope,
+                force=args.force,
+            )
+        )
     if args.command == "start":
         return workspace.start_session(
             StartSessionInput(

@@ -1,9 +1,12 @@
+import math
 import os
 import shlex
 import shutil
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 
 from agora.filesystem import (
@@ -17,6 +20,7 @@ from agora.filesystem import (
     write_new,
 )
 from agora.git import create_branch, current_branch, is_git_repository
+from agora.locking import WorkspaceLock, inspect_workspace_lock
 from agora.markdown import (
     MarkdownDocument,
     optional_string_attribute,
@@ -36,6 +40,7 @@ from agora.model import (
     AddArtifactInput,
     AddEvidenceInput,
     AssignActorInput,
+    CatalogPackRecord,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
     ConfigureInput,
@@ -50,7 +55,9 @@ from agora.model import (
     HandoffActorInput,
     HandoffRecord,
     InitInput,
+    InstallCatalogPackInput,
     InstallMethodInput,
+    InstallRegistryInput,
     InstallToolInput,
     Integration,
     InvokeToolInput,
@@ -58,6 +65,7 @@ from agora.model import (
     MethodContract,
     MethodPackRecord,
     ProjectConfiguration,
+    RegistryRecord,
     SessionRecord,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -68,15 +76,40 @@ from agora.model import (
     ToolRisk,
     ToolRunRecord,
     TransitionWorkInput,
+    UpgradeInput,
+    UpgradeResult,
     UserConfiguration,
     ValidationIssue,
     ValidationReport,
     WorkActorInput,
     WorkOperationalStatus,
     WorkRecord,
+    WorkspaceLockStatus,
     WorkspaceStatus,
 )
-from agora.tools import load_tool_contract
+from agora.registries import bundled_registry, discover_registry_packs, load_registry
+from agora.tools import load_tool_contract, validate_operation_inputs
+from agora.upgrades import (
+    CURRENT_PROJECT_VERSION,
+    apply_upgrade,
+    compare_versions,
+    plan_upgrade,
+    read_upgrade_record,
+    validate_version,
+)
+
+
+def _locked_mutation(scope: str) -> Callable:
+    def decorate(method: Callable) -> Callable:
+        @wraps(method)
+        def guarded(self: "AgoraWorkspace", *args: object, **kwargs: object) -> object:
+            resources = self._mutation_resources(scope, args, kwargs)
+            with self._mutation_lock(resources, method.__name__):
+                return method(self, *args, **kwargs)
+
+        return guarded
+
+    return decorate
 
 
 class AgoraWorkspace:
@@ -88,12 +121,23 @@ class AgoraWorkspace:
         tool_runner: (
             Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess[str]] | None
         ) = None,
+        lock_timeout: float | None = None,
     ) -> None:
         self.cwd = Path(cwd or Path.cwd()).resolve()
         self._now = now or (lambda: datetime.now(UTC))
         self._launcher = launcher or _launch_process
         self._tool_runner = tool_runner or _run_tool_process
+        configured_timeout = os.environ.get("AGORA_LOCK_TIMEOUT", "0")
+        try:
+            self.lock_timeout = float(configured_timeout) if lock_timeout is None else lock_timeout
+        except ValueError as error:
+            raise ValueError("AGORA_LOCK_TIMEOUT must be a non-negative number") from error
+        if not math.isfinite(self.lock_timeout) or self.lock_timeout < 0:
+            raise ValueError("Lock timeout must be a finite non-negative number")
+        self._lock_depth = 0
+        self._lock_resources: tuple[Path, ...] = ()
 
+    @_locked_mutation("home")
     def configure(self, data: ConfigureInput) -> UserConfiguration:
         self._assert_integration(data.integration)
         self._assert_delegation_depth(data.max_delegation_depth)
@@ -135,12 +179,14 @@ class AgoraWorkspace:
         )
         return configuration
 
+    @_locked_mutation("target")
     def initialize(self, data: InitInput) -> ProjectConfiguration:
         target = (self.cwd / (data.target or ".")).resolve()
         target.mkdir(parents=True, exist_ok=True)
         user = self._load_user_configuration()
         configuration = ProjectConfiguration(
             project=target.name,
+            version=CURRENT_PROJECT_VERSION,
             integration=data.integration or (user.integration if user else "generic"),
             provider=data.provider or (user.provider if user else "configured-by-integration"),
             model=data.model or (user.model if user else "configured-by-integration"),
@@ -167,7 +213,7 @@ class AgoraWorkspace:
                 MarkdownDocument(
                     attributes={
                         "schema": "agora/project/v1",
-                        "version": "0.1.0",
+                        "version": configuration.version,
                         "project": configuration.project,
                         "integration": configuration.integration,
                         "provider": configuration.provider,
@@ -216,6 +262,23 @@ class AgoraWorkspace:
         )
         return configuration
 
+    @_locked_mutation("project")
+    def upgrade(self, data: UpgradeInput) -> UpgradeResult:
+        root = self.project_root()
+        project = self._load_project_configuration(root)
+        plan = plan_upgrade(root, project)
+        if not data.apply or not plan.required:
+            return plan
+        upgrade_id = data.id or self._now().astimezone(UTC).strftime("upgrade-%Y%m%dt%H%M%sz")
+        assert_slug(upgrade_id, "Upgrade id")
+        return apply_upgrade(
+            root,
+            project,
+            id_=upgrade_id,
+            applied_at=self._timestamp(),
+        )
+
+    @_locked_mutation("scoped")
     def install_method(self, data: InstallMethodInput) -> MethodPackRecord:
         source = Path(data.source).expanduser().resolve()
         if not source.is_dir():
@@ -243,6 +306,7 @@ class AgoraWorkspace:
             terminal_state=contract.terminal_state,
         )
 
+    @_locked_mutation("scoped")
     def install_tool(self, data: InstallToolInput) -> ToolPackRecord:
         source = Path(data.source).expanduser().resolve()
         if not source.is_dir():
@@ -258,6 +322,90 @@ class AgoraWorkspace:
             )
         copy_template_tree(source, destination, {}, data.force)
         return self._tool_pack_record(contract, data.scope, destination)
+
+    @_locked_mutation("scoped")
+    def install_registry(self, data: InstallRegistryInput) -> RegistryRecord:
+        source = Path(data.source).expanduser().resolve()
+        if not source.is_dir():
+            raise FileNotFoundError(f"Registry directory not found: {source}")
+        registry = load_registry(source, data.scope)
+        destination_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        destination = destination_root / "registries" / registry.id
+        if destination.exists() and not data.force:
+            raise FileExistsError(
+                f"Registry already exists: {destination}. Pass --force to replace its files."
+            )
+        copy_template_tree(source, destination, {}, data.force)
+        return load_registry(destination, data.scope)
+
+    def list_registries(self) -> list[RegistryRecord]:
+        records = [bundled_registry()]
+        records.extend(self._registries_at(agora_home() / "registries", "user"))
+        project = self._optional_project_root()
+        if project is not None:
+            records.extend(self._registries_at(project / ".agora" / "registries", "project"))
+        priority = {"project": 0, "user": 1, "bundled": 2}
+        return sorted(records, key=lambda item: (priority[item.scope], item.id))
+
+    def search_catalog(
+        self,
+        kind: str | None = None,
+        query: str | None = None,
+        registry_id: str | None = None,
+    ) -> list[CatalogPackRecord]:
+        if kind is not None and kind not in {"method", "tool"}:
+            raise ValueError(f"Unsupported pack kind: {kind}")
+        if registry_id is not None:
+            assert_slug(registry_id, "Registry id")
+        normalized = query.lower().strip() if query else None
+        project = self._optional_project_root()
+        records: list[CatalogPackRecord] = []
+        for registry in self.list_registries():
+            if registry_id is not None and registry.id != registry_id:
+                continue
+            for pack in discover_registry_packs(registry):
+                if kind is not None and pack.kind != kind:
+                    continue
+                if (
+                    normalized
+                    and normalized not in pack.id.lower()
+                    and normalized not in pack.name.lower()
+                ):
+                    continue
+                installed = (agora_home() / f"{pack.kind}s" / pack.id).is_dir() or (
+                    project is not None
+                    and (project / ".agora" / f"{pack.kind}s" / pack.id).is_dir()
+                )
+                records.append(CatalogPackRecord(**{**pack.__dict__, "installed": installed}))
+        priority = {"project": 0, "user": 1, "bundled": 2}
+        return sorted(
+            records,
+            key=lambda item: (item.kind, item.id, priority[item.registry_scope], item.registry),
+        )
+
+    @_locked_mutation("scoped")
+    def install_catalog_pack(
+        self, data: InstallCatalogPackInput
+    ) -> MethodPackRecord | ToolPackRecord:
+        if data.kind not in {"method", "tool"}:
+            raise ValueError(f"Unsupported pack kind: {data.kind}")
+        assert_slug(data.pack_id, "Pack id")
+        matches = [
+            item
+            for item in self.search_catalog(data.kind, registry_id=data.registry_id)
+            if item.id == data.pack_id
+        ]
+        if not matches:
+            origin = f" in registry {data.registry_id}" if data.registry_id else ""
+            raise FileNotFoundError(f"Catalog pack not found: {data.kind}/{data.pack_id}{origin}")
+        selected = matches[0]
+        if data.kind == "method":
+            return self.install_method(
+                InstallMethodInput(source=selected.path, scope=data.scope, force=data.force)
+            )
+        return self.install_tool(
+            InstallToolInput(source=selected.path, scope=data.scope, force=data.force)
+        )
 
     def show_tool(self, tool_id: str) -> ToolPackRecord:
         assert_slug(tool_id, "Tool id")
@@ -290,6 +438,7 @@ class AgoraWorkspace:
             for path in sorted(tool_root.glob("*/TOOL.md"))
         ]
 
+    @_locked_mutation("scoped")
     def add_actor(self, data: AddActorInput) -> ActorRecord:
         assert_slug(data.id, "Actor id")
         if data.kind not in ACTOR_KINDS:
@@ -349,6 +498,7 @@ class AgoraWorkspace:
             represented_swarm=data.represented_swarm,
         )
 
+    @_locked_mutation("actor-runtime")
     def set_actor_runtime(self, data: SetActorRuntimeInput) -> ActorRecord:
         root = self.project_root()
         actor = self._find_actor(root, data.actor_id)
@@ -400,6 +550,7 @@ class AgoraWorkspace:
             if path.name != "README.md"
         ]
 
+    @_locked_mutation("project")
     def create_swarm(self, data: CreateSwarmInput) -> SwarmRecord:
         assert_slug(data.id, "Swarm id")
         root = self.project_root()
@@ -434,6 +585,7 @@ class AgoraWorkspace:
         self._append_swarm_event(root, data.id, "swarm.created", f"branch={record.branch}")
         return record
 
+    @_locked_mutation("project")
     def assign_actor(self, data: AssignActorInput) -> SwarmRecord:
         assert_slug(data.role_id, "Role id")
         root = self.project_root()
@@ -458,6 +610,7 @@ class AgoraWorkspace:
         )
         return swarm
 
+    @_locked_mutation("project")
     def handoff_actor(self, data: HandoffActorInput) -> HandoffRecord:
         assert_slug(data.role_id, "Role id")
         if not data.reason.strip():
@@ -549,6 +702,7 @@ class AgoraWorkspace:
             for path in sorted((Path(swarm.path) / "handoffs").glob("*/HANDOFF.md"))
         ]
 
+    @_locked_mutation("project")
     def create_work(self, data: CreateWorkInput) -> WorkRecord:
         assert_slug(data.id, "Work id")
         root = self.project_root()
@@ -620,6 +774,7 @@ class AgoraWorkspace:
         self._append_work_event(work, "work.created", f"state={work.state} actor={actor.reference}")
         return work
 
+    @_locked_mutation("project")
     def satisfy_criterion(self, data: WorkActorInput, criterion_id: str) -> WorkRecord:
         root = self.project_root()
         swarm = self._load_swarm(root, data.swarm_id)
@@ -637,6 +792,7 @@ class AgoraWorkspace:
         )
         return work
 
+    @_locked_mutation("project")
     def add_artifact(self, data: AddArtifactInput) -> WorkRecord:
         root = self.project_root()
         swarm = self._load_swarm(root, data.swarm_id)
@@ -662,6 +818,7 @@ class AgoraWorkspace:
             f"kind={kind} uri={uri} actor={actor_reference}",
         )
 
+    @_locked_mutation("project")
     def add_evidence(self, data: AddEvidenceInput) -> WorkRecord:
         root = self.project_root()
         swarm = self._load_swarm(root, data.swarm_id)
@@ -701,6 +858,7 @@ class AgoraWorkspace:
             f"type={type_} result={result} actor={actor_reference}",
         )
 
+    @_locked_mutation("project")
     def add_approval(self, data: AddApprovalInput) -> WorkRecord:
         assert_slug(data.role_id, "Approval role id")
         root = self.project_root()
@@ -730,6 +888,7 @@ class AgoraWorkspace:
         )
         return self._load_work(swarm, data.work_id)
 
+    @_locked_mutation("project")
     def transition_work(self, data: TransitionWorkInput) -> WorkRecord:
         root = self.project_root()
         swarm = self._load_swarm(root, data.swarm_id)
@@ -797,12 +956,15 @@ class AgoraWorkspace:
             and (operational_status is None or record.operational_status == operational_status)
         ]
 
+    @_locked_mutation("project")
     def block_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
         return self._change_work_status(data, "blocked", "work.block")
 
+    @_locked_mutation("project")
     def resume_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
         return self._change_work_status(data, "active", "work.resume")
 
+    @_locked_mutation("project")
     def cancel_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
         return self._change_work_status(data, "cancelled", "work.cancel")
 
@@ -879,6 +1041,7 @@ class AgoraWorkspace:
         self._refresh_swarm_status(root, swarm)
         return record
 
+    @_locked_mutation("project")
     def create_delegation(self, data: CreateDelegationInput) -> DelegationRecord:
         assert_slug(data.child_work_id, "Child work id")
         assert_slug(data.result_kind, "Delegation result kind")
@@ -948,6 +1111,7 @@ class AgoraWorkspace:
         self._append_swarm_event(root, child.id, "delegation.received", detail)
         return record
 
+    @_locked_mutation("project")
     def accept_delegation(self, data: DelegationActorInput) -> DelegationRecord:
         root = self.project_root()
         delegation = self._load_delegation(root, data.delegation_id)
@@ -1011,6 +1175,7 @@ class AgoraWorkspace:
         self._append_swarm_event(root, child.id, "delegation.accepted", detail)
         return accepted
 
+    @_locked_mutation("project")
     def collect_delegation(self, data: DelegationActorInput) -> DelegationRecord:
         root = self.project_root()
         delegation = self._load_delegation(root, data.delegation_id)
@@ -1094,6 +1259,7 @@ class AgoraWorkspace:
         self._append_swarm_event(root, parent.id, "delegation.collected", detail)
         return collected
 
+    @_locked_mutation("project")
     def block_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         delegation = self.show_delegation(data.delegation_id)
         return self._change_delegation_status(
@@ -1105,6 +1271,7 @@ class AgoraWorkspace:
             blocked_from=delegation.status,
         )
 
+    @_locked_mutation("project")
     def resume_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         delegation = self.show_delegation(data.delegation_id)
         if delegation.status != "blocked" or delegation.blocked_from not in {
@@ -1121,6 +1288,7 @@ class AgoraWorkspace:
             blocked_from=None,
         )
 
+    @_locked_mutation("project")
     def reject_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         return self._change_delegation_status(
             data,
@@ -1130,6 +1298,7 @@ class AgoraWorkspace:
             allowed_statuses={"proposed"},
         )
 
+    @_locked_mutation("project")
     def cancel_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         return self._change_delegation_status(
             data,
@@ -1223,6 +1392,7 @@ class AgoraWorkspace:
         ]
         return [record for record in records if status is None or record.status == status]
 
+    @_locked_mutation("project")
     def start_session(self, data: StartSessionInput) -> SessionRecord:
         root = self.project_root()
         project = self._load_project_configuration(root)
@@ -1333,6 +1503,7 @@ class AgoraWorkspace:
         ]
         return [record for record in records if status is None or record.status == status]
 
+    @_locked_mutation("project")
     def invoke_tool(self, data: InvokeToolInput) -> ToolRunRecord:
         assert_slug(data.tool_id, "Tool id")
         assert_slug(data.operation_id, "Tool operation id")
@@ -1370,6 +1541,7 @@ class AgoraWorkspace:
                 f"unknown=[{', '.join(unknown_inputs)}], "
                 f"empty=[{', '.join(empty_inputs)}]"
             )
+        validate_operation_inputs(operation, data.inputs)
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
         if work is not None:
             self._assert_work_mutable(root, swarm, work)
@@ -1590,6 +1762,8 @@ class AgoraWorkspace:
             "sessions": 0,
             "tool-runs": 0,
             "event-files": 0,
+            "upgrades": 0,
+            "registries": 0,
         }
         issues: list[ValidationIssue] = []
 
@@ -1621,6 +1795,54 @@ class AgoraWorkspace:
             project_path,
             lambda: self._load_project_configuration(root),
         )
+        if isinstance(project, ProjectConfiguration):
+            relation = compare_versions(project.version, CURRENT_PROJECT_VERSION)
+            if relation < 0:
+                issue(
+                    "project.upgrade-available",
+                    project_path,
+                    f"Project version {project.version} can be upgraded to "
+                    f"{CURRENT_PROJECT_VERSION}",
+                    "warning",
+                )
+            elif relation > 0:
+                issue(
+                    "project.version-newer",
+                    project_path,
+                    f"Project version {project.version} is newer than this Agora CLI "
+                    f"({CURRENT_PROJECT_VERSION})",
+                )
+
+        for directory in _child_directories(root / ".agora" / "upgrades"):
+            path = directory / "UPGRADE.md"
+            record = inspect(
+                "upgrades",
+                "upgrade.invalid",
+                path,
+                lambda path=path: read_upgrade_record(path),
+            )
+            if isinstance(record, MarkdownDocument):
+                record_id = string_attribute(record.attributes, "id")
+                if record_id != directory.name:
+                    issue(
+                        "upgrade.id-mismatch",
+                        path,
+                        f"Upgrade id {record_id} does not match directory {directory.name}",
+                    )
+        for directory in _child_directories(root / ".agora" / "registries"):
+            path = directory / "REGISTRY.md"
+            registry = inspect(
+                "registries",
+                "registry.invalid",
+                path,
+                lambda directory=directory: load_registry(directory, "project"),
+            )
+            if isinstance(registry, RegistryRecord) and registry.id != directory.name:
+                issue(
+                    "registry.id-mismatch",
+                    path,
+                    f"Registry id {registry.id} does not match directory {directory.name}",
+                )
         for path, schema in (
             (root / ".agora" / "constitution.md", "agora/constitution/v1"),
             (root / ".agora" / "PROTOCOL.md", "agora/protocol/v1"),
@@ -1632,6 +1854,13 @@ class AgoraWorkspace:
                 path,
                 lambda path=path, schema=schema: _assert_schema(read_markdown(path), schema, path),
             )
+        standards_path = root / ".agora" / "STANDARDS.md"
+        inspect(
+            "documents",
+            "standards.invalid",
+            standards_path,
+            lambda: _assert_project_standards(read_markdown(standards_path), standards_path),
+        )
 
         command_root = root / ".agora" / "commands"
         commands: dict[str, Path] = {}
@@ -2459,8 +2688,85 @@ class AgoraWorkspace:
             ),
         ]
 
+    def lock_status(self, scope: str = "project") -> WorkspaceLockStatus:
+        if scope == "user":
+            return inspect_workspace_lock(agora_home())
+        if scope == "project":
+            return inspect_workspace_lock(self.project_root())
+        raise ValueError(f"Unsupported lock scope: {scope}")
+
+    def _mutation_resources(
+        self,
+        scope: str,
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+    ) -> tuple[Path, ...]:
+        data = args[0] if args else kwargs.get("data")
+        if scope == "project":
+            return (self.project_root(),)
+        if scope == "home":
+            return (agora_home(),)
+        if scope == "target":
+            target = getattr(data, "target", None)
+            return (agora_home(), (self.cwd / (target or ".")).resolve())
+        if scope == "scoped":
+            resource = (
+                agora_home() if getattr(data, "scope", None) == "user" else self.project_root()
+            )
+            return (resource,)
+        if scope == "actor-runtime":
+            root = self.project_root()
+            actor_id = getattr(data, "actor_id", None)
+            actor = self._find_actor(root, str(actor_id))
+            return (agora_home() if actor.reference.startswith("user:") else root,)
+        raise ValueError(f"Unsupported mutation lock scope: {scope}")
+
+    @contextmanager
+    def _mutation_lock(self, resources: tuple[Path, ...], operation: str) -> Iterator[None]:
+        resolved = tuple(sorted({item.resolve() for item in resources}, key=str))
+        if self._lock_depth:
+            if self._lock_resources != resolved:
+                raise RuntimeError(
+                    f"Nested mutation attempted to lock {', '.join(map(str, resolved))} while "
+                    f"holding {', '.join(map(str, self._lock_resources))}"
+                )
+            self._lock_depth += 1
+            try:
+                yield
+            finally:
+                self._lock_depth -= 1
+            return
+
+        with ExitStack() as stack:
+            for resource in resolved:
+                stack.enter_context(
+                    WorkspaceLock(
+                        resource,
+                        operation,
+                        timeout=self.lock_timeout,
+                        now=self._now(),
+                    )
+                )
+            self._lock_resources = resolved
+            self._lock_depth = 1
+            try:
+                yield
+            finally:
+                self._lock_depth = 0
+                self._lock_resources = ()
+
     def project_root(self) -> Path:
         return find_project_root(self.cwd)
+
+    def _optional_project_root(self) -> Path | None:
+        try:
+            return self.project_root()
+        except FileNotFoundError:
+            return None
+
+    @staticmethod
+    def _registries_at(root: Path, scope: str) -> list[RegistryRecord]:
+        return [load_registry(directory, scope) for directory in _child_directories(root)]
 
     def _load_user_configuration(self) -> UserConfiguration | None:
         path = agora_home() / "config.md"
@@ -2484,6 +2790,7 @@ class AgoraWorkspace:
         attributes = document.attributes
         return ProjectConfiguration(
             project=string_attribute(attributes, "project"),
+            version=validate_version(string_attribute(attributes, "version")),
             integration=self._integration(string_attribute(attributes, "integration")),
             provider=string_attribute(attributes, "provider"),
             model=string_attribute(attributes, "model"),
@@ -3226,6 +3533,7 @@ class AgoraWorkspace:
             root / ".agora" / "project.md",
             root / ".agora" / "constitution.md",
             root / ".agora" / "PROTOCOL.md",
+            root / ".agora" / "STANDARDS.md",
             root / ".agora" / "tools" / "TOOLS.md",
             swarm_root / "SWARM.md",
             swarm_root / "events.md",
@@ -3561,6 +3869,13 @@ def _assert_schema(document: MarkdownDocument, expected: str, path: Path) -> Non
     actual = string_attribute(document.attributes, "schema")
     if actual != expected:
         raise ValueError(f"Expected schema {expected}, found {actual}: {path}")
+
+
+def _assert_project_standards(document: MarkdownDocument, path: Path) -> None:
+    _assert_schema(document, "agora/standards/v1", path)
+    standards = strings_attribute(document.attributes, "standards")
+    if "conventional-commits/v1.0.0" not in standards:
+        raise ValueError(f"Project must enable conventional-commits/v1.0.0: {path}")
 
 
 def _boolean_attribute(attributes: dict[str, object], key: str) -> bool:

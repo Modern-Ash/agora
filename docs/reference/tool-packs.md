@@ -56,6 +56,7 @@ capability: "issue.read"
 risk: "read"
 arguments: ["issue","view","{issue}","--format","json"]
 inputs: ["issue"]
+input-rules: {}
 result-kind: "ticket"
 ---
 
@@ -73,12 +74,17 @@ Returns one issue without modifying the tracker.
 | `risk` | `read`, `write`, or `destructive` |
 | `arguments` | Structured argument array passed directly to the executable |
 | `inputs` | Required input ids; every id must appear as an argument placeholder |
+| `input-rules` | Optional map from a declared input to a registered versioned validator |
 | `approval-role` | Optional role whose approval must exist on the selected work |
 | `result-kind` | Optional artifact kind describing the captured result |
 
 Agora never invokes a shell. It substitutes each `{input}` inside its argument and sends the result
 as one process argument, so spaces or punctuation do not become new commands. Unknown inputs,
 missing inputs, and undeclared placeholders are rejected.
+
+Input rules validate domain-specific values before `RUN.md` is created or an executable is launched.
+The bundled registry currently contains `conventional-commits/v1.0.0`; unknown rule ids and rules for
+undeclared inputs make the Tool Pack invalid.
 
 `risk` is durable classification for policy and review. Authority comes from the operation's exact
 capability and, when configured, `approval-role`. A destructive operation should use a dedicated
@@ -120,6 +126,16 @@ agora tool show --tool issue-tracker
 New projects receive bundled packs first and user packs second. Project Tool Packs live under
 `.agora/tools/<tool-id>` and may be reviewed or customized like Method Packs. Use `--force` only when
 replacement is intentional, then inspect the Git diff.
+
+Tool Packs may also be selected from an installed registry:
+
+```bash
+agora pack search --kind tool --registry team-catalog
+agora pack install --kind tool --id issue-tracker \
+  --registry team-catalog --scope project
+```
+
+See [Pack registries](../guides/pack-registries.md) for source validation and collision precedence.
 
 ## Prepare an invocation
 
@@ -192,6 +208,12 @@ agora tool invoke --id repo-status --tool repository --operation status \
 
 agora tool invoke --id inspect-main --tool repository --operation show-revision \
   --actor developer --swarm delivery --input revision=main --launch
+
+agora tool invoke --id governed-commit --tool repository --operation commit \
+  --actor developer --swarm delivery \
+  --input message="feat(delivery): add governed result" --launch
 ```
 
-Run the [governed tool sample](../../samples/tool-integration/README.md) for an executable example.
+The commit operation acts only on already staged files and validates its message against Conventional
+Commits 1.0.0. Run the [governed tool sample](../../samples/tool-integration/README.md) for an
+executable example.

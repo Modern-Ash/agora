@@ -13,6 +13,8 @@ from agora.model import ToolContract, ToolOperation
 TOOL_RISKS = ("read", "write", "destructive")
 CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
 PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9-]*)\}")
+CONVENTIONAL_COMMIT_HEADER = re.compile(r"[A-Za-z][A-Za-z0-9-]*(?:\([^()\r\n]+\))?!?: \S.*")
+SUPPORTED_INPUT_RULES = {"conventional-commits/v1.0.0"}
 
 
 def load_tool_contract(root: Path) -> ToolContract:
@@ -72,6 +74,25 @@ def _load_operation(path: Path) -> ToolOperation:
     for input_id in inputs:
         assert_slug(input_id, "Tool input id")
 
+    input_rules = document.attributes.get("input-rules", {})
+    if not isinstance(input_rules, dict) or any(
+        not isinstance(input_id, str) or not isinstance(rule, str)
+        for input_id, rule in input_rules.items()
+    ):
+        raise ValueError(f"Tool operation {operation_id} input-rules must be a string map")
+    unknown_rule_inputs = sorted(set(input_rules) - set(inputs))
+    if unknown_rule_inputs:
+        raise ValueError(
+            f"Tool operation {operation_id} has rules for undeclared inputs: "
+            f"{', '.join(unknown_rule_inputs)}"
+        )
+    unsupported_rules = sorted(set(input_rules.values()) - SUPPORTED_INPUT_RULES)
+    if unsupported_rules:
+        raise ValueError(
+            f"Tool operation {operation_id} has unsupported input rules: "
+            f"{', '.join(unsupported_rules)}"
+        )
+
     placeholders = {
         placeholder
         for argument in arguments
@@ -99,6 +120,29 @@ def _load_operation(path: Path) -> ToolOperation:
         risk=risk,
         arguments=arguments,
         inputs=inputs,
+        input_rules=input_rules,
         approval_role=approval_role,
         result_kind=result_kind,
     )
+
+
+def validate_operation_inputs(operation: ToolOperation, inputs: dict[str, str]) -> None:
+    for input_id, rule in operation.input_rules.items():
+        value = inputs.get(input_id)
+        if value is None:
+            continue
+        if rule == "conventional-commits/v1.0.0":
+            validate_conventional_commit(value)
+
+
+def validate_conventional_commit(message: str) -> None:
+    if "\x00" in message:
+        raise ValueError("Conventional Commit message must not contain a null byte")
+    lines = message.splitlines()
+    if not lines or not CONVENTIONAL_COMMIT_HEADER.fullmatch(lines[0]):
+        raise ValueError(
+            "Commit message must match Conventional Commits 1.0.0: "
+            "<type>[optional scope][!]: <description>"
+        )
+    if len(lines) > 1 and lines[1].strip():
+        raise ValueError("Conventional Commit body or footers must begin after a blank line")

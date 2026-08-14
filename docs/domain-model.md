@@ -102,6 +102,24 @@ A **Tool Run** binds the pack and operation to an assigned actor, swarm, optiona
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
 and command metadata, while `RESULT.md` captures status, output, and exit code.
 
+## Standard
+
+A standard is a versioned, provider-neutral rule enabled by `.agora/STANDARDS.md`. It applies across
+human and agentic actors and may be enforced by validators referenced from Tool Pack `input-rules`.
+Agora currently registers `conventional-commits/v1.0.0`; the bundled repository commit operation
+validates that rule before preparing or executing Git.
+
+## Registry
+
+A registry is a named Markdown catalog containing zero or more Method Pack directories and Tool Pack
+directories, with at least one pack overall. A registry has bundled, user, or project scope. It is a
+reviewed source snapshot; installed packs remain ordinary local copies and do not depend on the
+registry after installation.
+
+When pack ids collide, project registry provenance precedes user provenance, which precedes the
+bundled distribution. Explicit registry selection overrides inference while preserving pack
+validation and destination-scope overwrite rules.
+
 ## Environment
 
 IDE, CLI, runner, and cloud agent are execution environments. They do not own Agora state. Every

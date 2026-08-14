@@ -7,6 +7,14 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 
 - [Installation and customization](guides/installation-and-customization.md): install the CLI and
   tailor user, project, lifecycle, actor, template, and agent-environment scopes.
+- [Project upgrades](guides/project-upgrades.md): preview, apply, audit, and recover protocol
+  migrations without replacing local policies or Method Packs.
+- [Concurrent writers](guides/concurrent-writers.md): serialize local mutations, inspect lock owners,
+  and configure bounded contention waits.
+- [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
+  through project rules and governed Tool Pack input validation.
+- [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
+  Tool Packs, and select provenance with deterministic scope precedence.
 - [Getting started](getting-started.md): install Agora, initialize a project, form a swarm, and
   complete governed work.
 - [LLM environments](guides/llm-environments.md): configure project and actor runtimes, prepare
@@ -52,6 +60,12 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   workspace without a database.
 - [Interruptions and cancellation](../samples/interruptions/README.md): exercise durable status
   histories and parent-child authority.
+- [Project upgrade](../samples/project-upgrade/README.md): migrate a legacy Codex project while
+  preserving local policy and validating the resulting records.
+- [Concurrent writers](../samples/concurrent-writes/README.md): reject a competing mutation and
+  continue safely after the operating-system lock is released.
+- [Pack registry](../samples/pack-registry/README.md): discover and install a custom lifecycle from a
+  user-scoped Markdown catalog.
 
 ## MVP boundaries
 
@@ -59,5 +73,5 @@ Agora currently validates transition graphs, role capabilities and actions, WIP 
 required artifacts, acceptance criteria, successful evidence, approvals, handoffs, work and
 delegation interruption histories, delegated work, Tool Pack operations, cross-record integrity,
 and event syntax. It can launch local LLM and tool CLIs with durable context, but does not call
-provider APIs directly, manage credentials, implement a remote scheduler, or replace external
-systems.
+provider APIs directly, manage credentials, implement a remote scheduler or distributed lease
+service, or replace external systems.

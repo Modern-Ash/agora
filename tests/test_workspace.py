@@ -61,6 +61,7 @@ def test_persists_defaults_and_materializes_a_codex_project(
     assert (root / ".agora" / "methods" / "scrum" / "METHOD.md").exists()
     assert (root / ".agora" / "methods" / "kanban" / "METHOD.md").exists()
     assert (root / ".agents" / "skills" / "agora-objective" / "SKILL.md").exists()
+    assert "conventional-commits/v1.0.0" in (root / ".agora" / "STANDARDS.md").read_text()
     assert 'integration: "codex"' in (root / ".agora" / "project.md").read_text()
     assert "max-delegation-depth: 3" in (root / ".agora" / "project.md").read_text()
 
@@ -119,6 +120,22 @@ def test_detects_claude_adapter_drift_from_portable_markdown(
     )
 
 
+def test_requires_the_conventional_commits_project_standard(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    workspace.initialize(InitInput(integration="generic"))
+    standards = root / ".agora" / "STANDARDS.md"
+    standards.write_text(
+        standards.read_text().replace('standards: ["conventional-commits/v1.0.0"]', "standards: []")
+    )
+
+    report = workspace.validate()
+
+    assert report.ok is False
+    assert any(issue.code == "standards.invalid" for issue in report.issues)
+
+
 def test_installs_and_uses_a_user_defined_method_pack(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -162,6 +179,7 @@ def test_installs_and_inherits_a_user_tool_pack(
 
     assert installed.scope == "user"
     assert installed.operations == [
+        "commit",
         "create-branch",
         "current-branch",
         "show-revision",
@@ -539,6 +557,37 @@ def test_governs_and_persists_external_tool_invocations(
     result = root / ".agora" / "tool-runs" / "repository-status" / "RESULT.md"
     assert "M README.md" in result.read_text()
     assert "tool.completed" in (root / ".agora" / "events.md").read_text()
+
+    commit = tool_workspace.invoke_tool(
+        InvokeToolInput(
+            id="conventional-commit",
+            tool_id="repository",
+            operation_id="commit",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"message": "feat(governance): validate repository commits"},
+            launch=True,
+        )
+    )
+    assert commit.status == "completed"
+    assert commit.command == [
+        "git",
+        "commit",
+        "-m",
+        "feat(governance): validate repository commits",
+    ]
+    with pytest.raises(ValueError, match="must match Conventional Commits"):
+        tool_workspace.invoke_tool(
+            InvokeToolInput(
+                id="invalid-commit",
+                tool_id="repository",
+                operation_id="commit",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"message": "save current work"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "invalid-commit").exists()
 
     failed_workspace = AgoraWorkspace(
         cwd=root,
