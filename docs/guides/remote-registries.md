@@ -82,6 +82,10 @@ agora registry install \
   --scope project
 ```
 
+For repeated use, import the public key into a user or project trust store and omit `--public-key`
+from subsequent installations. See [Registry trust stores](registry-trust.md). A matching revoked key
+cannot be bypassed by supplying the PEM explicitly.
+
 Plain HTTP is rejected. `--allow-insecure-http` exists only for an explicitly trusted local
 development server. Redirects are checked again, so HTTPS cannot silently downgrade to HTTP.
 An HTTP or HTTPS index may reference only HTTP or HTTPS archives; it cannot cause Agora to read a
@@ -112,6 +116,9 @@ against the public key selected by the user or organization. An unsigned release
 when signature enforcement is not enabled, and its provenance explicitly reports that it was not
 verified.
 
+When signature verification is requested, Agora verifies the signed index payload before following
+the archive URL. It then verifies the downloaded archive checksum before extraction.
+
 ## Replacement behavior
 
 `--force` stages and validates the complete new snapshot, moves the previous installation to a local
@@ -120,7 +127,7 @@ directory. Removed files do not leak from an older release into a newer verified
 
 ## Current boundary
 
-Agora does not yet manage trust stores, key rotation policy, revocation, transparency logs,
-dependency resolution, or registry update notifications. Public keys are passed explicitly per
-installation. The index is a distribution convenience; installed filesystem state remains the
-governed operational record.
+Agora manages local and project trust keys, rotations, and revocations. It does not yet synchronize
+organization trust policy, consume revocation feeds, use transparency logs, resolve dependencies, or
+notify about registry updates. The index is a distribution convenience; installed filesystem state
+remains the governed operational record.

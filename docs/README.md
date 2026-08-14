@@ -17,6 +17,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
   checksum-pinned and Ed25519-signed registry snapshots.
+- [Registry trust stores](guides/registry-trust.md): approve, resolve, rotate, and revoke registry
+  signing keys through local Markdown and Git.
 - [Getting started](getting-started.md): install Agora, initialize a project, form a swarm, and
   complete governed work.
 - [LLM environments](guides/llm-environments.md): configure project and actor runtimes, prepare

@@ -235,6 +235,22 @@ class RegistrySourceRecord:
 
 
 @dataclass(frozen=True)
+class RegistryTrustKeyRecord:
+    id: str
+    registry: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    status: Literal["active", "revoked"]
+    scope: Literal["user", "project"]
+    path: str
+    created_at: str
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
+    replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
 class CatalogPackRecord:
     kind: PackKind
     id: str
@@ -442,6 +458,22 @@ class InstallRegistryInput:
     public_key: str | None = None
     require_signature: bool = False
     allow_insecure_http: bool = False
+
+
+@dataclass(frozen=True)
+class AddRegistryTrustKeyInput:
+    id: str
+    registry_id: str
+    public_key: str
+    scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class RevokeRegistryTrustKeyInput:
+    id: str
+    scope: Literal["user", "project"]
+    reason: str
+    replaced_by: str | None = None
 
 
 @dataclass(frozen=True)

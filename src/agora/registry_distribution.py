@@ -20,7 +20,8 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 from agora.filesystem import assert_slug
 from agora.markdown import parse_markdown, string_attribute
-from agora.model import RegistryIndexRecord, RegistryReleaseRecord
+from agora.model import RegistryIndexRecord, RegistryReleaseRecord, RegistryTrustKeyRecord
+from agora.trust import decode_trusted_public_key
 
 INDEX_SCHEMA = "agora/registry-index/v1"
 SIGNATURE_SCHEMA = "agora/registry-release/v1"
@@ -42,6 +43,7 @@ def download_registry_release(
     public_key: str | None,
     require_signature: bool,
     allow_insecure_http: bool,
+    trusted_keys: list[RegistryTrustKeyRecord] | None = None,
 ) -> Iterator[tuple[Path, RegistryIndexRecord, RegistryReleaseRecord, bool, str]]:
     index_bytes, resolved_index = _read_source(
         source,
@@ -51,6 +53,12 @@ def download_registry_release(
     )
     index = load_registry_index(index_bytes, resolved_index)
     release = select_registry_release(index, version)
+    signature_verified = verify_release_signature(
+        release,
+        public_key=public_key,
+        require_signature=require_signature,
+        trusted_keys=trusted_keys or [],
+    )
     archive_source = _resolve_archive_source(resolved_index, release.archive)
     archive_bytes, resolved_archive = _read_source(
         archive_source,
@@ -63,11 +71,6 @@ def download_registry_release(
         raise ValueError(
             f"Registry archive checksum mismatch: expected {release.sha256}, got {actual_checksum}"
         )
-    signature_verified = verify_release_signature(
-        release,
-        public_key=public_key,
-        require_signature=require_signature,
-    )
     with tempfile.TemporaryDirectory(prefix="agora-registry-download-") as temporary:
         extraction_root = Path(temporary) / "snapshot"
         extraction_root.mkdir()
@@ -145,21 +148,40 @@ def verify_release_signature(
     *,
     public_key: str | None,
     require_signature: bool,
+    trusted_keys: list[RegistryTrustKeyRecord] | None = None,
 ) -> bool:
     if release.signature is None:
         if require_signature:
             raise ValueError(f"Registry release is unsigned: {release.registry}@{release.version}")
         return False
-    if public_key is None:
+    matching_key = next(
+        (
+            item
+            for item in trusted_keys or []
+            if item.id == release.key_id and item.registry == release.registry
+        ),
+        None,
+    )
+    if matching_key is not None and matching_key.status == "revoked":
+        raise PermissionError(
+            f"Registry release key is revoked: {release.registry}/{matching_key.id}"
+        )
+    if public_key is None and matching_key is None:
         if require_signature:
-            raise ValueError("A trusted Ed25519 public key is required to verify this release")
+            raise ValueError(f"No active trusted key found for {release.registry}/{release.key_id}")
         return False
-    key_path = Path(public_key).expanduser().resolve()
-    if not key_path.is_file():
-        raise FileNotFoundError(f"Registry public key not found: {key_path}")
-    loaded_key = load_pem_public_key(key_path.read_bytes())
-    if not isinstance(loaded_key, Ed25519PublicKey):
-        raise ValueError(f"Registry public key must be Ed25519: {key_path}")
+    if public_key is not None:
+        key_path = Path(public_key).expanduser().resolve()
+        if not key_path.is_file():
+            raise FileNotFoundError(f"Registry public key not found: {key_path}")
+        loaded_key = load_pem_public_key(key_path.read_bytes())
+        if not isinstance(loaded_key, Ed25519PublicKey):
+            raise ValueError(f"Registry public key must be Ed25519: {key_path}")
+    else:
+        assert matching_key is not None
+        loaded_key = Ed25519PublicKey.from_public_bytes(
+            decode_trusted_public_key(matching_key.public_key)
+        )
     try:
         signature = base64.b64decode(release.signature, validate=True)
     except (binascii.Error, ValueError) as error:

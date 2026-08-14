@@ -38,8 +38,8 @@ validation, so front matter preserves structured metadata and gates remain execu
 
 ## Future work
 
-- Organization trust stores, signing-key rotation, revocation, and transparency for remote registry
-  releases.
+- Organization trust synchronization, revocation feeds, and transparency for remote registry
+  releases. Local and project trust keys, rotation, and revocation are implemented.
 - Published vendor Tool Packs for Jira, CI/CD, documentation, and cloud.
 - Delegation budgets, automatic child work decomposition, and child artifact copying. Explicit
   reference-based result collection is part of the current filesystem protocol.

@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agora.model import (
+    AddRegistryTrustKeyInput,
     InitInput,
     InstallCatalogPackInput,
     InstallRegistryInput,
@@ -80,12 +81,19 @@ def main() -> None:
 
     agora = AgoraWorkspace(cwd=project)
     agora.initialize(InitInput(integration="generic"))
+    trusted_key = agora.add_registry_trust_key(
+        AddRegistryTrustKeyInput(
+            id="sample-release",
+            registry_id="team-catalog",
+            public_key=str(public_key),
+            scope="project",
+        )
+    )
     installed_registry = agora.install_registry(
         InstallRegistryInput(
             source=index.as_uri(),
             scope="project",
             version="1.0.0",
-            public_key=str(public_key),
             require_signature=True,
         )
     )
@@ -102,6 +110,7 @@ def main() -> None:
     assert installed_registry.signature_verified
 
     print(f"Runtime: {runtime}")
+    print(f"Trusted key: {trusted_key.id} ({trusted_key.fingerprint})")
     print("Verified registry:")
     print(json.dumps(asdict(installed_registry), indent=2))
     print("Installed pack:")

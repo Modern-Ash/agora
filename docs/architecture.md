@@ -34,6 +34,8 @@ manifests.
 `src/agora/registry_distribution.py` resolves remote Markdown indexes, selects semantic releases,
 enforces transport and archive limits, verifies SHA-256 and optional Ed25519 signatures, and extracts
 snapshots into temporary directories before the local registry path accepts them.
+`src/agora/trust.py` validates Ed25519 public-key records and durable revocation state without
+handling private signing material.
 
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
@@ -71,6 +73,9 @@ Tool Pack validation path.
 A remote registry index is a distribution mechanism, not runtime state. Agora verifies its selected
 archive and persists a complete local snapshot plus `SOURCE.md`. Governed work never depends on the
 index remaining available.
+
+Registry trust uses the same scope rule: project keys precede user keys. Verification binds a key id
+to one registry id, and a matching revocation blocks both automatic resolution and an explicit PEM.
 
 ### Git and filesystem
 

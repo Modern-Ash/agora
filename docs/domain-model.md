@@ -124,6 +124,10 @@ A remote registry index publishes one or more semantic releases. Each release id
 mandatory SHA-256, and optional Ed25519 signature plus key id. After verification Agora installs the
 same local snapshot contract and adds a generated source record containing immutable provenance.
 
+A registry trust key authorizes one Ed25519 public key id for one registry. Its user or project scope,
+fingerprint, active or revoked status, and optional replacement are durable Markdown. Rotation adds a
+new identity before revoking the previous identity; it never overwrites key history.
+
 ## Environment
 
 IDE, CLI, runner, and cloud agent are execution environments. They do not own Agora state. Every

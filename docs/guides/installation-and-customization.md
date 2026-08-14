@@ -96,13 +96,15 @@ agora method install --help
 ```
 
 The CLI should list `configure`, `init`, `upgrade`, `doctor`, `status`, `validate`, `lock`, `registry`,
-`pack`, `start`, `method`, `tool`, `delegation`, `actor`, `swarm`, `work`, `session`, `event`,
+`pack`, `trust`, `start`, `method`, `tool`, `delegation`, `actor`, `swarm`, `work`, `session`, `event`,
 `artifact`, `evidence`, and `approval`. These commands operate on files; no background process should
 be running.
 
 Registry installation accepts local directories or versioned remote `INDEX.md` sources. Remote
 archives always require SHA-256 verification and can require a trusted Ed25519 signature. See
 [Remote registry releases](remote-registries.md).
+Trusted registry public keys can be persisted, rotated, and revoked as described in
+[Registry trust stores](registry-trust.md).
 
 ## Configuration scopes
 

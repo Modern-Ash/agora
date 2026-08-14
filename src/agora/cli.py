@@ -12,6 +12,7 @@ from agora.model import (
     AddApprovalInput,
     AddArtifactInput,
     AddEvidenceInput,
+    AddRegistryTrustKeyInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
@@ -27,6 +28,7 @@ from agora.model import (
     InstallRegistryInput,
     InstallToolInput,
     InvokeToolInput,
+    RevokeRegistryTrustKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
@@ -129,6 +131,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     registry_install.add_argument("--force", action="store_true")
     registry.add_parser("list", help="List bundled and installed registries")
+
+    trust = commands.add_parser(
+        "trust", help="Manage trusted registry release keys"
+    ).add_subparsers(dest="trust_command", required=True)
+    trust_add = trust.add_parser("add", help="Trust an Ed25519 registry release key")
+    trust_add.add_argument("--id", required=True)
+    trust_add.add_argument("--registry", required=True)
+    trust_add.add_argument("--public-key", required=True)
+    trust_add.add_argument("--scope", choices=("user", "project"), default="user")
+    trust_list = trust.add_parser("list", help="List active and revoked registry keys")
+    trust_list.add_argument("--registry")
+    trust_revoke = trust.add_parser("revoke", help="Revoke a trusted registry release key")
+    trust_revoke.add_argument("--id", required=True)
+    trust_revoke.add_argument("--scope", choices=("user", "project"), default="user")
+    trust_revoke.add_argument("--reason", required=True)
+    trust_revoke.add_argument("--replaced-by")
 
     pack = commands.add_parser("pack", help="Discover and install catalog packs").add_subparsers(
         dest="pack_command", required=True
@@ -461,6 +479,26 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         )
     if args.command == "registry" and args.registry_command == "list":
         return workspace.list_registries()
+    if args.command == "trust" and args.trust_command == "add":
+        return workspace.add_registry_trust_key(
+            AddRegistryTrustKeyInput(
+                id=args.id,
+                registry_id=args.registry,
+                public_key=args.public_key,
+                scope=args.scope,
+            )
+        )
+    if args.command == "trust" and args.trust_command == "list":
+        return workspace.list_registry_trust_keys(args.registry)
+    if args.command == "trust" and args.trust_command == "revoke":
+        return workspace.revoke_registry_trust_key(
+            RevokeRegistryTrustKeyInput(
+                id=args.id,
+                scope=args.scope,
+                reason=args.reason,
+                replaced_by=args.replaced_by,
+            )
+        )
     if args.command == "pack" and args.pack_command == "search":
         return workspace.search_catalog(args.kind, args.query, args.registry)
     if args.command == "pack" and args.pack_command == "install":

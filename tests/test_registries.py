@@ -15,10 +15,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agora.cli import main
 from agora.model import (
+    AddRegistryTrustKeyInput,
     InitInput,
     InstallCatalogPackInput,
     InstallRegistryInput,
     RegistryReleaseRecord,
+    RevokeRegistryTrustKeyInput,
 )
 from agora.registry_distribution import (
     load_registry_index,
@@ -456,6 +458,130 @@ def test_rejects_a_registry_signature_from_an_untrusted_key(tmp_path: Path, monk
                 scope="user",
                 public_key=str(untrusted_path),
                 require_signature=True,
+            )
+        )
+
+
+def test_uses_project_trust_before_a_conflicting_user_key(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, trusted_key = _release_index(tmp_path, source, signed=True)
+    assert trusted_key is not None
+    untrusted = Ed25519PrivateKey.generate().public_key()
+    untrusted_path = tmp_path / "untrusted.pem"
+    untrusted_path.write_bytes(
+        untrusted.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.add_registry_trust_key(
+        AddRegistryTrustKeyInput(
+            id="team-release",
+            registry_id="team-catalog",
+            public_key=str(untrusted_path),
+            scope="user",
+        )
+    )
+    workspace.add_registry_trust_key(
+        AddRegistryTrustKeyInput(
+            id="team-release",
+            registry_id="team-catalog",
+            public_key=str(trusted_key),
+            scope="project",
+        )
+    )
+
+    installed = workspace.install_registry(
+        InstallRegistryInput(
+            source=str(index),
+            scope="project",
+            require_signature=True,
+        )
+    )
+
+    assert installed.signature_verified is True
+    assert workspace.list_registry_trust_keys()[0].scope == "project"
+
+
+def test_revoked_trust_key_blocks_registry_install_even_with_explicit_pem(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, trusted_key = _release_index(tmp_path, source, signed=True)
+    assert trusted_key is not None
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.add_registry_trust_key(
+        AddRegistryTrustKeyInput(
+            id="team-release",
+            registry_id="team-catalog",
+            public_key=str(trusted_key),
+            scope="project",
+        )
+    )
+    workspace.revoke_registry_trust_key(
+        RevokeRegistryTrustKeyInput(
+            id="team-release",
+            scope="project",
+            reason="Release key was compromised",
+        )
+    )
+    (tmp_path / "team-catalog-1.0.0.tar.gz").unlink()
+
+    with pytest.raises(PermissionError, match="key is revoked"):
+        workspace.install_registry(
+            InstallRegistryInput(
+                source=str(index),
+                scope="project",
+                public_key=str(trusted_key),
+                require_signature=True,
+            )
+        )
+
+
+def test_rejects_an_invalid_signature_before_following_the_archive_url(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, trusted_key = _release_index(tmp_path, source, signed=True)
+    assert trusted_key is not None
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "team-catalog-1.0.0.tar.gz",
+            "http://127.0.0.1:9/unreachable.tar.gz",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="signature is invalid"):
+        AgoraWorkspace(cwd=tmp_path).install_registry(
+            InstallRegistryInput(
+                source=str(index),
+                scope="user",
+                public_key=str(trusted_key),
+                require_signature=True,
+                allow_insecure_http=True,
             )
         )
 

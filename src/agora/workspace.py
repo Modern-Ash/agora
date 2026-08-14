@@ -40,6 +40,7 @@ from agora.model import (
     AddApprovalInput,
     AddArtifactInput,
     AddEvidenceInput,
+    AddRegistryTrustKeyInput,
     AssignActorInput,
     CatalogPackRecord,
     ChangeDelegationStatusInput,
@@ -68,6 +69,8 @@ from agora.model import (
     ProjectConfiguration,
     RegistryRecord,
     RegistrySourceRecord,
+    RegistryTrustKeyRecord,
+    RevokeRegistryTrustKeyInput,
     SessionRecord,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -97,6 +100,7 @@ from agora.registries import (
 )
 from agora.registry_distribution import download_registry_release
 from agora.tools import load_tool_contract, validate_operation_inputs
+from agora.trust import load_trust_key, render_trust_key, revoke_trust_key, trust_key_from_pem
 from agora.upgrades import (
     CURRENT_PROJECT_VERSION,
     apply_upgrade,
@@ -351,6 +355,7 @@ class AgoraWorkspace:
             public_key=data.public_key,
             require_signature=data.require_signature,
             allow_insecure_http=data.allow_insecure_http,
+            trusted_keys=self.list_registry_trust_keys(),
         ) as (registry_root, index, release, signature_verified, archive):
             if (registry_root / "SOURCE.md").exists():
                 raise ValueError(
@@ -421,6 +426,70 @@ class AgoraWorkspace:
             if backup.exists():
                 shutil.rmtree(backup)
         return load_registry(destination, scope)
+
+    @_locked_mutation("scoped")
+    def add_registry_trust_key(self, data: AddRegistryTrustKeyInput) -> RegistryTrustKeyRecord:
+        assert_slug(data.id, "Registry trust key id")
+        assert_slug(data.registry_id, "Registry trust key registry")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        destination = root / "trust" / "keys" / f"{data.id}.md"
+        if destination.exists():
+            raise FileExistsError(
+                f"Registry trust key already exists: {destination}. Rotate with a new key id."
+            )
+        record = trust_key_from_pem(
+            id_=data.id,
+            registry=data.registry_id,
+            public_key_path=Path(data.public_key).expanduser().resolve(),
+            scope=data.scope,
+            path=destination,
+            created_at=self._timestamp(),
+        )
+        atomic_write(destination, render_trust_key(record))
+        return load_trust_key(destination, data.scope)
+
+    def list_registry_trust_keys(
+        self, registry_id: str | None = None
+    ) -> list[RegistryTrustKeyRecord]:
+        if registry_id is not None:
+            assert_slug(registry_id, "Registry id")
+        records: list[RegistryTrustKeyRecord] = []
+        project = self._optional_project_root()
+        if project is not None:
+            records.extend(self._trust_keys_at(project / ".agora" / "trust" / "keys", "project"))
+        records.extend(self._trust_keys_at(agora_home() / "trust" / "keys", "user"))
+        return [item for item in records if registry_id is None or item.registry == registry_id]
+
+    @_locked_mutation("scoped")
+    def revoke_registry_trust_key(
+        self, data: RevokeRegistryTrustKeyInput
+    ) -> RegistryTrustKeyRecord:
+        assert_slug(data.id, "Registry trust key id")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        path = root / "trust" / "keys" / f"{data.id}.md"
+        if not path.is_file():
+            raise FileNotFoundError(f"Registry trust key not found: {path}")
+        record = load_trust_key(path, data.scope)
+        if data.replaced_by is not None:
+            assert_slug(data.replaced_by, "Replacement registry trust key id")
+            replacement_path = path.with_name(f"{data.replaced_by}.md")
+            if not replacement_path.is_file():
+                raise FileNotFoundError(
+                    f"Replacement registry trust key not found: {replacement_path}"
+                )
+            replacement = load_trust_key(replacement_path, data.scope)
+            if replacement.registry != record.registry or replacement.status != "active":
+                raise ValueError(
+                    "Replacement registry trust key must be active for the same registry"
+                )
+        revoked = revoke_trust_key(
+            record,
+            revoked_at=self._timestamp(),
+            reason=data.reason,
+            replaced_by=data.replaced_by,
+        )
+        atomic_write(path, render_trust_key(revoked))
+        return load_trust_key(path, data.scope)
 
     def list_registries(self) -> list[RegistryRecord]:
         records = [bundled_registry()]
@@ -1848,6 +1917,7 @@ class AgoraWorkspace:
             "event-files": 0,
             "upgrades": 0,
             "registries": 0,
+            "trust-keys": 0,
         }
         issues: list[ValidationIssue] = []
 
@@ -1926,6 +1996,39 @@ class AgoraWorkspace:
                     "registry.id-mismatch",
                     path,
                     f"Registry id {registry.id} does not match directory {directory.name}",
+                )
+        trust_keys: dict[str, RegistryTrustKeyRecord] = {}
+        for path in sorted((root / ".agora" / "trust" / "keys").glob("*.md")):
+            record = inspect(
+                "trust-keys",
+                "trust-key.invalid",
+                path,
+                lambda path=path: load_trust_key(path, "project"),
+            )
+            if not isinstance(record, RegistryTrustKeyRecord):
+                continue
+            trust_keys[record.id] = record
+            if record.id != path.stem:
+                issue(
+                    "trust-key.id-mismatch",
+                    path,
+                    f"Registry trust key id {record.id} does not match file {path.name}",
+                )
+        for record in trust_keys.values():
+            if record.replaced_by is None:
+                continue
+            replacement = trust_keys.get(record.replaced_by)
+            if replacement is None:
+                issue(
+                    "trust-key.replacement-missing",
+                    Path(record.path),
+                    f"Replacement registry trust key does not exist: {record.replaced_by}",
+                )
+            elif replacement.registry != record.registry or replacement.status != "active":
+                issue(
+                    "trust-key.replacement-invalid",
+                    Path(record.path),
+                    "Replacement registry trust key must be active for the same registry",
                 )
         for path, schema in (
             (root / ".agora" / "constitution.md", "agora/constitution/v1"),
@@ -2851,6 +2954,12 @@ class AgoraWorkspace:
     @staticmethod
     def _registries_at(root: Path, scope: str) -> list[RegistryRecord]:
         return [load_registry(directory, scope) for directory in _child_directories(root)]
+
+    @staticmethod
+    def _trust_keys_at(root: Path, scope: str) -> list[RegistryTrustKeyRecord]:
+        if not root.exists():
+            return []
+        return [load_trust_key(path, scope) for path in sorted(root.glob("*.md"))]
 
     def _load_user_configuration(self) -> UserConfiguration | None:
         path = agora_home() / "config.md"

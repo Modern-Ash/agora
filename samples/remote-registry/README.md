@@ -1,8 +1,9 @@
 # Signed remote registry sample
 
 This sample creates a versioned registry archive, signs its canonical release payload with a runtime
-Ed25519 key, publishes a local `INDEX.md`, and installs it through the same distribution path used by
-HTTPS registries. It then installs the discovered Method Pack and validates the project.
+Ed25519 key, imports the public key into a project trust store, publishes a local `INDEX.md`, and
+installs it through the same distribution path used by HTTPS registries. It then installs the
+discovered Method Pack and validates the project.
 
 Run it from the repository root:
 

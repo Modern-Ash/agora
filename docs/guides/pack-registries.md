@@ -110,4 +110,5 @@ credentials and must not put credentials in Tool Pack inputs.
 
 Agora also accepts versioned remote indexes with mandatory checksums and optional or required
 Ed25519 signatures. See [Remote registry releases](remote-registries.md). Dependency resolution,
-organization trust stores, revocation, and update notifications are not implemented yet.
+organization trust synchronization, revocation feeds, and update notifications are not implemented
+yet. Local and project trust stores are described in [Registry trust stores](registry-trust.md).
