@@ -12,6 +12,7 @@ from agora.model import ToolContract, ToolOperation
 from agora.packs import pack_manifest_metadata
 
 TOOL_RISKS = ("read", "write", "destructive")
+TOOL_ADAPTER_TRANSPORTS = ("cli",)
 CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
 PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9-]*)\}")
 CONVENTIONAL_COMMIT_HEADER = re.compile(r"[A-Za-z][A-Za-z0-9-]*(?:\([^()\r\n]+\))?!?: \S.*")
@@ -33,6 +34,19 @@ def load_tool_contract(root: Path) -> ToolContract:
     authentication_reference = optional_string_attribute(
         document.attributes, "authentication-reference"
     )
+    provider = optional_string_attribute(document.attributes, "provider")
+    transport = optional_string_attribute(document.attributes, "transport")
+    implements = optional_string_attribute(document.attributes, "implements")
+    adapter_values = (provider, transport, implements)
+    if any(value is not None for value in adapter_values) and any(
+        value is None for value in adapter_values
+    ):
+        raise ValueError("Tool adapter metadata requires provider, transport, and implements")
+    if provider is not None:
+        assert_slug(provider, "Tool adapter provider")
+        assert_slug(implements, "Tool adapter implementation")
+        if transport not in TOOL_ADAPTER_TRANSPORTS:
+            raise ValueError(f"Unsupported Tool adapter transport: {transport}")
 
     operation_root = root / "operations"
     paths = sorted(operation_root.glob("*.md")) if operation_root.exists() else []
@@ -55,6 +69,9 @@ def load_tool_contract(root: Path) -> ToolContract:
         executable=executable,
         authentication_reference=authentication_reference,
         operations=operations,
+        provider=provider,
+        transport=transport,
+        implements=implements,
     )
 
 
@@ -97,6 +114,30 @@ def _load_operation(path: Path) -> ToolOperation:
             f"{', '.join(unsupported_rules)}"
         )
 
+    input_values = document.attributes.get("input-values", {})
+    if not isinstance(input_values, dict) or any(
+        not isinstance(input_id, str)
+        or not isinstance(values, list)
+        or not values
+        or any(not isinstance(value, str) or not value for value in values)
+        for input_id, values in input_values.items()
+    ):
+        raise ValueError(f"Tool operation {operation_id} input-values must map to string arrays")
+    unknown_value_inputs = sorted(set(input_values) - set(inputs))
+    if unknown_value_inputs:
+        raise ValueError(
+            f"Tool operation {operation_id} has values for undeclared inputs: "
+            f"{', '.join(unknown_value_inputs)}"
+        )
+    duplicate_value_inputs = sorted(
+        input_id for input_id, values in input_values.items() if len(set(values)) != len(values)
+    )
+    if duplicate_value_inputs:
+        raise ValueError(
+            f"Tool operation {operation_id} has duplicate allowed values for: "
+            f"{', '.join(duplicate_value_inputs)}"
+        )
+
     placeholders = {
         placeholder
         for argument in arguments
@@ -125,18 +166,60 @@ def _load_operation(path: Path) -> ToolOperation:
         arguments=arguments,
         inputs=inputs,
         input_rules=input_rules,
+        input_values=input_values,
         approval_role=approval_role,
         result_kind=result_kind,
     )
 
 
 def validate_operation_inputs(operation: ToolOperation, inputs: dict[str, str]) -> None:
+    for input_id, allowed_values in operation.input_values.items():
+        value = inputs.get(input_id)
+        if value is not None and value not in allowed_values:
+            raise ValueError(
+                f"Tool operation {operation.id} input {input_id} must be one of: "
+                f"{', '.join(allowed_values)}"
+            )
     for input_id, rule in operation.input_rules.items():
         value = inputs.get(input_id)
         if value is None:
             continue
         if rule == "conventional-commits/v1.0.0":
             validate_conventional_commit(value)
+
+
+def validate_tool_adapter_contract(adapter: ToolContract, implemented: ToolContract) -> None:
+    if adapter.implements != implemented.id:
+        raise ValueError(
+            f"Tool adapter {adapter.id} declares {adapter.implements}, not {implemented.id}"
+        )
+    missing_operations = sorted(set(implemented.operations) - set(adapter.operations))
+    if missing_operations:
+        raise ValueError(
+            f"Tool adapter {adapter.id} is missing operations from {implemented.id}: "
+            f"{', '.join(missing_operations)}"
+        )
+    for operation_id, expected in implemented.operations.items():
+        actual = adapter.operations[operation_id]
+        if actual.capability != expected.capability:
+            raise ValueError(
+                f"Tool adapter {adapter.id}/{operation_id} capability must be {expected.capability}"
+            )
+        if actual.risk != expected.risk:
+            raise ValueError(
+                f"Tool adapter {adapter.id}/{operation_id} risk must be {expected.risk}"
+            )
+        missing_inputs = sorted(set(expected.inputs) - set(actual.inputs))
+        if missing_inputs:
+            raise ValueError(
+                f"Tool adapter {adapter.id}/{operation_id} is missing contract inputs: "
+                f"{', '.join(missing_inputs)}"
+            )
+        if actual.result_kind != expected.result_kind:
+            raise ValueError(
+                f"Tool adapter {adapter.id}/{operation_id} result kind must be "
+                f"{expected.result_kind}"
+            )
 
 
 def validate_conventional_commit(message: str) -> None:

@@ -41,6 +41,25 @@ agora validate
 
 Installation refreshes `PACKS.lock.md` but preserves local Method Pack permissions.
 
+## Native Terraform CLI adapter
+
+When Terraform CLI is already configured, install the reviewed native adapter:
+
+```bash
+agora tool adapter list --available
+agora tool adapter install --id terraform --scope project
+```
+
+The adapter treats `environment` as a Terraform root-module directory. `plan` writes the supplied
+`change` path with `terraform plan -out`; `apply-plan` consumes that exact saved plan. Saved plans may
+contain sensitive values and must remain outside Git or use the project's protected artifact store.
+Agora persists the plan path and command, not the binary plan contents.
+
+Resource inspection deliberately uses filtered `terraform state list` instead of `terraform state
+show`, avoiding raw resource attributes in durable output. A team needing detailed attributes should
+use a reviewed redacting wrapper. Applying and targeted destruction retain `cloud.deploy` and
+`cloud.destroy`; installation grants neither.
+
 ## Default authority
 
 Bundled methods use conservative cloud permissions:
@@ -141,4 +160,10 @@ Run the executable plan-and-apply example:
 
 ```bash
 uv run python samples/cloud-infrastructure/run.py
+```
+
+Run the native Terraform command preparation example:
+
+```bash
+uv run python samples/terraform-cli/run.py
 ```

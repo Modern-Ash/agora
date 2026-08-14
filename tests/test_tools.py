@@ -1,9 +1,15 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agora.filesystem import template_root
-from agora.tools import load_tool_contract, validate_conventional_commit
+from agora.tools import (
+    load_tool_contract,
+    validate_conventional_commit,
+    validate_operation_inputs,
+    validate_tool_adapter_contract,
+)
 
 
 def test_loads_a_provider_neutral_tool_pack() -> None:
@@ -47,6 +53,55 @@ def test_loads_the_bundled_ci_cd_contract() -> None:
     assert contract.operations["cancel-run"].capability == "ci.cancel"
     assert contract.operations["cancel-run"].risk == "destructive"
     assert contract.operations["create-deployment"].capability == "deployment.create"
+
+
+def test_loads_the_github_actions_cli_adapter() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "github-actions")
+
+    assert contract.id == "github-actions"
+    assert contract.executable == "gh"
+    assert contract.provider == "github"
+    assert contract.transport == "cli"
+    assert contract.implements == "ci-cd"
+    assert contract.operations["list-runs"].capability == "ci.read"
+    assert contract.operations["trigger"].arguments[:2] == ["workflow", "run"]
+    assert contract.operations["cancel-run"].risk == "destructive"
+
+
+def test_loads_the_terraform_cli_adapter() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.id == "terraform"
+    assert contract.executable == "terraform"
+    assert contract.provider == "hashicorp"
+    assert contract.transport == "cli"
+    assert contract.implements == "cloud-infrastructure"
+    assert contract.operations["plan"].arguments == [
+        "-chdir={environment}",
+        "plan",
+        "-input=false",
+        "-no-color",
+        "-out={change}",
+    ]
+    assert contract.operations["apply-plan"].capability == "cloud.deploy"
+    assert contract.operations["destroy-resource"].risk == "destructive"
+
+
+def test_loads_the_github_issues_cli_adapter_and_restricts_transitions() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "github-issues")
+    implemented = load_tool_contract(template_root() / "tools" / "work-management")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == "github"
+    assert contract.transport == "cli"
+    assert contract.implements == "work-management"
+    transition = contract.operations["transition"]
+    assert transition.input_values == {"state": ["close", "reopen"]}
+    validate_operation_inputs(transition, {"issue": "42", "state": "close"})
+    with pytest.raises(ValueError, match="state must be one of: close, reopen"):
+        validate_operation_inputs(transition, {"issue": "42", "state": "delete"})
 
 
 def test_loads_the_bundled_knowledge_base_contract() -> None:
@@ -161,3 +216,32 @@ def test_rejects_unknown_tool_input_rules(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsupported input rules: unregistered-rule/v1"):
         load_tool_contract(tool)
+
+
+def test_rejects_incomplete_tool_adapter_metadata(tmp_path: Path) -> None:
+    tool = tmp_path / "tool"
+    (tool / "operations").mkdir(parents=True)
+    (tool / "TOOL.md").write_text(
+        '---\nschema: "agora/tool/v1"\nid: "vendor"\nname: "Vendor"\n'
+        'category: "ci"\nexecutable: "vendor"\nprovider: "vendor"\n'
+        'transport: "cli"\n---\n\n# Vendor\n'
+    )
+    (tool / "operations" / "view.md").write_text(
+        '---\nschema: "agora/tool-operation/v1"\nid: "view"\nname: "View"\n'
+        'capability: "ci.read"\nrisk: "read"\narguments: ["view"]\ninputs: []\n'
+        "---\n\n# View\n"
+    )
+
+    with pytest.raises(ValueError, match="requires provider, transport, and implements"):
+        load_tool_contract(tool)
+
+
+def test_rejects_an_adapter_that_weakens_the_implemented_contract(tmp_path: Path) -> None:
+    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "github-actions")
+    implemented = load_tool_contract(template_root() / "tools" / "ci-cd")
+    adapter.operations["cancel-run"] = replace(
+        adapter.operations["cancel-run"], capability="ci.read"
+    )
+
+    with pytest.raises(ValueError, match="cancel-run capability must be ci.cancel"):
+        validate_tool_adapter_contract(adapter, implemented)

@@ -13,6 +13,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   and configure bounded contention waits.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
+- [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native
+  CLI integrations while keeping MCP as an explicit alternative transport.
 - [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
   internal trackers through one provider-neutral, role-governed operation contract.
 - [CI/CD integrations](guides/ci-cd-integrations.md): inspect and trigger pipelines, restrict
@@ -78,6 +80,12 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   tracker contract through a local Python adapter and reject unauthorized transitions.
 - [Governed CI/CD](../samples/ci-cd/README.md): trigger a pipeline and require explicit capability
   plus Product Owner approval before deployment.
+- [GitHub Actions CLI adapter](../samples/github-actions-cli/README.md): install the reviewed `gh`
+  adapter, prepare native commands, and preserve separate cancellation authority.
+- [GitHub Issues CLI adapter](../samples/github-issues-cli/README.md): prepare native issue searches
+  and constrain dynamic transitions to close or reopen.
+- [Terraform CLI adapter](../samples/terraform-cli/README.md): prepare state reads and a saved plan
+  through native Terraform while preserving separate apply authority.
 - [Governed knowledge base](../samples/knowledge-base/README.md): draft external documentation,
   require approval before publication, and reject unauthorized archival.
 - [Governed cloud infrastructure](../samples/cloud-infrastructure/README.md): plan a cloud change,

@@ -16,6 +16,9 @@ cloud providers, observability platforms, and communication services.
 - Destructive, merge, release, and production actions require explicit policy and evidence.
 - Method Packs and role policies may further restrict this catalog.
 - Invoke installed operations through `agora tool invoke` so attribution and results remain durable.
+- Prefer a reviewed native CLI adapter already used by the developer, then a reviewed team wrapper;
+  use MCP only when it provides a required capability unavailable through the CLI.
+- Discovering an executable must never install an adapter, change transport, or grant authority.
 - Create commits through `repository/commit`; its message must satisfy the configured Conventional
   Commits input rule.
 

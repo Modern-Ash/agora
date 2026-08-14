@@ -45,6 +45,9 @@ Describe installation, environment, and governance expectations here.
 | `category` | Provider-neutral lowercase slug such as `repository` or `ci` |
 | `executable` | One executable name or path; never a shell expression |
 | `authentication-reference` | Optional non-secret reference to external authentication |
+| `provider` | Adapter-only provider slug; requires `transport` and `implements` |
+| `transport` | Adapter-only execution transport; currently `cli` |
+| `implements` | Adapter-only id of the provider-neutral Tool Pack contract |
 
 The executable is resolved by the environment when `--launch` is used. A prepared invocation does
 not require it to be installed.
@@ -82,6 +85,7 @@ Returns one issue without modifying the tracker.
 | `arguments` | Structured argument array passed directly to the executable |
 | `inputs` | Required input ids; every id must appear as an argument placeholder |
 | `input-rules` | Optional map from a declared input to a registered versioned validator |
+| `input-values` | Optional map restricting a declared input to explicit allowed strings |
 | `approval-role` | Optional role whose approval must exist on the selected work |
 | `result-kind` | Optional artifact kind describing the captured result |
 
@@ -89,9 +93,15 @@ Agora never invokes a shell. It substitutes each `{input}` inside its argument a
 as one process argument, so spaces or punctuation do not become new commands. Unknown inputs,
 missing inputs, and undeclared placeholders are rejected.
 
-Input rules validate domain-specific values before `RUN.md` is created or an executable is launched.
-The bundled registry currently contains `conventional-commits/v1.0.0`; unknown rule ids and rules for
-undeclared inputs make the Tool Pack invalid.
+Input rules and allowed values validate domain-specific values before `RUN.md` is created or an
+executable is launched. The bundled rule registry currently contains
+`conventional-commits/v1.0.0`; unknown rule ids, undeclared inputs, empty allowed-value arrays, and
+duplicate allowed values make the Tool Pack invalid. Use `input-values` whenever an input occupies a
+subcommand or mode position:
+
+```markdown
+input-values: {"state":["close","reopen"]}
+```
 
 `risk` is durable classification for policy and review. Authority comes from the operation's exact
 capability and, when configured, `approval-role`. A destructive operation should use a dedicated
@@ -205,6 +215,18 @@ Keep capabilities stable even when a project changes vendors:
 A team can point `executable` at a vendor CLI or at a reviewed internal wrapper that normalizes
 multiple vendors. The Method Pack continues to grant `issue.read` or `ci.run`, not vendor product
 names, so changing Jira, repository host, CI service, or cloud does not rewrite lifecycle policy.
+
+Reviewed adapters bundled separately from the provider-neutral packs can be discovered and
+installed explicitly:
+
+```bash
+agora tool adapter list --available
+agora tool adapter install --id github-actions --scope project
+agora tool adapter install --id terraform --scope project
+```
+
+See [CLI-first ecosystem adapters](../guides/cli-first-adapters.md) for transport selection,
+manifest metadata, and the MCP boundary.
 
 ## Bundled packs
 

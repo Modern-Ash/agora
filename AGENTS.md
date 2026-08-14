@@ -13,6 +13,8 @@
 - Keep Tool Pack commands structured, shell-free, and free of credential inputs.
 - Keep ecosystem Tool Pack capabilities provider-neutral; place Jira, CI/CD, documentation, and
   cloud translation in reviewed external adapters rather than the kernel.
+- Prefer a reviewed native provider CLI when it is installed and non-interactive; use a team wrapper
+  for normalization and MCP only as an explicit alternative transport.
 - Keep CI cancellation and deployment capabilities opt-in; combine production authority with
   explicit Method Pack policy, evidence, and operation approval requirements.
 - Keep documentation publication and archival opt-in; treat remote pages as external state and

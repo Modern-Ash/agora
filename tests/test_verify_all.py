@@ -21,6 +21,8 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: concurrent-writes",
         "sample: custom-lifecycle",
         "sample: delegated-work",
+        "sample: github-actions-cli",
+        "sample: github-issues-cli",
         "sample: handoffs",
         "sample: interruptions",
         "sample: knowledge-base",
@@ -33,6 +35,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: project-upgrade",
         "sample: recursive-swarms",
         "sample: remote-registry",
+        "sample: terraform-cli",
         "sample: tool-integration",
         "sample: work-management",
     ]

@@ -285,6 +285,18 @@ observability, or communication CLIs. An operation declares structured arguments
 risk, a provider-neutral capability, and optional approval policy. Method Pack roles grant those
 capabilities explicitly.
 
+Agora uses a CLI-first integration policy: prefer the provider CLI already configured in the
+developer environment, use a reviewed wrapper when normalization is necessary, and keep MCP as an
+explicit alternative when it provides capabilities unavailable through the CLI. Discovery never
+installs or selects a transport automatically:
+
+```bash
+agora tool adapter list --available
+agora tool adapter install --id github-actions --scope project
+agora tool adapter install --id github-issues --scope project
+agora tool adapter install --id terraform --scope project
+```
+
 Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`,
 `knowledge-base`, `cloud-infrastructure`, and `observability` packs:
 
@@ -335,12 +347,15 @@ record or Git commit is created.
 
 The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
 tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
-Method Pack. See the
+Method Pack. The `github-issues` adapter maps that contract directly to the existing `gh` CLI. See the
 [work-management integration guide](docs/guides/work-management-integrations.md).
 
 The `ci-cd` pack defines a stable `cictl` interface for GitHub Actions, GitLab CI/CD, Jenkins, or an
 internal platform. Routine pipeline access is separate from cancellation and deployment authority.
-See the [CI/CD integration guide](docs/guides/ci-cd-integrations.md).
+The independently installable `github-actions` adapter maps those capabilities directly to the
+developer's existing `gh` CLI. See the
+[CLI-first adapter guide](docs/guides/cli-first-adapters.md) and
+[CI/CD integration guide](docs/guides/ci-cd-integrations.md).
 
 The `knowledge-base` pack defines a stable `docsctl` interface for Confluence, Notion, and internal
 documentation. Draft access remains separate from publication and destructive archival. See the
@@ -348,7 +363,8 @@ documentation. Draft access remains separate from publication and destructive ar
 
 The `cloud-infrastructure` pack defines `cloudctl` for AWS, Azure, Google Cloud, infrastructure as
 code, or internal platforms. Inspection and planning remain distinct from apply and destruction.
-See the [cloud integration guide](docs/guides/cloud-integrations.md).
+The independently installable `terraform` adapter uses the developer's existing Terraform CLI and
+applies only saved plans. See the [cloud integration guide](docs/guides/cloud-integrations.md).
 
 The `observability` pack defines `observectl` for monitoring and incident systems. Reading signals
 and declaring incidents remain separate from resolution authority. See the
@@ -569,7 +585,8 @@ versioned registry snapshot without persisting a private key.
   notifications are not.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD, and
   knowledge-base, cloud-infrastructure, and observability packs are implemented; vendor
-  distributions remain future work.
+  distributions remain future work except for the bundled GitHub Actions, GitHub Issues, and
+  Terraform CLI adapters.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

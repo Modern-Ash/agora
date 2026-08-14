@@ -157,6 +157,13 @@ deployment and destructive operations, while provider identity and state remain 
 The observability pack applies the same adapter boundary to health signals and incidents, keeping
 resolution distinct from evidence that recovery actually occurred.
 
+Provider adapters are independently installable Tool Packs. Agora prefers a reviewed native CLI
+when it is already present in the developer environment, then a team wrapper when normalization is
+needed. MCP remains an optional external transport and never replaces Markdown or Git as the source
+of truth. Adapter discovery only checks executable availability; selection, installation, and every
+invocation remain explicit. The bundled `github-actions`, `github-issues`, and `terraform` adapters
+are concrete CLI-first implementations that delegate directly to `gh` and Terraform CLI.
+
 ## Recursive delegation
 
 A project actor may link its `swarm` identity to another local swarm. Assignment and handoff paths

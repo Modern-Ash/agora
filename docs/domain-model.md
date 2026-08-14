@@ -103,6 +103,12 @@ provider-neutral capability, risk classification, arguments, required inputs, op
 and result kind. A role grants exact values through `allowed-tool-capabilities`; installing a pack
 does not grant authority.
 
+A **Tool Adapter** is a provider-specific Tool Pack that declares `provider`, `transport`, and the
+provider-neutral contract it `implements`. The adapter changes command translation, not lifecycle
+authority. Adapter discovery records whether its executable is available; installation and
+invocation remain separate explicit actions. Bundled adapters implement `ci-cd` and
+`work-management` for GitHub through `gh`, plus `cloud-infrastructure` through Terraform CLI.
+
 A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
 and command metadata, while `RESULT.md` captures status, output, and exit code.

@@ -20,6 +20,7 @@ from agora.model import (
     HandoffActorInput,
     InitInput,
     InstallMethodInput,
+    InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
     SetActorRuntimeInput,
@@ -668,6 +669,251 @@ def test_governs_and_persists_external_tool_invocations(
                 swarm_id="delivery",
             )
         )
+
+
+def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/gh" if executable == "gh" else None,
+    )
+
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.provider, item.transport) for item in available] == [
+        ("github-actions", "github", "cli"),
+        ("github-issues", "github", "cli"),
+    ]
+    assert available[0].runtime_available is True
+    assert available[0].installed_scopes == []
+
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="github-actions", scope="project")
+    )
+    assert installed.executable == "gh"
+    assert installed.implements == "ci-cd"
+    assert workspace.list_tool_adapters()[0].installed_scopes == ["project"]
+
+    calls: list[list[str]] = []
+
+    def run_tool(
+        command: list[str], cwd: Path, environment: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout='[{"status":"completed"}]', stderr="")
+
+    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, tool_runner=run_tool)
+    listed = governed.invoke_tool(
+        InvokeToolInput(
+            id="github-actions-runs",
+            tool_id="github-actions",
+            operation_id="list-runs",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify.yml"},
+            launch=True,
+        )
+    )
+    triggered = governed.invoke_tool(
+        InvokeToolInput(
+            id="github-actions-trigger",
+            tool_id="github-actions",
+            operation_id="trigger",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify.yml", "ref": "main", "parameters": "suite=all"},
+            launch=True,
+        )
+    )
+
+    assert listed.status == "completed"
+    assert calls[0][:5] == ["gh", "run", "list", "--workflow", "verify.yml"]
+    assert triggered.command == [
+        "gh",
+        "workflow",
+        "run",
+        "verify.yml",
+        "--ref",
+        "main",
+        "--raw-field",
+        "suite=all",
+    ]
+
+    with pytest.raises(PermissionError, match="ci.cancel"):
+        governed.invoke_tool(
+            InvokeToolInput(
+                id="github-actions-cancel",
+                tool_id="github-actions",
+                operation_id="cancel-run",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"run": "123"},
+            )
+        )
+
+    cancel_path = root / ".agora" / "tools" / "github-actions" / "operations" / "cancel-run.md"
+    cancel_path.write_text(cancel_path.read_text().replace("ci.cancel", "ci.read"))
+    report = governed.validate()
+    assert any(item.code == "tool-adapter.contract-invalid" for item in report.issues)
+
+
+def test_discovers_installs_and_governs_the_terraform_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/local/bin/terraform" if executable == "terraform" else None,
+    )
+
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.implements) for item in available] == [
+        ("terraform", "cloud-infrastructure")
+    ]
+
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="terraform", scope="project")
+    )
+    assert installed.provider == "hashicorp"
+    assert installed.implements == "cloud-infrastructure"
+
+    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
+    resources = governed.invoke_tool(
+        InvokeToolInput(
+            id="terraform-resources",
+            tool_id="terraform",
+            operation_id="list-resources",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "infra/staging"},
+        )
+    )
+    plan = governed.invoke_tool(
+        InvokeToolInput(
+            id="terraform-plan",
+            tool_id="terraform",
+            operation_id="plan",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "infra/staging", "change": "plans/capacity.tfplan"},
+        )
+    )
+
+    assert resources.command == ["terraform", "-chdir=infra/staging", "state", "list"]
+    assert plan.command == [
+        "terraform",
+        "-chdir=infra/staging",
+        "plan",
+        "-input=false",
+        "-no-color",
+        "-out=plans/capacity.tfplan",
+    ]
+    with pytest.raises(PermissionError, match="cloud.deploy"):
+        governed.invoke_tool(
+            InvokeToolInput(
+                id="terraform-apply",
+                tool_id="terraform",
+                operation_id="apply-plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={
+                    "environment": "infra/staging",
+                    "plan": "plans/capacity.tfplan",
+                },
+            )
+        )
+    with pytest.raises(PermissionError, match="cloud.destroy"):
+        governed.invoke_tool(
+            InvokeToolInput(
+                id="terraform-destroy",
+                tool_id="terraform",
+                operation_id="destroy-resource",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={
+                    "environment": "infra/staging",
+                    "resource": "aws_instance.api",
+                },
+            )
+        )
+    assert governed.validate().ok
+
+
+def test_installs_and_governs_the_github_issues_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/gh" if executable == "gh" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="github-issues", scope="project")
+    )
+    assert installed.implements == "work-management"
+
+    searched = workspace.invoke_tool(
+        InvokeToolInput(
+            id="github-issue-search",
+            tool_id="github-issues",
+            operation_id="search",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"query": "repo:openai/codex is:open label:bug"},
+        )
+    )
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="github-issue-create",
+            tool_id="github-issues",
+            operation_id="create",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={
+                "project": "example/agora",
+                "type": "Task",
+                "title": "Review governed adapter",
+                "description": "Verify the CLI-first operation contract.",
+            },
+        )
+    )
+    transitioned = workspace.invoke_tool(
+        InvokeToolInput(
+            id="github-issue-close",
+            tool_id="github-issues",
+            operation_id="transition",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={"issue": "42", "state": "close"},
+        )
+    )
+
+    assert searched.command[:3] == ["gh", "search", "issues"]
+    assert created.command[:5] == [
+        "gh",
+        "issue",
+        "create",
+        "--repo",
+        "example/agora",
+    ]
+    assert transitioned.command == ["gh", "issue", "close", "42"]
+    with pytest.raises(ValueError, match="state must be one of: close, reopen"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="github-issue-unsafe-transition",
+                tool_id="github-issues",
+                operation_id="transition",
+                actor_id="owner",
+                swarm_id="delivery",
+                inputs={"issue": "42", "state": "delete"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "github-issue-unsafe-transition").exists()
+    assert workspace.validate().ok
 
 
 def test_governs_work_management_capabilities_by_role(

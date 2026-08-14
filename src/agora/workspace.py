@@ -60,6 +60,7 @@ from agora.model import (
     InstallCatalogPackInput,
     InstallMethodInput,
     InstallRegistryInput,
+    InstallToolAdapterInput,
     InstallToolInput,
     Integration,
     InvokeToolInput,
@@ -90,6 +91,7 @@ from agora.model import (
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
+    ToolAdapterRecord,
     ToolContract,
     ToolPackRecord,
     ToolRisk,
@@ -134,7 +136,11 @@ from agora.registry_distribution import (
     download_registry_release,
     inspect_registry_release,
 )
-from agora.tools import load_tool_contract, validate_operation_inputs
+from agora.tools import (
+    load_tool_contract,
+    validate_operation_inputs,
+    validate_tool_adapter_contract,
+)
 from agora.trust import load_trust_key, render_trust_key, revoke_trust_key, trust_key_from_pem
 from agora.upgrades import (
     CURRENT_PROJECT_VERSION,
@@ -354,10 +360,77 @@ class AgoraWorkspace:
         if (source / "SOURCE.md").exists() or (source / "updates").exists():
             raise ValueError("Direct Tool Pack sources must not contain installer-owned metadata")
         contract = load_tool_contract(source)
+        if contract.implements is not None:
+            implemented = self._implemented_tool_contract(contract.implements, data.scope)
+            validate_tool_adapter_contract(contract, implemented)
         self._assert_candidate_composition("tool", contract, data.scope)
         record = self._install_tool_snapshot(source, data.scope, data.force, contract)
         self._write_pack_lock(data.scope)
         return record
+
+    def install_tool_adapter(self, data: InstallToolAdapterInput) -> ToolPackRecord:
+        assert_slug(data.adapter_id, "Tool adapter id")
+        adapters = {record.id: record for record in self.list_tool_adapters()}
+        adapter = adapters.get(data.adapter_id)
+        if adapter is None:
+            raise FileNotFoundError(f"Bundled Tool adapter not found: {data.adapter_id}")
+        return self.install_tool(
+            InstallToolInput(source=adapter.path, scope=data.scope, force=data.force)
+        )
+
+    def list_tool_adapters(self, available_only: bool = False) -> list[ToolAdapterRecord]:
+        project = self._optional_project_root()
+        records: list[ToolAdapterRecord] = []
+        for manifest in sorted((template_root() / "adapters").glob("*/*/TOOL.md")):
+            contract = load_tool_contract(manifest.parent)
+            if not contract.provider or not contract.transport or not contract.implements:
+                raise ValueError(f"Bundled Tool adapter is missing adapter metadata: {manifest}")
+            implemented = load_tool_contract(template_root() / "tools" / contract.implements)
+            validate_tool_adapter_contract(contract, implemented)
+            runtime_available = shutil.which(contract.executable) is not None
+            if available_only and not runtime_available:
+                continue
+            installed_scopes: list[str] = []
+            if (agora_home() / "tools" / contract.id / "TOOL.md").is_file():
+                installed_scopes.append("user")
+            if (
+                project is not None
+                and (project / ".agora" / "tools" / contract.id / "TOOL.md").is_file()
+            ):
+                installed_scopes.append("project")
+            records.append(
+                ToolAdapterRecord(
+                    id=contract.id,
+                    name=contract.name,
+                    version=contract.version,
+                    provider=contract.provider,
+                    transport=contract.transport,
+                    implements=contract.implements,
+                    executable=contract.executable,
+                    runtime_available=runtime_available,
+                    installed_scopes=installed_scopes,
+                    path=str(manifest.parent),
+                )
+            )
+        return records
+
+    def _implemented_tool_contract(self, tool_id: str, scope: str) -> ToolContract:
+        assert_slug(tool_id, "Implemented Tool Pack id")
+        candidates: list[Path] = []
+        if scope == "project":
+            project = self._optional_project_root()
+            if project is not None:
+                candidates.append(project / ".agora" / "tools" / tool_id)
+        candidates.extend(
+            [
+                agora_home() / "tools" / tool_id,
+                template_root() / "tools" / tool_id,
+            ]
+        )
+        for candidate in candidates:
+            if (candidate / "TOOL.md").is_file():
+                return load_tool_contract(candidate)
+        raise FileNotFoundError(f"Implemented Tool Pack not found: {tool_id}")
 
     def _install_method_snapshot(
         self,
@@ -2834,6 +2907,7 @@ class AgoraWorkspace:
             "adapters": 0,
             "methods": 0,
             "tools": 0,
+            "tool-adapters": 0,
             "actors": 0,
             "swarms": 0,
             "work": 0,
@@ -3082,6 +3156,27 @@ class AgoraWorkspace:
                         f"Tool id {contract.id} does not match directory {path.parent.name}",
                     )
                 self._validate_pack_source("tool", path.parent, contract, inspect, issue)
+
+        for adapter in tools.values():
+            if adapter.implements is None:
+                continue
+            implemented = tools.get(adapter.implements)
+            adapter_path = tool_root / adapter.id / "TOOL.md"
+            if implemented is None:
+                issue(
+                    "tool-adapter.implementation-missing",
+                    adapter_path,
+                    f"Implemented Tool Pack is not installed: {adapter.implements}",
+                )
+                continue
+            inspect(
+                "tool-adapters",
+                "tool-adapter.contract-invalid",
+                adapter_path,
+                lambda adapter=adapter, implemented=implemented: validate_tool_adapter_contract(
+                    adapter, implemented
+                ),
+            )
 
         installed_packs: dict[tuple[str, str], MethodContract | ToolContract] = {
             **{("method", id_): contract for id_, contract in methods.items()},
@@ -4874,6 +4969,9 @@ class AgoraWorkspace:
             scope=scope,
             path=str(path),
             operations=sorted(contract.operations),
+            provider=contract.provider,
+            transport=contract.transport,
+            implements=contract.implements,
             source=source,
             updates=updates,
         )

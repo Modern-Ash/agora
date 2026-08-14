@@ -40,6 +40,8 @@ uv run python samples/remote-registry/run.py
 - Do not add an LLM SDK to the core CLI.
 - Keep operational state in Markdown and Git, not a parallel database or JSON snapshot.
 - Keep adapter-specific output outside Method Packs and domain rules.
+- Prefer reviewed native CLI adapters when a provider CLI already exists; keep MCP optional and
+  explicit rather than an automatic fallback.
 - Keep Tool Pack commands structured and provider credentials outside durable inputs.
 - Keep Method Pack identifiers open; bundled packs are examples, not core enums.
 - Add tests for capabilities, role actions, transitions, WIP, gates, approvals, handoffs,

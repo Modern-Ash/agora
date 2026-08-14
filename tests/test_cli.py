@@ -78,6 +78,41 @@ def test_installs_a_custom_method_without_an_initialized_project(
     assert (home / "methods" / "release-flow" / "METHOD.md").exists()
 
 
+def test_discovers_and_installs_a_cli_adapter_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("AGORA_HOME", str(home))
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/gh" if executable == "gh" else None,
+    )
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert (
+        main(
+            ["tool", "adapter", "list", "--available"],
+            cwd=tmp_path,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            ["tool", "adapter", "install", "--id", "github-actions", "--scope", "user"],
+            cwd=tmp_path,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
+    assert errors.getvalue() == ""
+    assert '"transport": "cli"' in output.getvalue()
+    assert '"runtime_available": true' in output.getvalue()
+    assert (home / "tools" / "github-actions" / "TOOL.md").is_file()
+
+
 def test_configures_actor_runtime_and_prepares_a_session_from_the_cli(
     tmp_path: Path, monkeypatch
 ) -> None:
