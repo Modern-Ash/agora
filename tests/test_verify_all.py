@@ -26,6 +26,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: github-issues-cli",
         "sample: handoffs",
         "sample: interruptions",
+        "sample: jira-cli",
         "sample: knowledge-base",
         "sample: llm-environments",
         "sample: observability",

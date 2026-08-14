@@ -166,6 +166,9 @@ are concrete CLI-first implementations that delegate directly to `gh` and Terraf
 Partial adapters declare the exact operations they implement. The AWS and Google Cloud inventory
 adapters use this mechanism to provide bounded native reads without claiming plan, deployment, or
 destruction behavior that the provider-wide CLIs do not possess.
+The Jira adapter implements the complete work-management contract through `acli`; it remains
+discoverable but unavailable when that executable is absent. Availability never causes installation
+or an MCP fallback.
 
 ## Recursive delegation
 

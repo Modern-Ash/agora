@@ -58,6 +58,22 @@ state occupies a native subcommand position, so `input-values` restricts it to `
 Any other value is rejected before a Tool Run exists. Repository and authentication selection remain
 in the existing GitHub CLI profile, and installation does not alter role authority.
 
+## Native Jira ACLI adapter
+
+Install the reviewed Jira Cloud adapter when Atlassian CLI is part of the developer environment:
+
+```bash
+agora tool adapter list --available
+agora tool adapter install --id jira --scope project
+```
+
+The adapter maps all five operations to `acli jira workitem`. Search uses JQL with a limit and
+selected fields; create and comment provide their bodies through non-interactive flags; transition
+uses one explicit key and status with `--yes`. ACLI owns Jira site selection and authentication.
+
+The pack may be installed for command preparation when ACLI is absent, but `--launch` then fails
+before creating an external process. Agora does not download ACLI or fall back to an MCP server.
+
 ## Role authority
 
 Bundled Scrum and Kanban packs grant external work authority separately:

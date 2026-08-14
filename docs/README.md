@@ -84,6 +84,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   adapter, prepare native commands, and preserve separate cancellation authority.
 - [GitHub Issues CLI adapter](../samples/github-issues-cli/README.md): prepare native issue searches
   and constrain dynamic transitions to close or reopen.
+- [Jira ACLI adapter](../samples/jira-cli/README.md): prepare bounded Jira searches and governed
+  transitions while keeping ACLI installation and authentication external.
 - [Terraform CLI adapter](../samples/terraform-cli/README.md): prepare state reads and a saved plan
   through native Terraform while preserving separate apply authority.
 - [Governed knowledge base](../samples/knowledge-base/README.md): draft external documentation,

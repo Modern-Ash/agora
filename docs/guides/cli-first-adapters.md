@@ -122,6 +122,31 @@ Transition maps the state into the native command position, so its manifest rest
 `close` or `reopen`. Values such as `delete`, `edit`, or `transfer` are rejected before `RUN.md` is
 created.
 
+## Jira through Atlassian CLI
+
+The `jira` adapter implements the complete `work-management` contract through ACLI:
+
+```bash
+agora tool adapter install --id jira --scope project
+agora tool invoke \
+  --id inspect-agora-42 \
+  --tool jira \
+  --operation view \
+  --actor developer \
+  --swarm delivery \
+  --input issue=AGORA-42
+```
+
+Search uses bounded JQL results and selected fields. View, create, and comment request JSON, while
+transition supplies `--yes` to avoid an interactive confirmation after Agora authority has passed.
+Jira still applies its own workflow permissions, conditions, and validators.
+
+The adapter is distributed even when ACLI is absent. In that case it appears in
+`agora tool adapter list` with `runtime_available: false`, is omitted by `--available`, and can still
+prepare durable commands without `--launch`. Agora never installs ACLI or initiates authentication.
+Confluence is not mapped to ACLI because its published command tree does not currently provide the
+complete knowledge-base contract; use a reviewed `docsctl` wrapper or an explicit future adapter.
+
 ## Terraform through its native CLI
 
 The `terraform` adapter implements `cloud-infrastructure` without importing Terraform or cloud SDKs:

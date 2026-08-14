@@ -111,6 +111,9 @@ invocation remain separate explicit actions. Bundled adapters implement `ci-cd` 
 A partial adapter lists `implements-operations`; it must contain exactly that conforming subset and
 cannot be invoked for omitted operations. AWS and Google Cloud inventory use this form for read-only
 resource discovery.
+An adapter may be distributed but unavailable in the current environment. `runtime_available`
+reflects executable discovery only; it does not imply authentication, installation, authority, or a
+successful provider call. The Jira adapter demonstrates this state when ACLI is not installed.
 
 A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution

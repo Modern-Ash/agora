@@ -998,6 +998,100 @@ def test_governs_partial_aws_and_gcp_inventory_adapters(
     assert workspace.validate().ok
 
 
+def test_discovers_installs_and_governs_the_jira_acli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/local/bin/acli" if executable == "acli" else None,
+    )
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.provider) for item in available] == [("jira", "atlassian")]
+
+    _prepare_scrum_team(workspace)
+    workspace.install_tool_adapter(InstallToolAdapterInput(adapter_id="jira", scope="project"))
+    searched = workspace.invoke_tool(
+        InvokeToolInput(
+            id="jira-search",
+            tool_id="jira",
+            operation_id="search",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"query": "project = AGORA AND status != Done"},
+        )
+    )
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="jira-create",
+            tool_id="jira",
+            operation_id="create",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={
+                "project": "AGORA",
+                "type": "Task",
+                "title": "Review ACLI adapter",
+                "description": "Verify the governed Jira command contract.",
+            },
+        )
+    )
+    transitioned = workspace.invoke_tool(
+        InvokeToolInput(
+            id="jira-transition",
+            tool_id="jira",
+            operation_id="transition",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={"issue": "AGORA-42", "state": "In Progress"},
+        )
+    )
+
+    assert searched.command[:6] == [
+        "acli",
+        "jira",
+        "workitem",
+        "search",
+        "--jql",
+        "project = AGORA AND status != Done",
+    ]
+    assert created.command[:8] == [
+        "acli",
+        "jira",
+        "workitem",
+        "create",
+        "--project",
+        "AGORA",
+        "--type",
+        "Task",
+    ]
+    assert transitioned.command == [
+        "acli",
+        "jira",
+        "workitem",
+        "transition",
+        "--key",
+        "AGORA-42",
+        "--status",
+        "In Progress",
+        "--yes",
+        "--json",
+    ]
+    with pytest.raises(PermissionError, match="issue.write"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="jira-developer-comment",
+                tool_id="jira",
+                operation_id="comment",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"issue": "AGORA-42", "body": "Unauthorized write"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "jira-developer-comment").exists()
+    assert workspace.validate().ok
+
+
 def test_governs_work_management_capabilities_by_role(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:

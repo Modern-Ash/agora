@@ -294,6 +294,7 @@ installs or selects a transport automatically:
 agora tool adapter list --available
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id github-issues --scope project
+agora tool adapter install --id jira --scope project
 agora tool adapter install --id terraform --scope project
 agora tool adapter install --id aws-resource-inventory --scope project
 agora tool adapter install --id gcp-asset-inventory --scope project
@@ -349,8 +350,8 @@ record or Git commit is created.
 
 The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
 tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
-Method Pack. The `github-issues` adapter maps that contract directly to the existing `gh` CLI. See the
-[work-management integration guide](docs/guides/work-management-integrations.md).
+Method Pack. The `github-issues` and `jira` adapters map that contract directly to `gh` and ACLI.
+See the [work-management integration guide](docs/guides/work-management-integrations.md).
 
 The `ci-cd` pack defines a stable `cictl` interface for GitHub Actions, GitLab CI/CD, Jenkins, or an
 internal platform. Routine pipeline access is separate from cancellation and deployment authority.
@@ -587,10 +588,10 @@ versioned registry snapshot without persisting a private key.
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Organization trust synchronization, transparency, automatic background pack updates, and
   notifications are not.
-- The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD, and
-  knowledge-base, cloud-infrastructure, and observability packs are implemented; vendor
-  distributions remain future work except for the bundled GitHub Actions, GitHub Issues, and
-  Terraform CLI adapters plus partial AWS and Google Cloud inventory adapters.
+- The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
+  knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
+  distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,
+  plus partial AWS and Google Cloud inventory adapters.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

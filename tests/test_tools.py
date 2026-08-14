@@ -125,6 +125,23 @@ def test_loads_a_read_only_cloud_inventory_adapter(
     assert all(operation.risk == "read" for operation in contract.operations.values())
 
 
+def test_loads_the_jira_acli_adapter() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "jira")
+    implemented = load_tool_contract(template_root() / "tools" / "work-management")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == "atlassian"
+    assert contract.executable == "acli"
+    assert contract.implements == "work-management"
+    assert contract.operations["search"].arguments[:4] == [
+        "jira",
+        "workitem",
+        "search",
+        "--jql",
+    ]
+    assert contract.operations["transition"].arguments[-2:] == ["--yes", "--json"]
+
+
 def test_rejects_an_extra_operation_in_a_partial_adapter() -> None:
     adapter = load_tool_contract(template_root() / "adapters" / "cli" / "aws-resource-inventory")
     implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
