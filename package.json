@@ -1,0 +1,39 @@
+{
+  "name": "@agora-framework/cli",
+  "version": "0.1.0",
+  "description": "Local, Markdown-first governance for human and agentic software swarms",
+  "type": "module",
+  "bin": {
+    "agora": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run clean --silent && tsc -p tsconfig.json",
+    "clean": "node scripts/clean.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check": "npm run format:check && npm run lint && npm test && npm run build",
+    "example": "npm run build && node scripts/basic-swarm.mjs",
+    "agora": "npm run build --silent && node dist/cli.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@types/node": "^20.19.11",
+    "eslint": "^9.33.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.39.1",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0"
+}

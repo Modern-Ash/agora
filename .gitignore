@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.agora/
+.agents/skills/agora-*/
+.claude/commands/agora.*.md
