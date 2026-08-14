@@ -135,6 +135,11 @@ time. A **Pack Update** compares that immutable source evidence with the current
 visible catalog, produces a dependency-first preview, and changes files only when application is
 explicit. Local amendments are visible divergence rather than silent loss.
 
+A **Pack Update History** is a per-pack transition from the previous installed version and actual
+checksum to a selected catalog version and published checksum. A **Pack Composition Lock** is the
+sorted projection of every Method and Tool Pack in one scope, including its actual checksum and
+optional source identity. Histories explain change; the lock identifies current state.
+
 A remote registry index publishes one or more semantic releases. Each release identifies an archive,
 mandatory SHA-256, and optional Ed25519 signature plus key id. After verification Agora installs the
 same local snapshot contract and adds a generated source record containing immutable provenance.

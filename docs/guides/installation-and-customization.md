@@ -215,6 +215,7 @@ and version the files that define the shared contract:
 
 ```text
 .agora/project.md
+.agora/PACKS.lock.md
 .agora/constitution.md
 .agora/PROTOCOL.md
 .agora/STANDARDS.md
@@ -225,6 +226,10 @@ and version the files that define the shared contract:
 .agora/commands/
 .agora/sessions/
 ```
+
+`PACKS.lock.md` is the deterministic inventory of installed Method and Tool Pack trees. Managed pack
+mutations refresh it; use `agora pack lock` only after reviewing manual pack changes. See
+[Pack composition locks](pack-locks.md).
 
 Edit the constitution for engineering, security, compliance, and approval rules. Edit the protocol
 for handoffs, escalation, communication, and durable-record expectations. `STANDARDS.md` enables

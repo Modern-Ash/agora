@@ -36,6 +36,7 @@ Agora distribution
 
 <project>/.agora/
   project.md            Effective project configuration
+  PACKS.lock.md         Exact installed Method and Tool Pack composition
   constitution.md       Local principles and restrictions
   PROTOCOL.md           Shared collaboration protocol
   STANDARDS.md          Enforced cross-actor engineering standards
@@ -161,6 +162,8 @@ resolves compatible dependencies before copying and rejects broken or cyclic com
 Each catalog-installed pack persists its registry and checksum in `SOURCE.md`. Explicit
 `agora pack update` previews dependency-aware changes and applies them only with `--apply`; see the
 [pack update guide](docs/guides/pack-updates.md).
+`PACKS.lock.md` inventories the exact installed composition, while per-pack `UPDATE.md` files retain
+each applied transition; see the [pack lock guide](docs/guides/pack-locks.md).
 Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
 provenance beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
@@ -492,6 +495,7 @@ versioned registry snapshot without persisting a private key.
 - [Pack registries](docs/guides/pack-registries.md)
 - [Pack dependencies](docs/guides/pack-dependencies.md)
 - [Pack updates](docs/guides/pack-updates.md)
+- [Pack composition locks](docs/guides/pack-locks.md)
 - [Remote registry releases](docs/guides/remote-registries.md)
 - [Registry trust stores](docs/guides/registry-trust.md)
 - [Registry updates](docs/guides/registry-updates.md)

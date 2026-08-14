@@ -13,6 +13,7 @@ from agora.model import (
     InstallRegistryInput,
     UpdateCatalogPackInput,
 )
+from agora.packs import read_pack_lock
 from agora.workspace import AgoraWorkspace
 
 
@@ -107,6 +108,7 @@ def main() -> None:
     update = agora.update_catalog_pack(
         UpdateCatalogPackInput(kind="method", pack_id="delivery-flow", apply=True)
     )
+    pack_lock = read_pack_lock(project / ".agora" / "PACKS.lock.md")
     report = agora.validate()
     assert report.ok
 
@@ -121,6 +123,8 @@ def main() -> None:
     print(json.dumps(asdict(update_preview), indent=2))
     print("Applied update:")
     print(json.dumps(asdict(update), indent=2))
+    print("Pack composition lock:")
+    print(json.dumps(asdict(pack_lock), indent=2))
     print(f"Validation issues: {len(report.issues)}")
 
 

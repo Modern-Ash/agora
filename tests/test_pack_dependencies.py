@@ -12,9 +12,10 @@ from agora.model import (
     InstallCatalogPackInput,
     InstallRegistryInput,
     InstallToolInput,
+    RefreshPackLockInput,
     UpdateCatalogPackInput,
 )
-from agora.packs import compare_pack_versions, version_satisfies
+from agora.packs import compare_pack_versions, read_pack_lock, version_satisfies
 from agora.tools import load_tool_contract
 from agora.workspace import AgoraWorkspace
 
@@ -376,10 +377,16 @@ def test_previews_and_applies_a_dependency_aware_pack_update(tmp_path: Path, mon
     )
 
     assert applied.applied is True
+    assert len(applied.history_paths) == 2
+    assert all(Path(path).is_file() for path in applied.history_paths)
     assert workspace.show_tool("provider").version == "2.0.0"
     consumer = next(item for item in workspace.list_methods() if item.id == "consumer")
     assert consumer.version == "2.0.0"
     assert consumer.source is not None
+    assert len(consumer.updates) == 1
+    assert consumer.updates[0].from_version == "1.0.0"
+    assert consumer.updates[0].to_version == "2.0.0"
+    assert workspace.show_tool("provider").updates[0].to_version == "2.0.0"
     assert workspace.validate().ok is True
 
 
@@ -405,8 +412,14 @@ def test_pack_update_protects_local_modifications(tmp_path: Path, monkeypatch) -
     preview = workspace.update_catalog_pack(UpdateCatalogPackInput(kind="tool", pack_id="tracker"))
     assert preview.modified is True
     report = workspace.validate()
-    assert report.ok is True
+    assert report.ok is False
     assert any(issue.code == "pack-source.modified" for issue in report.issues)
+    assert any(issue.code == "pack-lock.drift" for issue in report.issues)
+    lock = workspace.refresh_pack_lock(RefreshPackLockInput(scope="project"))
+    assert any(item.id == "tracker" and item.sha256 != item.source_sha256 for item in lock.packs)
+    refreshed = workspace.validate()
+    assert refreshed.ok is True
+    assert any(issue.code == "pack-source.modified" for issue in refreshed.issues)
     with pytest.raises(ValueError, match="locally modified"):
         workspace.update_catalog_pack(
             UpdateCatalogPackInput(kind="tool", pack_id="tracker", apply=True)
@@ -484,3 +497,64 @@ def test_cli_previews_and_applies_a_pack_update(tmp_path: Path, monkeypatch) -> 
     )
     assert '"applied": true' in output.getvalue()
     assert workspace.show_tool("tracker").version == "2.0.0"
+
+
+def test_pack_lock_tracks_managed_mutations_and_cli_refreshes_manual_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    lock_path = workspace.project_root() / ".agora" / "PACKS.lock.md"
+    initial = read_pack_lock(lock_path)
+    assert [(item.kind, item.id) for item in initial.packs] == [
+        ("method", "kanban"),
+        ("method", "scrum"),
+        ("tool", "repository"),
+    ]
+    direct = _tool(tmp_path / "direct", "direct", "1.0.0")
+    workspace.install_tool(InstallToolInput(source=str(direct), scope="project"))
+    installed = read_pack_lock(lock_path)
+    assert ("tool", "direct") in [(item.kind, item.id) for item in installed.packs]
+    manifest = workspace.project_root() / ".agora" / "tools" / "direct" / "TOOL.md"
+    manifest.write_text(manifest.read_text(encoding="utf-8") + "\nLocal amendment.\n")
+    assert any(issue.code == "pack-lock.drift" for issue in workspace.validate().issues)
+    output = io.StringIO()
+
+    assert (
+        main(
+            ["pack", "lock", "--scope", "project"],
+            cwd=workspace.project_root(),
+            stdout=output,
+        )
+        == 0
+    )
+    assert '"scope": "project"' in output.getvalue()
+    assert workspace.validate().ok is True
+
+
+def test_validation_rejects_pack_update_history_that_disagrees_with_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    source_v1 = _tool(tmp_path / "first" / "tracker", "tracker", "1.0.0")
+    registry_v1 = _registry(tmp_path / "registry-v1", [("tool", source_v1)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry_v1), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="tracker", scope="project")
+    )
+    source_v2 = _tool(tmp_path / "second" / "tracker", "tracker", "2.0.0")
+    registry_v2 = _registry(tmp_path / "registry-v2", [("tool", source_v2)])
+    workspace.install_registry(
+        InstallRegistryInput(source=str(registry_v2), scope="project", force=True)
+    )
+    update = workspace.update_catalog_pack(
+        UpdateCatalogPackInput(kind="tool", pack_id="tracker", apply=True)
+    )
+    history_path = Path(update.history_paths[0])
+    document = read_markdown(history_path)
+    document.attributes["to-sha256"] = "0" * 64
+    history_path.write_text(render_markdown(document), encoding="utf-8")
+
+    report = workspace.validate()
+
+    assert report.ok is False
+    assert any(issue.code == "pack-update.source-mismatch" for issue in report.issues)

@@ -22,6 +22,8 @@
   never replace a dependency when that would break an installed consumer.
 - Keep catalog pack provenance installer-owned and checksum-pinned; keep pack updates preview-first,
   forward-only, composition-safe, and protective of local amendments.
+- Keep pack update histories continuous and pack composition locks deterministic; refresh locks only
+  after successful managed mutations or an explicit reviewed lock command.
 - Treat Scrum and Kanban as bundled examples, never as privileged core workflows.
 - Preserve recursive swarm cycle checks and configured delegation depth.
 - Preserve explicit child-work acceptance and reference-based result collection across swarms.

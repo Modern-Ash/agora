@@ -25,7 +25,9 @@ installed-at: "2026-08-14T12:00:00Z"
 
 The checksum covers the complete published pack tree except installer-owned metadata. It detects
 local amendments without preventing them. `agora validate` reports a modified catalog installation
-as `pack-source.modified` with warning severity; malformed or mismatched provenance is an error.
+as `pack-source.modified` with warning severity. Until the amendment is reviewed and locked, the
+unchanged composition lock also produces `pack-lock.drift`; malformed or mismatched provenance is an
+error.
 
 Direct `agora method install` and `agora tool install` sources do not receive catalog provenance and
 cannot use `agora pack update`. A registry is also forbidden from publishing its own `SOURCE.md` or
@@ -63,6 +65,11 @@ their consumer, every pack is staged and validated as a clean snapshot, and the 
 swapped with rollback protection. The new `SOURCE.md` records each selected registry, version,
 checksum, and installation time.
 
+Every affected pack also receives `updates/<update-id>/UPDATE.md`. The record connects its previous
+actual checksum to the new published checksum. All packs in one dependency plan share the update id,
+and their histories are preserved across clean snapshot replacement. See
+[Pack composition locks and update history](pack-locks.md).
+
 Local amendments or a dependency without catalog provenance stop application. After reviewing the
 preview and Git diff expectations, permit their replacement explicitly:
 
@@ -73,6 +80,9 @@ agora pack update --kind method --id delivery-flow --apply --force
 `--force` never bypasses version constraints, missing dependencies, cycles, or reverse-dependent
 compatibility. It only authorizes replacing locally divergent content after the final composition
 has passed validation.
+
+After a successful swap Agora regenerates the target scope's `PACKS.lock.md`. A failed multi-pack
+swap restores every previous pack and leaves the existing lock untouched.
 
 Use `--scope user` or `--scope project` when the same pack is installed in both locations. Without a
 scope, an initialized project takes precedence over the user installation.

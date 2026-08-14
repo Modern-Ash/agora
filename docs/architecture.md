@@ -94,6 +94,11 @@ published version, and deterministic tree checksum. Pack updates are preview-onl
 reject downgrades and mutable versions, re-resolve the complete composition, and stage clean atomic
 pack replacements. Local amendments remain valid but require explicit `--force` before replacement.
 
+`PACKS.lock.md` is the deterministic current-state inventory for user or project scope. Managed pack
+mutations regenerate it; validation compares it with installed trees, while `agora pack lock` accepts
+a reviewed manual composition. Catalog updates preserve and extend per-pack `updates/*/UPDATE.md`
+chains, then swap the dependency plan as one rollback-protected operation before refreshing the lock.
+
 ### Git and filesystem
 
 Markdown is the durable contract and the filesystem represents current state. Git adds history,

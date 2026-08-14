@@ -67,10 +67,14 @@ from agora.model import (
     MethodContract,
     MethodPackRecord,
     PackKind,
+    PackLockEntry,
+    PackLockRecord,
     PackSourceRecord,
+    PackUpdateHistoryRecord,
     PackUpdateResult,
     PackUpdateStep,
     ProjectConfiguration,
+    RefreshPackLockInput,
     RegistryRecord,
     RegistrySourceRecord,
     RegistryTrustKeyRecord,
@@ -102,10 +106,14 @@ from agora.model import (
 )
 from agora.packs import (
     compare_pack_versions,
+    load_pack_update_history,
     pack_reference,
     pack_tree_sha256,
+    read_pack_lock,
     read_pack_source,
+    render_pack_lock,
     render_pack_source,
+    render_pack_update,
     version_satisfies,
 )
 from agora.registries import (
@@ -210,6 +218,7 @@ class AgoraWorkspace:
             ),
             data.force,
         )
+        self._write_pack_lock("user")
         return configuration
 
     @_locked_mutation("target")
@@ -282,6 +291,7 @@ class AgoraWorkspace:
             copy_template_tree(user_tools, agora / "tools", replacements, force=True)
         copy_template_tree(root / "commands", agora / "commands", replacements, data.force)
         self._install_integration(target, configuration.integration, replacements, force=data.force)
+        self._write_pack_lock("project", project_root=target)
 
         project_events = agora / "events.md"
         if not project_events.exists():
@@ -324,7 +334,9 @@ class AgoraWorkspace:
 
         contract = load_method_contract(source)
         self._assert_candidate_composition("method", contract, data.scope)
-        return self._install_method_snapshot(source, data.scope, data.force, contract)
+        record = self._install_method_snapshot(source, data.scope, data.force, contract)
+        self._write_pack_lock(data.scope)
+        return record
 
     @_locked_mutation("scoped")
     def install_tool(self, data: InstallToolInput) -> ToolPackRecord:
@@ -337,7 +349,9 @@ class AgoraWorkspace:
             raise ValueError("Direct Tool Pack sources must not contain installer-owned metadata")
         contract = load_tool_contract(source)
         self._assert_candidate_composition("tool", contract, data.scope)
-        return self._install_tool_snapshot(source, data.scope, data.force, contract)
+        record = self._install_tool_snapshot(source, data.scope, data.force, contract)
+        self._write_pack_lock(data.scope)
+        return record
 
     def _install_method_snapshot(
         self,
@@ -382,19 +396,15 @@ class AgoraWorkspace:
         force: bool,
         provenance: PackSourceRecord | None,
     ) -> None:
-        if provenance is None:
-            copy_template_tree(source, destination, {}, force)
-            (destination / "SOURCE.md").unlink(missing_ok=True)
-            return
-
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
             prefix=f".{destination.name}-stage-", dir=destination.parent
         ) as temporary:
             staged = Path(temporary) / destination.name
             copy_template_tree(source, staged, {}, False)
-            atomic_write(staged / "SOURCE.md", render_pack_source(provenance))
-            if provenance.kind == "method":
+            if provenance is not None:
+                atomic_write(staged / "SOURCE.md", render_pack_source(provenance))
+            if (staged / "METHOD.md").is_file():
                 load_method_contract(staged)
             else:
                 load_tool_contract(staged)
@@ -765,7 +775,18 @@ class AgoraWorkspace:
         plan = self._resolve_catalog_install(selected, data.scope, data.force)
         for pack in plan:
             self._assert_pack_destination_available(pack.kind, pack.id, data.scope, data.force)
-        records = self._apply_catalog_plan(plan, data.scope)
+        update_id = (
+            self._now().astimezone(UTC).strftime("update-%Y%m%dt%H%M%S%fz")
+            if any(self._pack_destination(pack.kind, pack.id, data.scope).exists() for pack in plan)
+            else None
+        )
+        records, _ = self._apply_catalog_plan(
+            plan,
+            data.scope,
+            update_id=update_id,
+            applied_at=self._timestamp() if update_id else None,
+        )
+        self._write_pack_lock(data.scope)
         return next(
             record
             for record in records
@@ -866,12 +887,28 @@ class AgoraWorkspace:
                 "Pack update would replace locally modified or untracked packs: "
                 f"{', '.join(modified_packs)}. Pass --force after reviewing the changes."
             )
-        self._apply_catalog_plan(plan, scope)
-        return PackUpdateResult(**{**result.__dict__, "applied": True})
+        update_id = self._now().astimezone(UTC).strftime("update-%Y%m%dt%H%M%S%fz")
+        _, history_paths = self._apply_catalog_plan(
+            plan,
+            scope,
+            update_id=update_id,
+            applied_at=self._timestamp(),
+        )
+        self._write_pack_lock(scope)
+        return PackUpdateResult(
+            **{**result.__dict__, "applied": True, "history_paths": history_paths}
+        )
 
     def _apply_catalog_plan(
-        self, plan: list[CatalogPackRecord], scope: str
-    ) -> list[MethodPackRecord | ToolPackRecord]:
+        self,
+        plan: list[CatalogPackRecord],
+        scope: str,
+        *,
+        update_id: str | None = None,
+        applied_at: str | None = None,
+    ) -> tuple[list[MethodPackRecord | ToolPackRecord], list[str]]:
+        if (update_id is None) != (applied_at is None):
+            raise ValueError("Pack update id and timestamp must appear together")
         root = agora_home() if scope == "user" else self.project_root() / ".agora"
         root.mkdir(parents=True, exist_ok=True)
         staged_packs: list[
@@ -883,6 +920,7 @@ class AgoraWorkspace:
                 Path,
             ]
         ] = []
+        history_paths: list[str] = []
         with tempfile.TemporaryDirectory(prefix=".pack-plan-stage-", dir=root) as temporary:
             staging_root = Path(temporary)
             for pack in plan:
@@ -892,6 +930,47 @@ class AgoraWorkspace:
                 copy_template_tree(source, staged, {}, False)
                 provenance = self._pack_source_for_catalog(pack, scope)
                 atomic_write(staged / "SOURCE.md", render_pack_source(provenance))
+                existing_updates = destination / "updates"
+                if existing_updates.is_dir():
+                    copy_template_tree(existing_updates, staged / "updates", {}, False)
+                if update_id is not None:
+                    manifest = destination / ("METHOD.md" if pack.kind == "method" else "TOOL.md")
+                    existing = (
+                        load_method_contract(destination)
+                        if pack.kind == "method" and manifest.is_file()
+                        else (
+                            load_tool_contract(destination)
+                            if pack.kind == "tool" and manifest.is_file()
+                            else None
+                        )
+                    )
+                    history_path = destination / "updates" / update_id / "UPDATE.md"
+                    update = PackUpdateHistoryRecord(
+                        id=update_id,
+                        kind=pack.kind,
+                        pack_id=pack.id,
+                        from_version=existing.version if existing is not None else None,
+                        to_version=pack.version,
+                        from_sha256=(
+                            pack_tree_sha256(destination) if existing is not None else None
+                        ),
+                        to_sha256=provenance.sha256,
+                        registry=pack.registry,
+                        registry_scope=pack.registry_scope,
+                        applied_at=applied_at or "",
+                        path=str(history_path),
+                    )
+                    staged_history = staged / "updates" / update_id / "UPDATE.md"
+                    if staged_history.exists():
+                        raise FileExistsError(f"Pack update record already exists: {history_path}")
+                    atomic_write(staged_history, render_pack_update(update))
+                    history_paths.append(str(history_path))
+                history = load_pack_update_history(staged, pack.kind, pack.id)
+                if history and (
+                    history[-1].to_version != provenance.version
+                    or history[-1].to_sha256 != provenance.sha256
+                ):
+                    raise ValueError(f"Pack update history does not match staged source: {staged}")
                 contract = (
                     load_method_contract(staged)
                     if pack.kind == "method"
@@ -935,7 +1014,7 @@ class AgoraWorkspace:
             for _, backup, replaced in swapped:
                 if replaced:
                     shutil.rmtree(backup)
-            return records
+            return records, history_paths
 
     def _installed_pack_for_update(
         self, kind: PackKind, id_: str, requested_scope: str | None
@@ -959,6 +1038,48 @@ class AgoraWorkspace:
     def _pack_destination(self, kind: PackKind, id_: str, scope: str) -> Path:
         root = agora_home() if scope == "user" else self.project_root() / ".agora"
         return root / f"{kind}s" / id_
+
+    @_locked_mutation("scoped")
+    def refresh_pack_lock(self, data: RefreshPackLockInput) -> PackLockRecord:
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported pack lock scope: {data.scope}")
+        return self._write_pack_lock(data.scope)
+
+    def _write_pack_lock(self, scope: str, *, project_root: Path | None = None) -> PackLockRecord:
+        root = agora_home() if scope == "user" else (project_root or self.project_root()) / ".agora"
+        record = self._build_pack_lock(scope, root, generated_at=self._timestamp())
+        atomic_write(Path(record.path), render_pack_lock(record))
+        return read_pack_lock(Path(record.path))
+
+    @staticmethod
+    def _build_pack_lock(scope: str, root: Path, *, generated_at: str) -> PackLockRecord:
+        entries: list[PackLockEntry] = []
+        for kind, manifest in (("method", "METHOD.md"), ("tool", "TOOL.md")):
+            for path in sorted((root / f"{kind}s").glob(f"*/{manifest}")):
+                contract = (
+                    load_method_contract(path.parent)
+                    if kind == "method"
+                    else load_tool_contract(path.parent)
+                )
+                source_path = path.parent / "SOURCE.md"
+                source = read_pack_source(source_path) if source_path.is_file() else None
+                entries.append(
+                    PackLockEntry(
+                        kind=kind,
+                        id=contract.id,
+                        version=contract.version,
+                        sha256=pack_tree_sha256(path.parent),
+                        registry=source.registry if source is not None else None,
+                        source_sha256=source.sha256 if source is not None else None,
+                    )
+                )
+        entries.sort(key=lambda item: (item.kind, item.id))
+        return PackLockRecord(
+            scope=scope,
+            generated_at=generated_at,
+            packs=entries,
+            path=str(root / "PACKS.lock.md"),
+        )
 
     def _resolve_catalog_install(
         self, selected: CatalogPackRecord, scope: str, force: bool
@@ -1173,6 +1294,23 @@ class AgoraWorkspace:
                 "Installed pack content differs from its catalog source",
                 "warning",
             )
+        update_root = pack_root / "updates"
+        if update_root.is_dir():
+            history = inspect(
+                "pack-histories",
+                "pack-update.invalid",
+                update_root,
+                lambda: load_pack_update_history(pack_root, kind, contract.id),
+            )
+            if isinstance(history, list) and history:
+                latest = history[-1]
+                if latest.to_version != source.version or latest.to_sha256 != source.sha256:
+                    issue(
+                        "pack-update.source-mismatch",
+                        Path(latest.path),
+                        "Latest pack update does not match current SOURCE.md",
+                        "error",
+                    )
 
     def show_tool(self, tool_id: str) -> ToolPackRecord:
         assert_slug(tool_id, "Tool id")
@@ -2523,6 +2661,8 @@ class AgoraWorkspace:
             "registries": 0,
             "trust-keys": 0,
             "pack-sources": 0,
+            "pack-histories": 0,
+            "pack-locks": 0,
         }
         issues: list[ValidationIssue] = []
 
@@ -2768,6 +2908,32 @@ class AgoraWorkspace:
                 root / ".agora" / f"{kind}s" / id_ / manifest,
                 message,
             )
+        pack_lock_path = root / ".agora" / "PACKS.lock.md"
+        if not pack_lock_path.is_file():
+            issue(
+                "pack-lock.missing",
+                pack_lock_path,
+                "Project pack composition lock is missing; run `agora pack lock`",
+                "warning",
+            )
+        else:
+            pack_lock = inspect(
+                "pack-locks",
+                "pack-lock.invalid",
+                pack_lock_path,
+                lambda: read_pack_lock(pack_lock_path),
+            )
+            if isinstance(pack_lock, PackLockRecord):
+                expected_lock = self._build_pack_lock(
+                    "project", root / ".agora", generated_at=pack_lock.generated_at
+                )
+                if pack_lock.scope != "project" or pack_lock.packs != expected_lock.packs:
+                    issue(
+                        "pack-lock.drift",
+                        pack_lock_path,
+                        "Project pack composition differs from PACKS.lock.md; "
+                        "review and refresh it",
+                    )
 
         actor_cache: dict[str, ActorRecord] = {}
         actor_root = root / ".agora" / "actors"
@@ -4447,12 +4613,19 @@ class AgoraWorkspace:
     @staticmethod
     def _method_pack_record(contract: MethodContract, scope: str, path: Path) -> MethodPackRecord:
         source = read_pack_source(path / "SOURCE.md") if (path / "SOURCE.md").is_file() else None
+        updates = load_pack_update_history(path, "method", contract.id)
         if source is not None and (
             source.kind != "method"
             or source.id != contract.id
             or source.version != contract.version
         ):
             raise ValueError(f"Method Pack source does not match its manifest: {path}")
+        if updates and (
+            source is None
+            or updates[-1].to_version != source.version
+            or updates[-1].to_sha256 != source.sha256
+        ):
+            raise ValueError(f"Method Pack update history does not match its source: {path}")
         return MethodPackRecord(
             id=contract.id,
             name=contract.name,
@@ -4464,15 +4637,23 @@ class AgoraWorkspace:
             work_states=contract.work_states,
             terminal_state=contract.terminal_state,
             source=source,
+            updates=updates,
         )
 
     @staticmethod
     def _tool_pack_record(contract: ToolContract, scope: str, path: Path) -> ToolPackRecord:
         source = read_pack_source(path / "SOURCE.md") if (path / "SOURCE.md").is_file() else None
+        updates = load_pack_update_history(path, "tool", contract.id)
         if source is not None and (
             source.kind != "tool" or source.id != contract.id or source.version != contract.version
         ):
             raise ValueError(f"Tool Pack source does not match its manifest: {path}")
+        if updates and (
+            source is None
+            or updates[-1].to_version != source.version
+            or updates[-1].to_sha256 != source.sha256
+        ):
+            raise ValueError(f"Tool Pack update history does not match its source: {path}")
         return ToolPackRecord(
             id=contract.id,
             name=contract.name,
@@ -4484,6 +4665,7 @@ class AgoraWorkspace:
             path=str(path),
             operations=sorted(contract.operations),
             source=source,
+            updates=updates,
         )
 
     def _actor_tool_capabilities(

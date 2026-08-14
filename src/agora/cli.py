@@ -28,6 +28,7 @@ from agora.model import (
     InstallRegistryInput,
     InstallToolInput,
     InvokeToolInput,
+    RefreshPackLockInput,
     RevokeRegistryTrustKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -180,6 +181,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pack_update.add_argument("--scope", choices=("user", "project"))
     pack_update.add_argument("--apply", action="store_true")
     pack_update.add_argument("--force", action="store_true")
+    pack_lock = pack.add_parser("lock", help="Refresh the installed pack composition lock")
+    pack_lock.add_argument("--scope", choices=("user", "project"), default="project")
 
     start = commands.add_parser("start", help="Prepare or launch a governed actor session")
     start.add_argument("--id")
@@ -553,6 +556,8 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 force=args.force,
             )
         )
+    if args.command == "pack" and args.pack_command == "lock":
+        return workspace.refresh_pack_lock(RefreshPackLockInput(scope=args.scope))
     if args.command == "start":
         return workspace.start_session(
             StartSessionInput(

@@ -97,6 +97,39 @@ class PackSourceRecord:
 
 
 @dataclass(frozen=True)
+class PackUpdateHistoryRecord:
+    id: str
+    kind: PackKind
+    pack_id: str
+    from_version: str | None
+    to_version: str
+    from_sha256: str | None
+    to_sha256: str
+    registry: str
+    registry_scope: Literal["bundled", "user", "project"]
+    applied_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class PackLockEntry:
+    kind: PackKind
+    id: str
+    version: str
+    sha256: str
+    registry: str | None
+    source_sha256: str | None
+
+
+@dataclass(frozen=True)
+class PackLockRecord:
+    scope: Literal["user", "project"]
+    generated_at: str
+    packs: list[PackLockEntry]
+    path: str
+
+
+@dataclass(frozen=True)
 class MethodContract:
     id: str
     name: str
@@ -180,6 +213,7 @@ class MethodPackRecord:
     work_states: list[str]
     terminal_state: str
     source: PackSourceRecord | None = None
+    updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -219,6 +253,7 @@ class ToolPackRecord:
     path: str
     operations: list[str]
     source: PackSourceRecord | None = None
+    updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -343,6 +378,7 @@ class PackUpdateResult:
     applied: bool
     modified: bool
     packs: list[PackUpdateStep]
+    history_paths: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -588,6 +624,11 @@ class UpdateCatalogPackInput:
     registry_id: str | None = None
     apply: bool = False
     force: bool = False
+
+
+@dataclass(frozen=True)
+class RefreshPackLockInput:
+    scope: Literal["user", "project"]
 
 
 @dataclass(frozen=True)

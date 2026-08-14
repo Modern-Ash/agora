@@ -11,7 +11,14 @@ from agora.markdown import (
     render_markdown,
     string_attribute,
 )
-from agora.model import PackDependency, PackKind, PackSourceRecord
+from agora.model import (
+    PackDependency,
+    PackKind,
+    PackLockEntry,
+    PackLockRecord,
+    PackSourceRecord,
+    PackUpdateHistoryRecord,
+)
 
 PACK_KINDS: tuple[PackKind, ...] = ("method", "tool")
 PACK_VERSION_PATTERN = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)")
@@ -177,6 +184,188 @@ def render_pack_source(record: PackSourceRecord) -> str:
             body=(
                 f"# Pack source for {record.kind}/{record.id}\n\n"
                 "Agora generated this record when it installed the catalog pack."
+            ),
+        )
+    )
+
+
+def read_pack_update(path: Path) -> PackUpdateHistoryRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/pack-update/v1":
+        raise ValueError(f"Expected schema agora/pack-update/v1: {path}")
+    id_ = string_attribute(attributes, "id")
+    assert_slug(id_, "Pack update id")
+    kind = string_attribute(attributes, "kind")
+    if kind not in PACK_KINDS:
+        raise ValueError(f"Pack update kind is unsupported: {kind}")
+    pack_id = string_attribute(attributes, "pack")
+    assert_slug(pack_id, "Pack update pack id")
+    from_version = optional_string_attribute(attributes, "from-version")
+    from_sha256 = optional_string_attribute(attributes, "from-sha256")
+    if (from_version is None) != (from_sha256 is None):
+        raise ValueError(f"Pack update from-version and from-sha256 must appear together: {path}")
+    if from_version is not None:
+        validate_pack_version(from_version)
+        assert from_sha256 is not None
+        if not PACK_SOURCE_SHA256_PATTERN.fullmatch(from_sha256):
+            raise ValueError(f"Pack update from-sha256 is invalid: {path}")
+    to_version = validate_pack_version(string_attribute(attributes, "to-version"))
+    if from_version is not None and compare_pack_versions(from_version, to_version) > 0:
+        raise ValueError(f"Pack update cannot move to an older version: {path}")
+    to_sha256 = string_attribute(attributes, "to-sha256")
+    if not PACK_SOURCE_SHA256_PATTERN.fullmatch(to_sha256):
+        raise ValueError(f"Pack update to-sha256 is invalid: {path}")
+    registry = string_attribute(attributes, "registry")
+    assert_slug(registry, "Pack update registry")
+    registry_scope = string_attribute(attributes, "registry-scope")
+    if registry_scope not in {"bundled", "user", "project"}:
+        raise ValueError(f"Pack update registry scope is unsupported: {registry_scope}")
+    return PackUpdateHistoryRecord(
+        id=id_,
+        kind=kind,
+        pack_id=pack_id,
+        from_version=from_version,
+        to_version=to_version,
+        from_sha256=from_sha256,
+        to_sha256=to_sha256,
+        registry=registry,
+        registry_scope=registry_scope,
+        applied_at=string_attribute(attributes, "applied-at"),
+        path=str(path),
+    )
+
+
+def render_pack_update(record: PackUpdateHistoryRecord) -> str:
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/pack-update/v1",
+                "id": record.id,
+                "kind": record.kind,
+                "pack": record.pack_id,
+                "from-version": record.from_version,
+                "to-version": record.to_version,
+                "from-sha256": record.from_sha256,
+                "to-sha256": record.to_sha256,
+                "registry": record.registry,
+                "registry-scope": record.registry_scope,
+                "applied-at": record.applied_at,
+            },
+            body=(
+                f"# Pack update {record.id}\n\n"
+                f"Agora applied {record.kind}/{record.pack_id}@{record.to_version} from "
+                f"registry `{record.registry}`."
+            ),
+        )
+    )
+
+
+def load_pack_update_history(root: Path, kind: PackKind, id_: str) -> list[PackUpdateHistoryRecord]:
+    update_root = root / "updates"
+    directories = sorted(path for path in update_root.glob("*") if path.is_dir())
+    records: list[PackUpdateHistoryRecord] = []
+    for directory in directories:
+        record = read_pack_update(directory / "UPDATE.md")
+        if record.id != directory.name:
+            raise ValueError(f"Pack update id does not match its directory: {directory}")
+        if record.kind != kind or record.pack_id != id_:
+            raise ValueError(f"Pack update belongs to another pack: {directory}")
+        records.append(record)
+    for previous, current in zip(records, records[1:], strict=False):
+        if current.from_version != previous.to_version:
+            raise ValueError(f"Pack update version history is discontinuous: {current.path}")
+        if current.from_sha256 != previous.to_sha256:
+            raise ValueError(f"Pack update checksum history is discontinuous: {current.path}")
+    return records
+
+
+def read_pack_lock(path: Path) -> PackLockRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/pack-lock/v1":
+        raise ValueError(f"Expected schema agora/pack-lock/v1: {path}")
+    scope = string_attribute(attributes, "scope")
+    if scope not in {"user", "project"}:
+        raise ValueError(f"Pack lock scope is unsupported: {scope}")
+    raw_packs = attributes.get("packs")
+    if not isinstance(raw_packs, list):
+        raise ValueError(f"Pack lock packs must be an array: {path}")
+    packs: list[PackLockEntry] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_packs:
+        expected = {"kind", "id", "version", "sha256", "registry", "source-sha256"}
+        if not isinstance(raw, dict) or set(raw) != expected:
+            raise ValueError(f"Pack lock entries have an invalid shape: {path}")
+        kind = raw["kind"]
+        id_ = raw["id"]
+        version = raw["version"]
+        sha256 = raw["sha256"]
+        registry = raw["registry"]
+        source_sha256 = raw["source-sha256"]
+        if kind not in PACK_KINDS or not isinstance(id_, str):
+            raise ValueError(f"Pack lock kind or id is invalid: {path}")
+        assert_slug(id_, "Pack lock pack id")
+        if not isinstance(version, str):
+            raise ValueError(f"Pack lock version is invalid: {path}")
+        validate_pack_version(version)
+        if not isinstance(sha256, str) or not PACK_SOURCE_SHA256_PATTERN.fullmatch(sha256):
+            raise ValueError(f"Pack lock sha256 is invalid: {path}")
+        if registry is not None and not isinstance(registry, str):
+            raise ValueError(f"Pack lock registry is invalid: {path}")
+        if isinstance(registry, str):
+            assert_slug(registry, "Pack lock registry")
+        if source_sha256 is not None and (
+            not isinstance(source_sha256, str)
+            or not PACK_SOURCE_SHA256_PATTERN.fullmatch(source_sha256)
+        ):
+            raise ValueError(f"Pack lock source-sha256 is invalid: {path}")
+        key = (kind, id_)
+        if key in seen:
+            raise ValueError(f"Pack lock contains a duplicate pack: {kind}/{id_}")
+        seen.add(key)
+        packs.append(
+            PackLockEntry(
+                kind=kind,
+                id=id_,
+                version=version,
+                sha256=sha256,
+                registry=registry,
+                source_sha256=source_sha256,
+            )
+        )
+    if [(item.kind, item.id) for item in packs] != sorted((item.kind, item.id) for item in packs):
+        raise ValueError(f"Pack lock entries must be sorted by kind and id: {path}")
+    return PackLockRecord(
+        scope=scope,
+        generated_at=string_attribute(attributes, "generated-at"),
+        packs=packs,
+        path=str(path),
+    )
+
+
+def render_pack_lock(record: PackLockRecord) -> str:
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/pack-lock/v1",
+                "scope": record.scope,
+                "generated-at": record.generated_at,
+                "packs": [
+                    {
+                        "kind": item.kind,
+                        "id": item.id,
+                        "version": item.version,
+                        "sha256": item.sha256,
+                        "registry": item.registry,
+                        "source-sha256": item.source_sha256,
+                    }
+                    for item in record.packs
+                ],
+            },
+            body=(
+                f"# {record.scope.title()} pack composition lock\n\n"
+                "Agora generated this deterministic inventory from the installed pack trees."
             ),
         )
     )
