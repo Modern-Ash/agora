@@ -26,6 +26,9 @@ uv run python samples/recursive-swarms/run.py
 uv run python samples/delegated-work/run.py
 uv run python samples/operational-query/run.py
 uv run python samples/interruptions/run.py
+uv run python samples/project-upgrade/run.py
+uv run python samples/concurrent-writes/run.py
+uv run python samples/pack-registry/run.py
 ```
 
 ## Rules
@@ -46,6 +49,30 @@ uv run python samples/interruptions/run.py
 - Never persist raw credentials; store only external authentication references.
 - Treat humans, AI agents, services, automations, and swarms as compatible actor forms governed by
   role contracts.
+- Use Conventional Commits 1.0.0 for every commit. Use `feat` for features, `fix` for fixes, and `!`
+  or a `BREAKING CHANGE:` footer for breaking changes.
+
+## Commit messages
+
+```text
+<type>[optional scope][!]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+Examples:
+
+```text
+feat(governance): validate repository commit messages
+fix(upgrade): preserve customized tool operations
+docs: explain local writer locks
+feat(protocol)!: require explicit release evidence
+```
+
+Agora projects materialize this rule in `.agora/STANDARDS.md`. When exercising Agora itself, prefer
+the governed `repository/commit` Tool Pack operation so the input is validated before Git runs.
 
 Generated distributions, virtual environments, local `.agora`, and installed agent commands are not
 committed to this repository.

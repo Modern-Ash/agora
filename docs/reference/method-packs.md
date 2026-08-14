@@ -208,6 +208,16 @@ agora swarm create \
 
 The pack is copied to `.agora/methods/release-flow` and belongs to the project repository.
 
+Method Packs may also be discovered from a reviewed local catalog:
+
+```bash
+agora pack search --kind method --query release
+agora pack install --kind method --id release-flow \
+  --registry team-catalog --scope project
+```
+
+See [Pack registries](../guides/pack-registries.md) for registry authoring and precedence.
+
 Use `--force` to replace files for a pack with the same id. Review the Git diff because extra files
 from the previous version are not automatically deleted.
 

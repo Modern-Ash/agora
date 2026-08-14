@@ -4,6 +4,7 @@ from typing import Literal
 ActorKind = Literal["human", "ai-agent", "swarm", "service", "automation"]
 Integration = Literal["generic", "codex", "claude"]
 Method = str
+PackKind = Literal["method", "tool"]
 ToolRisk = Literal["read", "write", "destructive"]
 DelegationStatus = Literal[
     "proposed",
@@ -39,6 +40,7 @@ class UserConfiguration:
 @dataclass(frozen=True)
 class ProjectConfiguration(UserConfiguration):
     project: str
+    version: str
     created_at: str
 
 
@@ -162,6 +164,7 @@ class ToolOperation:
     risk: ToolRisk
     arguments: list[str]
     inputs: list[str]
+    input_rules: dict[str, str] = field(default_factory=dict)
     approval_role: str | None = None
     result_kind: str | None = None
 
@@ -185,6 +188,27 @@ class ToolPackRecord:
     scope: Literal["user", "project"]
     path: str
     operations: list[str]
+
+
+@dataclass(frozen=True)
+class RegistryRecord:
+    id: str
+    name: str
+    scope: Literal["bundled", "user", "project"]
+    path: str
+    methods: list[str]
+    tools: list[str]
+
+
+@dataclass(frozen=True)
+class CatalogPackRecord:
+    kind: PackKind
+    id: str
+    name: str
+    registry: str
+    registry_scope: Literal["bundled", "user", "project"]
+    path: str
+    installed: bool
 
 
 @dataclass(frozen=True)
@@ -289,6 +313,17 @@ class WorkspaceStatus:
 
 
 @dataclass(frozen=True)
+class WorkspaceLockStatus:
+    resource: str
+    path: str
+    active: bool
+    operation: str | None
+    pid: int | None
+    hostname: str | None
+    acquired_at: str | None
+
+
+@dataclass(frozen=True)
 class ValidationIssue:
     severity: ValidationSeverity
     code: str
@@ -302,6 +337,25 @@ class ValidationReport:
     project: str
     checked: dict[str, int]
     issues: list[ValidationIssue]
+
+
+@dataclass(frozen=True)
+class UpgradeChange:
+    action: Literal["create", "update"]
+    path: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class UpgradeResult:
+    from_version: str
+    to_version: str
+    required: bool
+    applied: bool
+    id: str | None
+    record_path: str | None
+    changes: list[UpgradeChange]
+    warnings: list[str]
 
 
 @dataclass(frozen=True)
@@ -326,6 +380,12 @@ class InitInput:
 
 
 @dataclass(frozen=True)
+class UpgradeInput:
+    apply: bool = False
+    id: str | None = None
+
+
+@dataclass(frozen=True)
 class InstallMethodInput:
     source: str
     scope: Literal["user", "project"]
@@ -336,6 +396,22 @@ class InstallMethodInput:
 class InstallToolInput:
     source: str
     scope: Literal["user", "project"]
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class InstallRegistryInput:
+    source: str
+    scope: Literal["user", "project"]
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class InstallCatalogPackInput:
+    kind: PackKind
+    pack_id: str
+    scope: Literal["user", "project"]
+    registry_id: str | None = None
     force: bool = False
 
 

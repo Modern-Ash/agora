@@ -38,8 +38,10 @@ Agora distribution
   project.md            Effective project configuration
   constitution.md       Local principles and restrictions
   PROTOCOL.md           Shared collaboration protocol
+  STANDARDS.md          Enforced cross-actor engineering standards
   commands/*.md         Portable agent commands
   methods/              Built-in and custom lifecycle Method Packs
+  registries/           Project-local pack catalog snapshots
   actors/               Project-specific actors
   tools/                Policy and installed Tool Packs
   artifacts/            Artifact catalog
@@ -47,6 +49,7 @@ Agora distribution
   swarms/               Durable work state
   sessions/             Resolved runtimes and compiled execution context
   tool-runs/             Governed external invocations and results
+  upgrades/              Applied migrations, manifests, and pre-change backups
 ```
 
 Configuration precedence is:
@@ -96,6 +99,18 @@ Initial integrations:
 Provider and model values describe the selected environment. This MVP does not call an LLM API or
 store credentials.
 
+Existing projects are never rewritten merely because the CLI was updated. Preview and then apply a
+supported protocol migration explicitly:
+
+```bash
+agora upgrade
+agora upgrade --apply
+agora validate
+```
+
+Each applied migration is recorded under `.agora/upgrades` with backups of every updated file. See
+the [project upgrade guide](docs/guides/project-upgrades.md) for compatibility and recovery rules.
+
 ## Customize the lifecycle
 
 A Method Pack is a Markdown contract for a work lifecycle. It defines role requirements, allowed
@@ -119,6 +134,19 @@ agora swarm create --id delivery --objective "Deliver the objective" --method my
 
 See [the custom lifecycle sample](samples/custom-lifecycle/README.md) for a pack that does not derive
 from Scrum or Kanban.
+
+Discover bundled and locally registered packs, or install a reviewed registry snapshot:
+
+```bash
+agora registry install --source ./team-registry --scope user
+agora registry list
+agora pack search --kind method --query release
+agora pack install --kind method --id release-flow \
+  --registry team-catalog --scope project
+```
+
+Project registries override user registries, which override the bundled catalog when the same pack id
+appears more than once. See the [pack registry guide](docs/guides/pack-registries.md).
 
 ## Actors and swarms
 
@@ -234,11 +262,18 @@ agora tool show --tool repository
 agora tool invoke --id payment-status \
   --tool repository --operation status \
   --actor delivery-swarm --swarm payments --launch
+
+# After staging the intended files:
+agora tool invoke --id payment-commit \
+  --tool repository --operation commit \
+  --actor delivery-swarm --swarm payments \
+  --input message="feat(payments): add governed payment API" --launch
 ```
 
 The executable runs without a shell. Agora persists `RUN.md`, captures output and exit status in
 `RESULT.md`, and stores no credentials. Omitting `--launch` creates a portable invocation for an IDE,
-CI worker, or cloud executor.
+CI worker, or cloud executor. The commit operation validates Conventional Commits 1.0.0 before a run
+record or Git commit is created.
 
 ## Governed work
 
@@ -313,6 +348,23 @@ Each swarm contains its manifest, assignments, interactions, events, work, artif
 The filesystem represents current state. Git provides history, branches, review, synchronization,
 and handoffs across IDEs, CLIs, CI/CD systems, and cloud agents.
 
+## Concurrent writers
+
+Mutating operations take an operating-system lock for the complete project or user-home transaction.
+This serializes local CLIs, IDE integrations, agent processes, and Python API clients without adding
+runtime files to the repository. Contention fails immediately unless `AGORA_LOCK_TIMEOUT` configures
+a bounded wait:
+
+```bash
+agora lock status
+AGORA_LOCK_TIMEOUT=10 agora work transition \
+  --swarm payments --work payment-api --to reviewing --by delivery-swarm
+```
+
+Locks are reentrant for nested Agora operations and release on success, exceptions, or process exit.
+They coordinate processes that share one host and lock directory; distributed leases across separate
+hosts remain future work. See the [concurrent writers guide](docs/guides/concurrent-writers.md).
+
 ## Operational queries and validation
 
 Agora reads the Markdown source of truth into deterministic JSON views for humans, agents, IDEs,
@@ -366,6 +418,9 @@ uv run python samples/recursive-swarms/run.py
 uv run python samples/delegated-work/run.py
 uv run python samples/operational-query/run.py
 uv run python samples/interruptions/run.py
+uv run python samples/project-upgrade/run.py
+uv run python samples/concurrent-writes/run.py
+uv run python samples/pack-registry/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -385,6 +440,9 @@ collects its terminal result into the parent. The
 workspace directly from its Markdown records. The
 [interruption sample](samples/interruptions/README.md) exercises work and delegation blocking,
 resumption, rejection, and cancellation.
+The [project upgrade sample](samples/project-upgrade/README.md) applies a backed-up protocol
+migration, while the [concurrent writers sample](samples/concurrent-writes/README.md) demonstrates
+local process contention and recovery.
 
 ## Documentation
 
@@ -401,6 +459,9 @@ resumption, rejection, and cancellation.
 - [Operations and validation](docs/guides/operations-and-validation.md)
 - [Complete verification](docs/guides/verification.md)
 - [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
+- [Concurrent writers](docs/guides/concurrent-writers.md)
+- [Conventional Commits](docs/guides/conventional-commits.md)
+- [Pack registries](docs/guides/pack-registries.md)
 - [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
 - [ADR 0001](docs/decisions/0001-initial-architecture.md)
 - [Contributing](CONTRIBUTING.md)
@@ -409,12 +470,14 @@ resumption, rejection, and cancellation.
 
 - Scrum and Kanban are starter Method Packs, not privileged core workflows or exhaustive methodology
   implementations.
-- Method Packs are installed from local directories; a package registry is not implemented yet.
+- Method and Tool Packs can be discovered through bundled, user, and project registry snapshots.
+  Remote indexes, signed releases, and dependency resolution are not implemented yet.
 - The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
   Confluence, and cloud platforms are not bundled yet.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
-  distributed locks, and remote concurrency remain future work. Explicit child work acceptance,
-  interruption, cancellation, and reference-based result collection are implemented.
+  distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
+  explicit child work acceptance, interruption, cancellation, and reference-based result collection
+  are implemented.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.
 

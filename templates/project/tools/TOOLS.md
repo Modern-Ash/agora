@@ -16,6 +16,8 @@ cloud providers, observability platforms, and communication services.
 - Destructive, merge, release, and production actions require explicit policy and evidence.
 - Method Packs and role policies may further restrict this catalog.
 - Invoke installed operations through `agora tool invoke` so attribution and results remain durable.
+- Create commits through `repository/commit`; its message must satisfy the configured Conventional
+  Commits input rule.
 
 ## Project tools
 

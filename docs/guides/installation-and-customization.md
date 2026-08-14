@@ -60,7 +60,7 @@ Build the source distribution and wheel, then install the wheel as a tool:
 ```bash
 uv sync --extra dev
 uv build
-uv tool install --force dist/agora_framework-0.1.0-py3-none-any.whl
+uv tool install --force dist/agora_framework-0.2.0-py3-none-any.whl
 agora --help
 ```
 
@@ -95,9 +95,10 @@ agora configure --help
 agora method install --help
 ```
 
-The CLI should list `configure`, `init`, `doctor`, `status`, `validate`, `start`, `method`, `tool`,
-`delegation`, `actor`, `swarm`, `work`, `session`, `event`, `artifact`, `evidence`, and `approval`.
-These commands operate on files; no background process should be running.
+The CLI should list `configure`, `init`, `upgrade`, `doctor`, `status`, `validate`, `lock`, `registry`,
+`pack`, `start`, `method`, `tool`, `delegation`, `actor`, `swarm`, `work`, `session`, `event`,
+`artifact`, `evidence`, and `approval`. These commands operate on files; no background process should
+be running.
 
 ## Configuration scopes
 
@@ -133,6 +134,17 @@ agora configure \
 This is useful for isolated experiments, CI jobs, separate work identities, and test environments.
 Persist the environment variable in the shell or runner configuration when the alternate location
 should be stable.
+
+Agora stores local writer lock metadata outside the project. Override its runtime directory or
+configure a bounded contention wait when needed:
+
+```bash
+export AGORA_LOCK_HOME="$HOME/.cache/agora/locks"
+export AGORA_LOCK_TIMEOUT=10
+```
+
+Lock files are not project state and must not be committed. See
+[Concurrent writers](concurrent-writers.md) for ownership inspection and scope boundaries.
 
 ## Customize user defaults
 
@@ -197,16 +209,19 @@ and version the files that define the shared contract:
 .agora/project.md
 .agora/constitution.md
 .agora/PROTOCOL.md
+.agora/STANDARDS.md
 .agora/tools/TOOLS.md
 .agora/tools/repository/TOOL.md
 .agora/methods/
+.agora/registries/
 .agora/commands/
 .agora/sessions/
 ```
 
 Edit the constitution for engineering, security, compliance, and approval rules. Edit the protocol
-for handoffs, escalation, communication, and durable-record expectations. Edit tool policy to name
-allowed external systems and restricted actions.
+for handoffs, escalation, communication, and durable-record expectations. `STANDARDS.md` enables
+Conventional Commits 1.0.0 for repository history. Edit tool policy to name allowed external systems
+and restricted actions.
 
 These Markdown changes are immediately visible to humans and agents. Free-form policy prose remains
 instructional. Method transition contracts, gates, role capabilities, and Tool Pack operations are
@@ -343,9 +358,10 @@ The `integration` field selects one adapter at initialization:
 | `generic` | `.agora/commands/*.md` only |
 
 Every project receives the portable `.agora/commands` set. Codex and Claude additionally receive a
-copy in their environment-specific location. The MVP has no synchronization command: if portable
-commands are customized after initialization, review and update the installed adapter files as part
-of the same change.
+copy in their environment-specific location. `agora upgrade` installs commands and adapters added by
+a supported framework migration only when their paths are absent. It preserves existing adapter
+content; if portable commands are customized, review and update their adapter files as part of the
+same change.
 
 Prepare an execution session after an actor is assigned to a ready or running swarm:
 
@@ -387,7 +403,19 @@ agora --help
 ```
 
 Updating the CLI does not automatically rewrite existing `.agora` workspaces. This protects local
-policy and work history. Review release notes and template diffs before applying new defaults.
+policy and work history. Preview the supported project migration after updating:
+
+```bash
+cd /path/to/project
+agora upgrade
+agora upgrade --apply
+agora validate
+```
+
+The first command performs no writes. The second stores a manifest and pre-change file backups under
+`.agora/upgrades/<upgrade-id>`. Existing constitutions, protocols, Method Packs, Tool Packs, and
+commands are not overwritten. See [Project upgrades](project-upgrades.md) for recovery and
+compatibility details.
 
 `agora init --force` replaces generated project, method, command, and adapter files. Use it only on a
 reviewable branch after backing up or committing project customizations. It is not a general upgrade

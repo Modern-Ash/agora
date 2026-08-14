@@ -12,6 +12,10 @@ approvals. Invoke installed external operations through `agora tool invoke` so t
 results are durable. When work is delegated, read the related `DELEGATION.md` and act only within its
 parent or child contract. Do not invent a transition or bypass a gate.
 
+When repository history is required, read `.agora/STANDARDS.md` and use the governed
+`repository/commit` operation with a Conventional Commits 1.0.0 message. Do not bypass its input
+validation with an ungoverned Git command.
+
 If active work cannot proceed, use an authorized block with an explicit reason instead of inventing
 a Method Pack state. Do not mutate blocked or cancelled work. Resume only after its stated blocker is
 resolved. Treat delegation rejection as child authority and delegation cancellation as parent

@@ -17,6 +17,10 @@ def main() -> None:
     project = Path(tempfile.mkdtemp(prefix="agora-tool-project-"))
     os.environ["AGORA_HOME"] = tempfile.mkdtemp(prefix="agora-tool-home-")
     subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "config", "user.name", "Agora Sample"], check=True)
+    subprocess.run(
+        ["git", "-C", str(project), "config", "user.email", "agora@example.invalid"], check=True
+    )
     (project / "README.md").write_text("# Governed project\n")
     agora = AgoraWorkspace(cwd=project)
     agora.initialize(InitInput(integration="generic", default_method="scrum"))
@@ -49,7 +53,7 @@ def main() -> None:
     agora.create_swarm(
         CreateSwarmInput(
             id="tool-demo",
-            objective="Inspect the repository through a governed tool operation",
+            objective="Inspect and commit through governed repository operations",
         )
     )
     for role, actor_id in (
@@ -69,12 +73,43 @@ def main() -> None:
             launch=True,
         )
     )
+    subprocess.run(["git", "-C", str(project), "add", "README.md"], check=True)
+    try:
+        agora.invoke_tool(
+            InvokeToolInput(
+                id="invalid-commit",
+                tool_id="repository",
+                operation_id="commit",
+                actor_id="developer",
+                swarm_id="tool-demo",
+                inputs={"message": "save the readme"},
+            )
+        )
+    except ValueError as error:
+        rejected = str(error)
+    else:
+        raise AssertionError("The non-conforming commit message was accepted")
+    assert not (project / ".agora" / "tool-runs" / "invalid-commit").exists()
+    commit = agora.invoke_tool(
+        InvokeToolInput(
+            id="repository-commit",
+            tool_id="repository",
+            operation_id="commit",
+            actor_id="developer",
+            swarm_id="tool-demo",
+            inputs={"message": "docs(sample): add governed project readme"},
+            launch=True,
+        )
+    )
     print(f"Project: {project}")
     print(f"Tool: {run.tool_id}/{run.operation_id}")
     print(f"Actor: {run.actor}")
     print(f"Status: {run.status} (exit {run.exit_code})")
     print(f"Invocation: {Path(run.path) / 'RUN.md'}")
     print(f"Result: {Path(run.path) / 'RESULT.md'}")
+    print(f"Rejected commit: {rejected}")
+    print(f"Commit: {commit.status} (exit {commit.exit_code})")
+    print(f"Commit result: {Path(commit.path) / 'RESULT.md'}")
 
 
 if __name__ == "__main__":

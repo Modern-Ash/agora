@@ -83,6 +83,7 @@ It checks:
 - Portable agent commands and Codex, Claude, or generic adapter completeness and consistency.
 - Method Pack graphs, roles, gates, WIP definitions, and project default selection.
 - Tool Pack operations, inputs, risks, and result contracts.
+- Project standards and registered Tool Pack input rules, including Conventional Commits 1.0.0.
 - Actor documents, ids, kinds, capabilities, and referenced user actors.
 - Swarm identity, status, assignments, role compatibility, recursive cycles, and depth.
 - Work identity, owning swarm, lifecycle and operational states, criteria, companion registers, WIP,
