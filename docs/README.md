@@ -15,6 +15,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   through project rules and governed Tool Pack input validation.
 - [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
   Tool Packs, and select provenance with deterministic scope precedence.
+- [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
+  resolve catalog dependencies, and reject broken or cyclic compositions.
 - [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
   checksum-pinned and Ed25519-signed registry snapshots.
 - [Registry trust stores](guides/registry-trust.md): approve, resolve, rotate, and revoke registry
@@ -72,6 +74,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   continue safely after the operating-system lock is released.
 - [Pack registry](../samples/pack-registry/README.md): discover and install a custom lifecycle from a
   user-scoped Markdown catalog.
+- [Pack dependencies](../samples/pack-dependencies/README.md): install a Method Pack and recursively
+  resolve its compatible Tool Pack dependency.
 - [Remote registry](../samples/remote-registry/README.md): verify a signed, versioned registry release
   and persist its provenance.
 

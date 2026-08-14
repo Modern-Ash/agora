@@ -2,6 +2,8 @@
 schema: "agora/method/v1"
 id: "kanban"
 name: "Kanban"
+version: "1.0.0"
+dependencies: []
 required-roles: ["service-request-manager", "flow-manager", "delivery"]
 work-states: ["requested", "ready", "in-progress", "review", "done"]
 terminal-state: "done"

@@ -35,6 +35,8 @@ participants.
 schema: "agora/method/v1"
 id: "release-flow"
 name: "Release Flow"
+version: "1.0.0"
+dependencies: [{"kind":"tool","id":"repository","version":">=1.0.0,<2.0.0"}]
 required-roles: ["owner", "maker", "validator"]
 work-states: ["proposed", "active", "review", "released"]
 terminal-state: "released"
@@ -51,6 +53,8 @@ Describe the lifecycle, its intent, and its completion expectations here.
 | `schema` | Must be `agora/method/v1` |
 | `id` | Lowercase slug matching `[a-z][a-z0-9-]*` |
 | `name` | Non-empty human-readable name |
+| `version` | Numeric `MAJOR.MINOR.PATCH`; omitted legacy versions resolve as `0.0.0` |
+| `dependencies` | Optional array of version-constrained Method or Tool Pack references |
 | `required-roles` | Non-empty array of role ids |
 | `work-states` | Non-empty array of unique state ids |
 | `terminal-state` | Must identify one of the declared states |
@@ -59,6 +63,10 @@ Describe the lifecycle, its intent, and its completion expectations here.
 Every declared state must be reachable from the first state. The terminal state cannot have outgoing
 transitions. For a legacy pack without `transitions/`, Agora derives edges between adjacent states;
 in that case the terminal state must remain the final item.
+
+Catalog installation resolves dependencies before copying the pack. Direct source installation
+requires them to exist already. See [Pack dependencies](../guides/pack-dependencies.md) for range,
+scope, cycle, and replacement rules.
 
 ## Transition graph
 

@@ -66,6 +66,7 @@ from agora.model import (
     Method,
     MethodContract,
     MethodPackRecord,
+    PackKind,
     ProjectConfiguration,
     RegistryRecord,
     RegistrySourceRecord,
@@ -95,6 +96,7 @@ from agora.model import (
     WorkspaceLockStatus,
     WorkspaceStatus,
 )
+from agora.packs import pack_reference, version_satisfies
 from agora.registries import (
     bundled_registry,
     discover_registry_packs,
@@ -308,23 +310,8 @@ class AgoraWorkspace:
             raise FileNotFoundError(f"Method Pack is missing METHOD.md: {source}")
 
         contract = load_method_contract(source)
-
-        destination_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
-        destination = destination_root / "methods" / contract.id
-        if destination.exists() and not data.force:
-            raise FileExistsError(
-                f"Method Pack already exists: {destination}. Pass --force to replace its files."
-            )
-        copy_template_tree(source, destination, {}, data.force)
-        return MethodPackRecord(
-            id=contract.id,
-            name=contract.name,
-            scope=data.scope,
-            path=str(destination),
-            required_roles=contract.required_roles,
-            work_states=contract.work_states,
-            terminal_state=contract.terminal_state,
-        )
+        self._assert_candidate_composition("method", contract, data.scope)
+        return self._install_method_snapshot(source, data.scope, data.force, contract)
 
     @_locked_mutation("scoped")
     def install_tool(self, data: InstallToolInput) -> ToolPackRecord:
@@ -334,14 +321,42 @@ class AgoraWorkspace:
         if not (source / "TOOL.md").is_file():
             raise FileNotFoundError(f"Tool Pack is missing TOOL.md: {source}")
         contract = load_tool_contract(source)
-        destination_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        self._assert_candidate_composition("tool", contract, data.scope)
+        return self._install_tool_snapshot(source, data.scope, data.force, contract)
+
+    def _install_method_snapshot(
+        self,
+        source: Path,
+        scope: str,
+        force: bool,
+        contract: MethodContract | None = None,
+    ) -> MethodPackRecord:
+        contract = contract or load_method_contract(source)
+        destination_root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        destination = destination_root / "methods" / contract.id
+        if destination.exists() and not force:
+            raise FileExistsError(
+                f"Method Pack already exists: {destination}. Pass --force to replace its files."
+            )
+        copy_template_tree(source, destination, {}, force)
+        return self._method_pack_record(contract, scope, destination)
+
+    def _install_tool_snapshot(
+        self,
+        source: Path,
+        scope: str,
+        force: bool,
+        contract: ToolContract | None = None,
+    ) -> ToolPackRecord:
+        contract = contract or load_tool_contract(source)
+        destination_root = agora_home() if scope == "user" else self.project_root() / ".agora"
         destination = destination_root / "tools" / contract.id
-        if destination.exists() and not data.force:
+        if destination.exists() and not force:
             raise FileExistsError(
                 f"Tool Pack already exists: {destination}. Pass --force to replace its files."
             )
-        copy_template_tree(source, destination, {}, data.force)
-        return self._tool_pack_record(contract, data.scope, destination)
+        copy_template_tree(source, destination, {}, force)
+        return self._tool_pack_record(contract, scope, destination)
 
     @_locked_mutation("scoped")
     def install_registry(self, data: InstallRegistryInput) -> RegistryRecord:
@@ -689,13 +704,178 @@ class AgoraWorkspace:
             origin = f" in registry {data.registry_id}" if data.registry_id else ""
             raise FileNotFoundError(f"Catalog pack not found: {data.kind}/{data.pack_id}{origin}")
         selected = matches[0]
-        if data.kind == "method":
-            return self.install_method(
-                InstallMethodInput(source=selected.path, scope=data.scope, force=data.force)
+        self._assert_pack_destination_available(data.kind, data.pack_id, data.scope, data.force)
+        plan = self._resolve_catalog_install(selected, data.scope, data.force)
+        for pack in plan:
+            self._assert_pack_destination_available(pack.kind, pack.id, data.scope, data.force)
+        installed: MethodPackRecord | ToolPackRecord | None = None
+        for pack in plan:
+            source = Path(pack.path)
+            if pack.kind == "method":
+                record = self._install_method_snapshot(
+                    source, data.scope, data.force, load_method_contract(source)
+                )
+            else:
+                record = self._install_tool_snapshot(
+                    source, data.scope, data.force, load_tool_contract(source)
+                )
+            if pack.kind == selected.kind and pack.id == selected.id:
+                installed = record
+        assert installed is not None
+        return installed
+
+    def _resolve_catalog_install(
+        self, selected: CatalogPackRecord, scope: str, force: bool
+    ) -> list[CatalogPackRecord]:
+        installed = self._installed_pack_contracts(scope)
+        planned = dict(installed)
+        catalog = self.search_catalog()
+        ordered: list[CatalogPackRecord] = []
+        selected_packs: dict[tuple[str, str], CatalogPackRecord] = {}
+
+        def visit(pack: CatalogPackRecord) -> None:
+            key = (pack.kind, pack.id)
+            previous = selected_packs.get(key)
+            if previous is not None:
+                if previous.version != pack.version:
+                    raise ValueError(
+                        f"Pack resolution selected conflicting versions for {pack.kind}/{pack.id}: "
+                        f"{previous.version} and {pack.version}"
+                    )
+                return
+            contract = self._catalog_pack_contract(pack)
+            selected_packs[key] = pack
+            planned[key] = contract
+            for dependency in contract.dependencies:
+                dependency_key = (dependency.kind, dependency.id)
+                available = planned.get(dependency_key)
+                if available is not None and version_satisfies(
+                    available.version, dependency.version
+                ):
+                    continue
+                current = installed.get(dependency_key)
+                if current is not None and not force:
+                    raise ValueError(
+                        "Installed "
+                        f"{pack_reference(dependency.kind, dependency.id, current.version)} "
+                        f"does not satisfy {dependency.version}; pass --force to replace it"
+                    )
+                candidates = [
+                    candidate
+                    for candidate in catalog
+                    if candidate.kind == dependency.kind
+                    and candidate.id == dependency.id
+                    and version_satisfies(candidate.version, dependency.version)
+                ]
+                if not candidates:
+                    raise ValueError(
+                        f"Cannot resolve dependency {dependency.kind}/{dependency.id} "
+                        f"{dependency.version} required by "
+                        f"{pack_reference(pack.kind, pack.id, pack.version)}"
+                    )
+                visit(candidates[0])
+            ordered.append(pack)
+
+        visit(selected)
+        issues = self._pack_composition_issues(planned)
+        if issues:
+            raise ValueError(issues[0][1])
+        return ordered
+
+    def _assert_candidate_composition(
+        self,
+        kind: PackKind,
+        contract: MethodContract | ToolContract,
+        scope: str,
+    ) -> None:
+        installed = self._installed_pack_contracts(scope)
+        installed[(kind, contract.id)] = contract
+        issues = self._pack_composition_issues(installed)
+        if issues:
+            raise ValueError(issues[0][1])
+
+    def _installed_pack_contracts(
+        self, scope: str
+    ) -> dict[tuple[str, str], MethodContract | ToolContract]:
+        root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        contracts: dict[tuple[str, str], MethodContract | ToolContract] = {}
+        for path in sorted((root / "methods").glob("*/METHOD.md")):
+            contract = load_method_contract(path.parent)
+            contracts[("method", contract.id)] = contract
+        for path in sorted((root / "tools").glob("*/TOOL.md")):
+            contract = load_tool_contract(path.parent)
+            contracts[("tool", contract.id)] = contract
+        return contracts
+
+    @staticmethod
+    def _catalog_pack_contract(pack: CatalogPackRecord) -> MethodContract | ToolContract:
+        source = Path(pack.path)
+        return load_method_contract(source) if pack.kind == "method" else load_tool_contract(source)
+
+    def _assert_pack_destination_available(
+        self, kind: PackKind, id_: str, scope: str, force: bool
+    ) -> None:
+        root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        destination = root / f"{kind}s" / id_
+        if destination.exists() and not force:
+            raise FileExistsError(
+                f"{kind.title()} Pack already exists: {destination}. "
+                "Pass --force to replace its files."
             )
-        return self.install_tool(
-            InstallToolInput(source=selected.path, scope=data.scope, force=data.force)
-        )
+
+    @staticmethod
+    def _pack_composition_issues(
+        contracts: dict[tuple[str, str], MethodContract | ToolContract],
+    ) -> list[tuple[tuple[str, str], str]]:
+        issues: list[tuple[tuple[str, str], str]] = []
+        for key, contract in sorted(contracts.items()):
+            owner = pack_reference(key[0], key[1], contract.version)
+            for dependency in contract.dependencies:
+                target = contracts.get((dependency.kind, dependency.id))
+                if target is None:
+                    issues.append(
+                        (
+                            key,
+                            f"{owner} requires missing {dependency.kind}/{dependency.id} "
+                            f"{dependency.version}",
+                        )
+                    )
+                elif not version_satisfies(target.version, dependency.version):
+                    issues.append(
+                        (
+                            key,
+                            f"{owner} requires {dependency.kind}/{dependency.id} "
+                            f"{dependency.version}, but {target.version} is installed",
+                        )
+                    )
+
+        states: dict[tuple[str, str], str] = {}
+        stack: list[tuple[str, str]] = []
+
+        def visit(key: tuple[str, str]) -> None:
+            state = states.get(key)
+            if state == "done":
+                return
+            if state == "active":
+                start = stack.index(key)
+                cycle = stack[start:] + [key]
+                rendered = " -> ".join(
+                    pack_reference(item[0], item[1], contracts[item].version) for item in cycle
+                )
+                issues.append((key, f"Pack dependency cycle: {rendered}"))
+                return
+            states[key] = "active"
+            stack.append(key)
+            for dependency in contracts[key].dependencies:
+                target = (dependency.kind, dependency.id)
+                if target in contracts:
+                    visit(target)
+            stack.pop()
+            states[key] = "done"
+
+        for key in sorted(contracts):
+            visit(key)
+        return issues
 
     def show_tool(self, tool_id: str) -> ToolPackRecord:
         assert_slug(tool_id, "Tool id")
@@ -712,6 +892,8 @@ class AgoraWorkspace:
                 MethodPackRecord(
                     id=contract.id,
                     name=contract.name,
+                    version=contract.version,
+                    dependencies=contract.dependencies,
                     scope="project",
                     path=str(path.parent),
                     required_roles=contract.required_roles,
@@ -2285,6 +2467,19 @@ class AgoraWorkspace:
                         path,
                         f"Tool id {contract.id} does not match directory {path.parent.name}",
                     )
+
+        installed_packs: dict[tuple[str, str], MethodContract | ToolContract] = {
+            **{("method", id_): contract for id_, contract in methods.items()},
+            **{("tool", id_): contract for id_, contract in tools.items()},
+        }
+        for key, message in self._pack_composition_issues(installed_packs):
+            kind, id_ = key
+            manifest = "METHOD.md" if kind == "method" else "TOOL.md"
+            issue(
+                "pack.dependency-invalid",
+                root / ".agora" / f"{kind}s" / id_ / manifest,
+                message,
+            )
 
         actor_cache: dict[str, ActorRecord] = {}
         actor_root = root / ".agora" / "actors"
@@ -3962,10 +4157,26 @@ class AgoraWorkspace:
         return paths
 
     @staticmethod
+    def _method_pack_record(contract: MethodContract, scope: str, path: Path) -> MethodPackRecord:
+        return MethodPackRecord(
+            id=contract.id,
+            name=contract.name,
+            version=contract.version,
+            dependencies=contract.dependencies,
+            scope=scope,
+            path=str(path),
+            required_roles=contract.required_roles,
+            work_states=contract.work_states,
+            terminal_state=contract.terminal_state,
+        )
+
+    @staticmethod
     def _tool_pack_record(contract: ToolContract, scope: str, path: Path) -> ToolPackRecord:
         return ToolPackRecord(
             id=contract.id,
             name=contract.name,
+            version=contract.version,
+            dependencies=contract.dependencies,
             category=contract.category,
             executable=contract.executable,
             scope=scope,

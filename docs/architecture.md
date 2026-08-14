@@ -30,6 +30,8 @@ Tool Packs and structured external operations. `src/agora/markdown.py` implement
 JSON-compatible front matter used by the protocol. `src/agora/upgrades.py` plans ordered project
 migrations, preserves customization boundaries, backs up changed files, and writes durable upgrade
 manifests.
+`src/agora/packs.py` validates shared pack versions, dependency declarations, and compatibility
+ranges.
 `src/agora/registries.py` validates installed registry snapshots and discovers Method and Tool Packs.
 `src/agora/registry_distribution.py` resolves remote Markdown indexes, selects semantic releases,
 enforces transport and archive limits, verifies SHA-256 and optional Ed25519 signatures, and extracts
@@ -80,6 +82,12 @@ to one registry id, and a matching revocation blocks both automatic resolution a
 Registry updates are read-only plans unless application is explicit. Update staging carries forward
 installer-owned history, adds the next transition record, validates the complete candidate, and only
 then replaces the installed snapshot. Registry updates never mutate separately installed packs.
+
+Method and Tool Pack manifests declare semantic versions and optional cross-kind dependencies.
+Catalog installation resolves the complete dependency graph using registry precedence, checks the
+prospective target-scope composition, and installs dependencies before their consumer. Direct source
+installation requires dependencies to be present already. Project validation repeats composition
+checks so manual filesystem edits cannot leave missing, incompatible, or cyclic dependencies hidden.
 
 ### Git and filesystem
 

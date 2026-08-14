@@ -153,6 +153,9 @@ agora pack install --kind method --id release-flow \
 
 Project registries override user registries, which override the bundled catalog when the same pack id
 appears more than once. See the [pack registry guide](docs/guides/pack-registries.md).
+Pack manifests declare versions and optional Method or Tool dependencies. Catalog installation
+resolves compatible dependencies before copying and rejects broken or cyclic compositions. See the
+[pack dependency guide](docs/guides/pack-dependencies.md).
 Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
 provenance beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
@@ -435,6 +438,7 @@ uv run python samples/interruptions/run.py
 uv run python samples/project-upgrade/run.py
 uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
+uv run python samples/pack-dependencies/run.py
 uv run python samples/remote-registry/run.py
 ```
 
@@ -458,6 +462,8 @@ resumption, rejection, and cancellation.
 The [project upgrade sample](samples/project-upgrade/README.md) applies a backed-up protocol
 migration, while the [concurrent writers sample](samples/concurrent-writes/README.md) demonstrates
 local process contention and recovery. The
+[pack dependency sample](samples/pack-dependencies/README.md) installs a Method Pack and resolves its
+compatible Tool Pack before copying either catalog selection. The
 [remote registry sample](samples/remote-registry/README.md) signs, verifies, installs, and validates a
 versioned registry snapshot without persisting a private key.
 
@@ -479,6 +485,7 @@ versioned registry snapshot without persisting a private key.
 - [Concurrent writers](docs/guides/concurrent-writers.md)
 - [Conventional Commits](docs/guides/conventional-commits.md)
 - [Pack registries](docs/guides/pack-registries.md)
+- [Pack dependencies](docs/guides/pack-dependencies.md)
 - [Remote registry releases](docs/guides/remote-registries.md)
 - [Registry trust stores](docs/guides/registry-trust.md)
 - [Registry updates](docs/guides/registry-updates.md)
@@ -492,8 +499,9 @@ versioned registry snapshot without persisting a private key.
   implementations.
 - Method and Tool Packs can be discovered through bundled, user, project, and verified remote
   registry snapshots. Local and project trust stores, rotation, and revocation are implemented;
-  explicit update checks and transactional application are implemented. Organization trust
-  synchronization, transparency, dependency resolution, and background notifications are not.
+  explicit update checks, transactional application, and dependency-aware installation are
+  implemented. Organization trust synchronization, transparency, automatic installed-pack updates,
+  and background notifications are not.
 - The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
   Confluence, and cloud platforms are not bundled yet.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,

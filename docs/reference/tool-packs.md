@@ -23,6 +23,8 @@ Both `TOOL.md` and at least one operation file are required.
 schema: "agora/tool/v1"
 id: "issue-tracker"
 name: "Team issue tracker"
+version: "1.0.0"
+dependencies: []
 category: "issue-tracker"
 executable: "tracker-cli"
 authentication-reference: "tracker-cli-profile"
@@ -38,12 +40,17 @@ Describe installation, environment, and governance expectations here.
 | `schema` | Must be `agora/tool/v1` |
 | `id` | Lowercase Agora slug |
 | `name` | Non-empty display name |
+| `version` | Numeric `MAJOR.MINOR.PATCH`; omitted legacy versions resolve as `0.0.0` |
+| `dependencies` | Optional array of version-constrained Method or Tool Pack references |
 | `category` | Provider-neutral lowercase slug such as `repository` or `ci` |
 | `executable` | One executable name or path; never a shell expression |
 | `authentication-reference` | Optional non-secret reference to external authentication |
 
 The executable is resolved by the environment when `--launch` is used. A prepared invocation does
 not require it to be installed.
+
+Dependencies use the same manifest and resolver contract as Method Packs. See
+[Pack dependencies](../guides/pack-dependencies.md).
 
 ## Operation manifest
 

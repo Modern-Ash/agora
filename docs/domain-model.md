@@ -10,6 +10,11 @@ custom pack may implement the same Markdown contract.
 No Method Pack is privileged by the core. A project can model a standard methodology, an internal
 software delivery process, an operational runbook, or a purpose-built hybrid lifecycle.
 
+Every Method and Tool Pack has a numeric semantic version and may depend on version ranges of other
+packs. A **Pack Dependency** names a `method` or `tool`, its id, and a compatibility constraint.
+Catalog resolution selects dependencies before their consumer; project validation treats all
+installed packs as one composition and rejects missing, incompatible, or cyclic relationships.
+
 ## Actor, role, and assignment
 
 An **Actor** has an identity, kind, and capabilities. Kinds include human, AI agent, swarm, service,
@@ -119,6 +124,10 @@ registry after installation.
 When pack ids collide, project registry provenance precedes user provenance, which precedes the
 bundled distribution. Explicit registry selection overrides inference while preserving pack
 validation and destination-scope overwrite rules.
+
+Dependencies may resolve across visible registries, but installed copies remain bound to their
+target scope. Replacing one pack is rejected when the prospective version would break another
+installed pack.
 
 A remote registry index publishes one or more semantic releases. Each release identifies an archive,
 mandatory SHA-256, and optional Ed25519 signature plus key id. After verification Agora installs the

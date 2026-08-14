@@ -10,6 +10,7 @@ from agora.markdown import (
     strings_attribute,
 )
 from agora.model import ACTOR_KINDS, GatePolicy, MethodContract, TransitionRule
+from agora.packs import pack_manifest_metadata
 
 TOOL_CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
 ACTION_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
@@ -23,6 +24,7 @@ def load_method_contract(root: Path) -> MethodContract:
     method_id = string_attribute(document.attributes, "id")
     assert_slug(method_id, "Method id")
     name = string_attribute(document.attributes, "name")
+    version, dependencies = pack_manifest_metadata(document.attributes, f"method/{method_id}")
     required_roles = strings_attribute(document.attributes, "required-roles")
     states = strings_attribute(document.attributes, "work-states")
     terminal_state = string_attribute(document.attributes, "terminal-state")
@@ -91,6 +93,8 @@ def load_method_contract(root: Path) -> MethodContract:
     return MethodContract(
         id=method_id,
         name=name,
+        version=version,
+        dependencies=dependencies,
         required_roles=required_roles,
         work_states=states,
         terminal_state=terminal_state,

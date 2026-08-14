@@ -82,6 +82,10 @@ project registry > user registry > bundled registry
 Search returns every matching source so the collision remains visible. Use `--registry` during
 installation when provenance must be explicit.
 
+Results also expose each pack's semantic version and direct dependencies. A catalog installation
+recursively selects compatible dependencies with the same precedence before copying any pack. See
+[Pack dependencies](pack-dependencies.md) for the complete resolution contract.
+
 ## Install a discovered pack
 
 ```bash
@@ -109,8 +113,9 @@ credentials and must not put credentials in Tool Pack inputs.
 ## Current boundary
 
 Agora also accepts versioned remote indexes with mandatory checksums and optional or required
-Ed25519 signatures. See [Remote registry releases](remote-registries.md). Dependency resolution,
-organization trust synchronization, revocation feeds, and update notifications are not implemented
-yet. Local and project trust stores are described in [Registry trust stores](registry-trust.md).
+Ed25519 signatures. See [Remote registry releases](remote-registries.md). Dependency resolution is
+implemented for explicit pack installation; installed packs are never refreshed by a registry
+update. Organization trust synchronization, revocation feeds, and background notifications remain
+future work. Local and project trust stores are described in [Registry trust stores](registry-trust.md).
 Explicit release checks and transactional application are described in
 [Registry updates](registry-updates.md).

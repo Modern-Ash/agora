@@ -2,6 +2,8 @@
 schema: "agora/tool/v1"
 id: "repository"
 name: "Local Git repository"
+version: "1.0.0"
+dependencies: []
 category: "repository"
 executable: "git"
 authentication-reference: "local-git-configuration"

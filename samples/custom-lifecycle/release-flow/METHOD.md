@@ -2,6 +2,8 @@
 schema: "agora/method/v1"
 id: "release-flow"
 name: "Release Flow"
+version: "1.0.0"
+dependencies: []
 required-roles: ["cycle-owner", "maker", "validator"]
 work-states: ["proposed", "accepted", "active", "validated", "released"]
 terminal-state: "released"

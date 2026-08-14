@@ -76,9 +76,18 @@ class TransitionRule:
 
 
 @dataclass(frozen=True)
+class PackDependency:
+    kind: PackKind
+    id: str
+    version: str
+
+
+@dataclass(frozen=True)
 class MethodContract:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     required_roles: list[str]
     work_states: list[str]
     terminal_state: str
@@ -149,6 +158,8 @@ class DoctorCheck:
 class MethodPackRecord:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     scope: Literal["user", "project"]
     path: str
     required_roles: list[str]
@@ -173,6 +184,8 @@ class ToolOperation:
 class ToolContract:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     category: str
     executable: str
     authentication_reference: str | None
@@ -183,6 +196,8 @@ class ToolContract:
 class ToolPackRecord:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     category: str
     executable: str
     scope: Literal["user", "project"]
@@ -283,6 +298,8 @@ class CatalogPackRecord:
     kind: PackKind
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     registry: str
     registry_scope: Literal["bundled", "user", "project"]
     path: str

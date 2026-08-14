@@ -9,6 +9,7 @@ from agora.markdown import (
     strings_attribute,
 )
 from agora.model import ToolContract, ToolOperation
+from agora.packs import pack_manifest_metadata
 
 TOOL_RISKS = ("read", "write", "destructive")
 CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
@@ -25,6 +26,7 @@ def load_tool_contract(root: Path) -> ToolContract:
     tool_id = string_attribute(document.attributes, "id")
     assert_slug(tool_id, "Tool id")
     name = string_attribute(document.attributes, "name")
+    version, dependencies = pack_manifest_metadata(document.attributes, f"tool/{tool_id}")
     category = string_attribute(document.attributes, "category")
     assert_slug(category, "Tool category")
     executable = string_attribute(document.attributes, "executable")
@@ -47,6 +49,8 @@ def load_tool_contract(root: Path) -> ToolContract:
     return ToolContract(
         id=tool_id,
         name=name,
+        version=version,
+        dependencies=dependencies,
         category=category,
         executable=executable,
         authentication_reference=authentication_reference,

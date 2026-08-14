@@ -2,6 +2,8 @@
 schema: "agora/method/v1"
 id: "scrum"
 name: "Scrum"
+version: "1.0.0"
+dependencies: []
 required-roles: ["product-owner", "scrum-master", "developer"]
 work-states: ["specified", "planned", "implementing", "reviewing", "verifying", "completed"]
 terminal-state: "completed"

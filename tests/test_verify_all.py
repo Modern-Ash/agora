@@ -23,6 +23,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: interruptions",
         "sample: llm-environments",
         "sample: operational-query",
+        "sample: pack-dependencies",
         "sample: pack-registry",
         "sample: project-upgrade",
         "sample: recursive-swarms",
