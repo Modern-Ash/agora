@@ -12,6 +12,7 @@ from agora.model import (
     InstallCatalogPackInput,
     InstallRegistryInput,
     InstallToolInput,
+    UpdateCatalogPackInput,
 )
 from agora.packs import compare_pack_versions, version_satisfies
 from agora.tools import load_tool_contract
@@ -284,3 +285,202 @@ def test_cli_catalog_install_reports_version_and_dependencies(tmp_path: Path, mo
     rendered = output.getvalue()
     assert '"version": "1.0.0"' in rendered
     assert '"id": "tracker"' in rendered
+
+
+def test_catalog_install_persists_pack_provenance(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    source = _tool(tmp_path / "sources" / "tracker", "tracker", "1.0.0")
+    registry = _registry(tmp_path / "registry", [("tool", source)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry), scope="project"))
+
+    installed = workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="tracker", scope="project")
+    )
+
+    assert installed.source is not None
+    assert installed.source.registry == "dependency-catalog"
+    assert installed.source.version == "1.0.0"
+    assert len(installed.source.sha256) == 64
+    assert Path(installed.source.path).is_file()
+    assert workspace.validate().checked["pack-sources"] == 1
+
+
+def test_previews_and_applies_a_dependency_aware_pack_update(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    first = tmp_path / "first"
+    provider_v1 = _tool(first / "provider", "provider", "1.0.0")
+    consumer_v1 = _method(
+        first / "consumer",
+        "consumer",
+        "1.0.0",
+        [{"kind": "tool", "id": "provider", "version": ">=1.0.0,<2.0.0"}],
+    )
+    registry_v1 = _registry(
+        tmp_path / "registry-v1", [("tool", provider_v1), ("method", consumer_v1)]
+    )
+    workspace.install_registry(InstallRegistryInput(source=str(registry_v1), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="method", pack_id="consumer", scope="project")
+    )
+
+    second = tmp_path / "second"
+    provider_v2 = _tool(second / "provider", "provider", "2.0.0")
+    consumer_v2 = _method(
+        second / "consumer",
+        "consumer",
+        "2.0.0",
+        [{"kind": "tool", "id": "provider", "version": ">=2.0.0,<3.0.0"}],
+    )
+    registry_v2 = _registry(
+        tmp_path / "registry-v2", [("tool", provider_v2), ("method", consumer_v2)]
+    )
+    workspace.install_registry(
+        InstallRegistryInput(source=str(registry_v2), scope="project", force=True)
+    )
+
+    preview = workspace.update_catalog_pack(
+        UpdateCatalogPackInput(kind="method", pack_id="consumer")
+    )
+
+    assert preview.update_available is True
+    assert preview.applied is False
+    assert [(item.kind, item.id, item.from_version, item.to_version) for item in preview.packs] == [
+        ("tool", "provider", "1.0.0", "2.0.0"),
+        ("method", "consumer", "1.0.0", "2.0.0"),
+    ]
+    assert workspace.show_tool("provider").version == "1.0.0"
+    assert (
+        next(item for item in workspace.list_methods() if item.id == "consumer").version == "1.0.0"
+    )
+
+    original_replace = Path.replace
+
+    def fail_second_swap(path: Path, target: Path) -> Path:
+        if path.name == "consumer" and ".pack-plan-stage-" in str(path):
+            raise OSError("simulated second pack swap failure")
+        return original_replace(path, target)
+
+    with monkeypatch.context() as transaction_patch:
+        transaction_patch.setattr(Path, "replace", fail_second_swap)
+        with pytest.raises(OSError, match="second pack swap failure"):
+            workspace.update_catalog_pack(
+                UpdateCatalogPackInput(kind="method", pack_id="consumer", apply=True)
+            )
+    assert workspace.show_tool("provider").version == "1.0.0"
+    assert (
+        next(item for item in workspace.list_methods() if item.id == "consumer").version == "1.0.0"
+    )
+
+    applied = workspace.update_catalog_pack(
+        UpdateCatalogPackInput(kind="method", pack_id="consumer", apply=True)
+    )
+
+    assert applied.applied is True
+    assert workspace.show_tool("provider").version == "2.0.0"
+    consumer = next(item for item in workspace.list_methods() if item.id == "consumer")
+    assert consumer.version == "2.0.0"
+    assert consumer.source is not None
+    assert workspace.validate().ok is True
+
+
+def test_pack_update_protects_local_modifications(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    source_v1 = _tool(tmp_path / "first" / "tracker", "tracker", "1.0.0")
+    registry_v1 = _registry(tmp_path / "registry-v1", [("tool", source_v1)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry_v1), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="tracker", scope="project")
+    )
+    installed_manifest = workspace.project_root() / ".agora" / "tools" / "tracker" / "TOOL.md"
+    installed_manifest.write_text(
+        installed_manifest.read_text(encoding="utf-8") + "\nLocal policy amendment.\n",
+        encoding="utf-8",
+    )
+    source_v2 = _tool(tmp_path / "second" / "tracker", "tracker", "2.0.0")
+    registry_v2 = _registry(tmp_path / "registry-v2", [("tool", source_v2)])
+    workspace.install_registry(
+        InstallRegistryInput(source=str(registry_v2), scope="project", force=True)
+    )
+
+    preview = workspace.update_catalog_pack(UpdateCatalogPackInput(kind="tool", pack_id="tracker"))
+    assert preview.modified is True
+    report = workspace.validate()
+    assert report.ok is True
+    assert any(issue.code == "pack-source.modified" for issue in report.issues)
+    with pytest.raises(ValueError, match="locally modified"):
+        workspace.update_catalog_pack(
+            UpdateCatalogPackInput(kind="tool", pack_id="tracker", apply=True)
+        )
+    assert workspace.show_tool("tracker").version == "1.0.0"
+
+    workspace.update_catalog_pack(
+        UpdateCatalogPackInput(kind="tool", pack_id="tracker", apply=True, force=True)
+    )
+    assert workspace.show_tool("tracker").version == "2.0.0"
+
+
+def test_pack_update_rejects_mutable_versions_and_direct_installs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    direct = _tool(tmp_path / "direct", "direct", "1.0.0")
+    workspace.install_tool(InstallToolInput(source=str(direct), scope="project"))
+    with pytest.raises(ValueError, match="not installed from a catalog"):
+        workspace.update_catalog_pack(UpdateCatalogPackInput(kind="tool", pack_id="direct"))
+
+    source = _tool(tmp_path / "first" / "tracker", "tracker", "1.0.0")
+    registry = _registry(tmp_path / "registry-v1", [("tool", source)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="tracker", scope="project")
+    )
+    changed = _tool(tmp_path / "changed" / "tracker", "tracker", "1.0.0")
+    document = read_markdown(changed / "TOOL.md")
+    document.attributes["name"] = "Changed Without Version"
+    (changed / "TOOL.md").write_text(render_markdown(document), encoding="utf-8")
+    changed_registry = _registry(tmp_path / "registry-v1-changed", [("tool", changed)])
+    workspace.install_registry(
+        InstallRegistryInput(source=str(changed_registry), scope="project", force=True)
+    )
+
+    with pytest.raises(ValueError, match="changed content"):
+        workspace.update_catalog_pack(UpdateCatalogPackInput(kind="tool", pack_id="tracker"))
+
+
+def test_cli_previews_and_applies_a_pack_update(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    source_v1 = _tool(tmp_path / "first" / "tracker", "tracker", "1.0.0")
+    registry_v1 = _registry(tmp_path / "registry-v1", [("tool", source_v1)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry_v1), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="tracker", scope="project")
+    )
+    source_v2 = _tool(tmp_path / "second" / "tracker", "tracker", "2.0.0")
+    registry_v2 = _registry(tmp_path / "registry-v2", [("tool", source_v2)])
+    workspace.install_registry(
+        InstallRegistryInput(source=str(registry_v2), scope="project", force=True)
+    )
+    output = io.StringIO()
+
+    assert (
+        main(
+            ["pack", "update", "--kind", "tool", "--id", "tracker"],
+            cwd=workspace.project_root(),
+            stdout=output,
+        )
+        == 0
+    )
+    assert '"update_available": true' in output.getvalue()
+    assert '"applied": false' in output.getvalue()
+    output.seek(0)
+    output.truncate(0)
+    assert (
+        main(
+            ["pack", "update", "--kind", "tool", "--id", "tracker", "--apply"],
+            cwd=workspace.project_root(),
+            stdout=output,
+        )
+        == 0
+    )
+    assert '"applied": true' in output.getvalue()
+    assert workspace.show_tool("tracker").version == "2.0.0"

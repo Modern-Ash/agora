@@ -143,6 +143,8 @@ agora pack install --kind tool --id issue-tracker \
 ```
 
 See [Pack registries](../guides/pack-registries.md) for source validation and collision precedence.
+Catalog-installed copies persist provenance and support explicit preview-first upgrades; see
+[Pack updates](../guides/pack-updates.md).
 
 ## Prepare an invocation
 

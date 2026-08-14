@@ -89,6 +89,11 @@ prospective target-scope composition, and installs dependencies before their con
 installation requires dependencies to be present already. Project validation repeats composition
 checks so manual filesystem edits cannot leave missing, incompatible, or cyclic dependencies hidden.
 
+Each catalog-installed pack carries installer-owned `SOURCE.md` provenance with its registry,
+published version, and deterministic tree checksum. Pack updates are preview-only until `--apply`,
+reject downgrades and mutable versions, re-resolve the complete composition, and stage clean atomic
+pack replacements. Local amendments remain valid but require explicit `--force` before replacement.
+
 ### Git and filesystem
 
 Markdown is the durable contract and the filesystem represents current state. Git adds history,

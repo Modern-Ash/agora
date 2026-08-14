@@ -7,7 +7,12 @@ from pathlib import Path
 
 from agora.filesystem import template_root
 from agora.markdown import MarkdownDocument, read_markdown, render_markdown
-from agora.model import InitInput, InstallCatalogPackInput, InstallRegistryInput
+from agora.model import (
+    InitInput,
+    InstallCatalogPackInput,
+    InstallRegistryInput,
+    UpdateCatalogPackInput,
+)
 from agora.workspace import AgoraWorkspace
 
 
@@ -77,6 +82,31 @@ def main() -> None:
         )
     )
     dependency = agora.show_tool("delivery-tool")
+    assert installed.source is not None
+    assert dependency.source is not None
+
+    _rewrite_manifest(
+        tool / "TOOL.md",
+        version="2.1.0",
+    )
+    _rewrite_manifest(
+        method / "METHOD.md",
+        version="3.0.0",
+        dependencies=[
+            {
+                "kind": "tool",
+                "id": "delivery-tool",
+                "version": ">=2.0.0,<3.0.0",
+            }
+        ],
+    )
+    agora.install_registry(InstallRegistryInput(source=str(registry), scope="project", force=True))
+    update_preview = agora.update_catalog_pack(
+        UpdateCatalogPackInput(kind="method", pack_id="delivery-flow")
+    )
+    update = agora.update_catalog_pack(
+        UpdateCatalogPackInput(kind="method", pack_id="delivery-flow", apply=True)
+    )
     report = agora.validate()
     assert report.ok
 
@@ -87,6 +117,10 @@ def main() -> None:
     print(json.dumps(asdict(installed), indent=2))
     print("Resolved Tool Pack:")
     print(json.dumps(asdict(dependency), indent=2))
+    print("Update preview:")
+    print(json.dumps(asdict(update_preview), indent=2))
+    print("Applied update:")
+    print(json.dumps(asdict(update), indent=2))
     print(f"Validation issues: {len(report.issues)}")
 
 

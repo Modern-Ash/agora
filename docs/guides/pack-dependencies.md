@@ -75,7 +75,8 @@ If an installed dependency has an incompatible version, catalog installation sto
 rejects a replacement that would break another installed pack.
 
 Registry updates do not refresh installed packs. After updating a registry, explicitly install a
-new pack version so dependency resolution and the project Git diff remain reviewable.
+new pack version with `agora pack update` so dependency resolution and the project Git diff remain
+reviewable. See [Installed pack provenance and updates](pack-updates.md).
 
 ## Validation
 

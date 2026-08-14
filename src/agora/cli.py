@@ -32,6 +32,7 @@ from agora.model import (
     SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
+    UpdateCatalogPackInput,
     UpdateRegistryInput,
     UpgradeInput,
     ValidationReport,
@@ -172,6 +173,13 @@ def _build_parser() -> argparse.ArgumentParser:
     pack_install.add_argument("--registry")
     pack_install.add_argument("--scope", choices=("user", "project"), default="project")
     pack_install.add_argument("--force", action="store_true")
+    pack_update = pack.add_parser("update", help="Check or apply a catalog pack update")
+    pack_update.add_argument("--kind", choices=("method", "tool"), required=True)
+    pack_update.add_argument("--id", required=True)
+    pack_update.add_argument("--registry")
+    pack_update.add_argument("--scope", choices=("user", "project"))
+    pack_update.add_argument("--apply", action="store_true")
+    pack_update.add_argument("--force", action="store_true")
 
     start = commands.add_parser("start", help="Prepare or launch a governed actor session")
     start.add_argument("--id")
@@ -531,6 +539,17 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 pack_id=args.id,
                 registry_id=args.registry,
                 scope=args.scope,
+                force=args.force,
+            )
+        )
+    if args.command == "pack" and args.pack_command == "update":
+        return workspace.update_catalog_pack(
+            UpdateCatalogPackInput(
+                kind=args.kind,
+                pack_id=args.id,
+                registry_id=args.registry,
+                scope=args.scope,
+                apply=args.apply,
                 force=args.force,
             )
         )

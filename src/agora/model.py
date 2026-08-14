@@ -83,6 +83,20 @@ class PackDependency:
 
 
 @dataclass(frozen=True)
+class PackSourceRecord:
+    kind: PackKind
+    id: str
+    version: str
+    registry: str
+    registry_scope: Literal["bundled", "user", "project"]
+    registry_version: str | None
+    registry_source: str | None
+    sha256: str
+    installed_at: str
+    path: str
+
+
+@dataclass(frozen=True)
 class MethodContract:
     id: str
     name: str
@@ -165,6 +179,7 @@ class MethodPackRecord:
     required_roles: list[str]
     work_states: list[str]
     terminal_state: str
+    source: PackSourceRecord | None = None
 
 
 @dataclass(frozen=True)
@@ -203,6 +218,7 @@ class ToolPackRecord:
     scope: Literal["user", "project"]
     path: str
     operations: list[str]
+    source: PackSourceRecord | None = None
 
 
 @dataclass(frozen=True)
@@ -304,6 +320,29 @@ class CatalogPackRecord:
     registry_scope: Literal["bundled", "user", "project"]
     path: str
     installed: bool
+
+
+@dataclass(frozen=True)
+class PackUpdateStep:
+    kind: PackKind
+    id: str
+    from_version: str | None
+    to_version: str
+    registry: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class PackUpdateResult:
+    kind: PackKind
+    id: str
+    scope: Literal["user", "project"]
+    from_version: str
+    to_version: str
+    update_available: bool
+    applied: bool
+    modified: bool
+    packs: list[PackUpdateStep]
 
 
 @dataclass(frozen=True)
@@ -538,6 +577,16 @@ class InstallCatalogPackInput:
     pack_id: str
     scope: Literal["user", "project"]
     registry_id: str | None = None
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class UpdateCatalogPackInput:
+    kind: PackKind
+    pack_id: str
+    scope: Literal["user", "project"] | None = None
+    registry_id: str | None = None
+    apply: bool = False
     force: bool = False
 
 

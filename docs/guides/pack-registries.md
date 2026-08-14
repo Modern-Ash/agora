@@ -99,7 +99,8 @@ agora pack install --kind tool --id issue-tracker \
 Registry scope identifies where the catalog snapshot came from. Installation scope independently
 identifies where the selected pack is copied. Catalog installation delegates to the ordinary
 `method install` or `tool install` path, so it preserves the same validation, overwrite protection,
-and local customization behavior.
+and local customization behavior. It also adds an installer-owned `SOURCE.md` with the registry,
+pack version, checksum, and installation time. See [Pack updates](pack-updates.md).
 
 ## Validation and trust
 

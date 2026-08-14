@@ -17,6 +17,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
   resolve catalog dependencies, and reject broken or cyclic compositions.
+- [Pack updates](guides/pack-updates.md): persist catalog provenance, preview dependency-aware
+  upgrades, and protect local pack amendments.
 - [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
   checksum-pinned and Ed25519-signed registry snapshots.
 - [Registry trust stores](guides/registry-trust.md): approve, resolve, rotate, and revoke registry

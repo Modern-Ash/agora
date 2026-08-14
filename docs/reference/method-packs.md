@@ -226,6 +226,8 @@ agora pack install --kind method --id release-flow \
 
 See [Pack registries](../guides/pack-registries.md) for registry authoring and precedence, and
 [Remote registry releases](../guides/remote-registries.md) for versioned distribution and trust.
+Catalog-installed copies persist provenance and support explicit preview-first upgrades; see
+[Pack updates](../guides/pack-updates.md).
 
 Use `--force` to replace files for a pack with the same id. Review the Git diff because extra files
 from the previous version are not automatically deleted.

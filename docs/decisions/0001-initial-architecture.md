@@ -42,7 +42,8 @@ validation, so front matter preserves structured metadata and gates remain execu
   releases. Local and project trust keys, rotation, and revocation are implemented.
 - Background registry notifications and automatic installed-pack updates. Explicit authenticated
   checks, transactional registry replacement, durable update history, dependency manifests, and
-  compatibility-aware catalog installation are implemented.
+  compatibility-aware catalog installation are implemented. Installed pack provenance and explicit,
+  dependency-aware pack updates are also implemented.
 - Published vendor Tool Packs for Jira, CI/CD, documentation, and cloud.
 - Delegation budgets, automatic child work decomposition, and child artifact copying. Explicit
   reference-based result collection is part of the current filesystem protocol.

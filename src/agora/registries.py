@@ -255,6 +255,10 @@ def _registry_record(
         path = directory / "METHOD.md"
         if not path.is_file():
             raise FileNotFoundError(f"Registry Method Pack is missing METHOD.md: {directory}")
+        if (directory / "SOURCE.md").exists() or (directory / "updates").exists():
+            raise ValueError(
+                f"Registry packs must not contain installer-owned metadata: {directory}"
+            )
         contract = load_method_contract(directory)
         if contract.id != directory.name:
             raise ValueError(
@@ -266,6 +270,10 @@ def _registry_record(
         path = directory / "TOOL.md"
         if not path.is_file():
             raise FileNotFoundError(f"Registry Tool Pack is missing TOOL.md: {directory}")
+        if (directory / "SOURCE.md").exists() or (directory / "updates").exists():
+            raise ValueError(
+                f"Registry packs must not contain installer-owned metadata: {directory}"
+            )
         contract = load_tool_contract(directory)
         if contract.id != directory.name:
             raise ValueError(

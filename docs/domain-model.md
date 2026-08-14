@@ -129,6 +129,12 @@ Dependencies may resolve across visible registries, but installed copies remain 
 target scope. Replacing one pack is rejected when the prospective version would break another
 installed pack.
 
+A **Pack Source** is installer-owned Markdown attached to a catalog-installed pack. It records the
+pack and registry versions, registry scope and source, published tree checksum, and installation
+time. A **Pack Update** compares that immutable source evidence with the current installed tree and
+visible catalog, produces a dependency-first preview, and changes files only when application is
+explicit. Local amendments are visible divergence rather than silent loss.
+
 A remote registry index publishes one or more semantic releases. Each release identifies an archive,
 mandatory SHA-256, and optional Ed25519 signature plus key id. After verification Agora installs the
 same local snapshot contract and adds a generated source record containing immutable provenance.

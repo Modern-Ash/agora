@@ -20,6 +20,8 @@
   auditable; never refresh installed packs implicitly.
 - Keep pack dependencies versioned, cross-kind, scope-local, cycle-free, and resolved before writes;
   never replace a dependency when that would break an installed consumer.
+- Keep catalog pack provenance installer-owned and checksum-pinned; keep pack updates preview-first,
+  forward-only, composition-safe, and protective of local amendments.
 - Treat Scrum and Kanban as bundled examples, never as privileged core workflows.
 - Preserve recursive swarm cycle checks and configured delegation depth.
 - Preserve explicit child-work acceptance and reference-based result collection across swarms.

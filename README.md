@@ -149,6 +149,8 @@ agora registry list
 agora pack search --kind method --query release
 agora pack install --kind method --id release-flow \
   --registry team-catalog --scope project
+agora pack update --kind method --id release-flow
+agora pack update --kind method --id release-flow --apply
 ```
 
 Project registries override user registries, which override the bundled catalog when the same pack id
@@ -156,6 +158,9 @@ appears more than once. See the [pack registry guide](docs/guides/pack-registrie
 Pack manifests declare versions and optional Method or Tool dependencies. Catalog installation
 resolves compatible dependencies before copying and rejects broken or cyclic compositions. See the
 [pack dependency guide](docs/guides/pack-dependencies.md).
+Each catalog-installed pack persists its registry and checksum in `SOURCE.md`. Explicit
+`agora pack update` previews dependency-aware changes and applies them only with `--apply`; see the
+[pack update guide](docs/guides/pack-updates.md).
 Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
 provenance beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
@@ -486,6 +491,7 @@ versioned registry snapshot without persisting a private key.
 - [Conventional Commits](docs/guides/conventional-commits.md)
 - [Pack registries](docs/guides/pack-registries.md)
 - [Pack dependencies](docs/guides/pack-dependencies.md)
+- [Pack updates](docs/guides/pack-updates.md)
 - [Remote registry releases](docs/guides/remote-registries.md)
 - [Registry trust stores](docs/guides/registry-trust.md)
 - [Registry updates](docs/guides/registry-updates.md)
@@ -500,8 +506,9 @@ versioned registry snapshot without persisting a private key.
 - Method and Tool Packs can be discovered through bundled, user, project, and verified remote
   registry snapshots. Local and project trust stores, rotation, and revocation are implemented;
   explicit update checks, transactional application, and dependency-aware installation are
-  implemented. Organization trust synchronization, transparency, automatic installed-pack updates,
-  and background notifications are not.
+  implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
+  Organization trust synchronization, transparency, automatic background pack updates, and
+  notifications are not.
 - The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
   Confluence, and cloud platforms are not bundled yet.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
