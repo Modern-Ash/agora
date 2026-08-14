@@ -49,6 +49,19 @@ def test_loads_the_bundled_ci_cd_contract() -> None:
     assert contract.operations["create-deployment"].capability == "deployment.create"
 
 
+def test_loads_the_bundled_knowledge_base_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "knowledge-base")
+
+    assert contract.id == "knowledge-base"
+    assert contract.executable == "docsctl"
+    assert list(contract.operations) == ["archive", "create", "publish", "search", "update", "view"]
+    assert contract.operations["search"].capability == "docs.read"
+    assert contract.operations["create"].capability == "docs.write"
+    assert contract.operations["publish"].capability == "docs.publish"
+    assert contract.operations["archive"].capability == "docs.archive"
+    assert contract.operations["archive"].risk == "destructive"
+
+
 @pytest.mark.parametrize(
     "message",
     [

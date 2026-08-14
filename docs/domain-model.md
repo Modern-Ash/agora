@@ -115,6 +115,10 @@ The bundled **CI/CD Tool Pack** separates routine inspection and execution from 
 cancellation and deployment creation. A project may combine role capability with an operation-level
 approval requirement; both must pass before a guarded deployment is prepared.
 
+The bundled **Knowledge Base Tool Pack** grants reading, drafting, publication, and archival as four
+separate authorities. Remote publication can become an artifact or evidence reference, but it never
+replaces Agora's local work and governance state.
+
 ## Standard
 
 A standard is a versioned, provider-neutral rule enabled by `.agora/STANDARDS.md`. It applies across

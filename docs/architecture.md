@@ -150,7 +150,8 @@ authentication to the executable environment. The bundled Git pack is a concrete
 the bundled work-management pack is a stable adapter interface whose `workctl` executable can wrap
 Jira, Linear, or an internal provider. The bundled CI/CD pack applies the same pattern through
 `cictl`, with separate read, run, cancel, and deployment capabilities. Vendor-specific packs remain
-independently installable Markdown.
+independently installable Markdown. The bundled knowledge-base pack similarly separates reading and
+drafting from publication and archival through a stable `docsctl` adapter boundary.
 
 ## Recursive delegation
 

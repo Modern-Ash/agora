@@ -22,6 +22,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: delegated-work",
         "sample: handoffs",
         "sample: interruptions",
+        "sample: knowledge-base",
         "sample: llm-environments",
         "sample: operational-query",
         "sample: pack-dependencies",

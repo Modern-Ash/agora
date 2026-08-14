@@ -323,6 +323,11 @@ matrix permits technical roles to inspect and trigger pipelines but grants no ca
 deployment authority. See [CI/CD integrations](ci-cd-integrations.md) for existing-project
 installation, provider mapping, guarded deployment approvals, and the executable Python example.
 
+The bundled `knowledge-base` pack uses `docsctl` as a stable adapter for Confluence, Notion, or an
+internal documentation platform. Draft access is distinct from publication and archival authority.
+See [Knowledge-base integrations](knowledge-base-integrations.md) for existing-project installation,
+content sensitivity, guarded publication, provider mapping, and the executable Python example.
+
 ## Customize actors and responsibility
 
 Register a reusable human actor:

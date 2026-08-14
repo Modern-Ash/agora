@@ -239,3 +239,9 @@ pipeline triggering uses `ci.run`; destructive cancellation uses `ci.cancel`, wh
 `deployment.create`. No bundled role receives the latter two capabilities. See the
 [CI/CD integration guide](../guides/ci-cd-integrations.md) and its
 [approval-focused sample](../../samples/ci-cd/README.md).
+
+The bundled `knowledge-base` pack exposes a stable `docsctl` interface for Confluence, Notion, and
+internal documentation services. Reads use `docs.read`, drafts use `docs.write`, publication uses
+`docs.publish`, and destructive archival uses `docs.archive`. The latter two are not granted by
+default. See the [knowledge-base integration guide](../guides/knowledge-base-integrations.md) and
+[publication sample](../../samples/knowledge-base/README.md).

@@ -17,6 +17,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   internal trackers through one provider-neutral, role-governed operation contract.
 - [CI/CD integrations](guides/ci-cd-integrations.md): inspect and trigger pipelines, restrict
   cancellation, and guard deployments with explicit role approval.
+- [Knowledge-base integrations](guides/knowledge-base-integrations.md): connect Confluence, Notion,
+  or internal documentation while separating drafts, publication, and archival authority.
 - [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
@@ -72,6 +74,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   tracker contract through a local Python adapter and reject unauthorized transitions.
 - [Governed CI/CD](../samples/ci-cd/README.md): trigger a pipeline and require explicit capability
   plus Product Owner approval before deployment.
+- [Governed knowledge base](../samples/knowledge-base/README.md): draft external documentation,
+  require approval before publication, and reject unauthorized archival.
 - [Governed handoffs](../samples/handoffs/README.md): preserve one work item while its Developer role
   moves from a human to an AI agent and a swarm.
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child
