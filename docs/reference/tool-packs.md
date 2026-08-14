@@ -27,6 +27,8 @@ version: "1.0.0"
 dependencies: []
 category: "issue-tracker"
 executable: "tracker-cli"
+version-command: ["--version"]
+minimum-runtime-version: "1.4.0"
 authentication-reference: "tracker-cli-profile"
 ---
 
@@ -44,6 +46,8 @@ Describe installation, environment, and governance expectations here.
 | `dependencies` | Optional array of version-constrained Method or Tool Pack references |
 | `category` | Provider-neutral lowercase slug such as `repository` or `ci` |
 | `executable` | One executable name or path; never a shell expression |
+| `version-command` | Optional structured CLI arguments used only for a local version probe |
+| `minimum-runtime-version` | Optional numeric `MAJOR.MINOR.PATCH`; requires `version-command` |
 | `authentication-reference` | Optional non-secret reference to external authentication |
 | `provider` | Adapter-only provider slug; requires `transport` and `implements` |
 | `transport` | Adapter-only execution transport; currently `cli` |
@@ -51,7 +55,8 @@ Describe installation, environment, and governance expectations here.
 | `implements-operations` | Optional non-empty subset implemented by a deliberately partial adapter |
 
 The executable is resolved by the environment when `--launch` is used. A prepared invocation does
-not require it to be installed.
+not require it to be installed. Version metadata must be declared as a pair. When present, live
+launch requires a successful compatible probe, while preparation and installation remain offline.
 
 Dependencies use the same manifest and resolver contract as Method Packs. See
 [Pack dependencies](../guides/pack-dependencies.md).
@@ -222,6 +227,8 @@ installed explicitly:
 
 ```bash
 agora tool adapter list --available
+agora tool adapter list --check
+agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id terraform --scope project
 agora tool adapter install --id jira --scope project

@@ -160,9 +160,11 @@ resolution distinct from evidence that recovery actually occurred.
 Provider adapters are independently installable Tool Packs. Agora prefers a reviewed native CLI
 when it is already present in the developer environment, then a team wrapper when normalization is
 needed. MCP remains an optional external transport and never replaces Markdown or Git as the source
-of truth. Adapter discovery only checks executable availability; selection, installation, and every
-invocation remain explicit. The bundled `github-actions`, `github-issues`, and `terraform` adapters
-are concrete CLI-first implementations that delegate directly to `gh` and Terraform CLI.
+of truth. Plain adapter discovery only checks executable availability; an explicit compatibility
+check runs the manifest's local version command without provider access. Selection, installation,
+and every invocation remain explicit, and live invocation enforces declared minimum versions. The
+bundled `github-actions`, `github-issues`, and `terraform` adapters are concrete CLI-first
+implementations that delegate directly to `gh` and Terraform CLI.
 Partial adapters declare the exact operations they implement. The AWS and Google Cloud inventory
 adapters use this mechanism to provide bounded native reads without claiming plan, deployment, or
 destruction behavior that the provider-wide CLIs do not possess.

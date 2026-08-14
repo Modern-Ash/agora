@@ -6,6 +6,8 @@ version: "1.0.0"
 dependencies: []
 category: "issue-tracker"
 executable: "acli"
+version-command: ["--version"]
+minimum-runtime-version: "1.3.0"
 authentication-reference: "atlassian-cli-jira-site"
 provider: "atlassian"
 transport: "cli"

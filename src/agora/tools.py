@@ -1,4 +1,6 @@
 import re
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from agora.filesystem import assert_slug
@@ -8,8 +10,8 @@ from agora.markdown import (
     string_attribute,
     strings_attribute,
 )
-from agora.model import ToolContract, ToolOperation
-from agora.packs import pack_manifest_metadata
+from agora.model import ToolContract, ToolOperation, ToolRuntimeProbe
+from agora.packs import compare_pack_versions, pack_manifest_metadata, validate_pack_version
 
 TOOL_RISKS = ("read", "write", "destructive")
 TOOL_ADAPTER_TRANSPORTS = ("cli",)
@@ -17,6 +19,7 @@ CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
 PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9-]*)\}")
 CONVENTIONAL_COMMIT_HEADER = re.compile(r"[A-Za-z][A-Za-z0-9-]*(?:\([^()\r\n]+\))?!?: \S.*")
 SUPPORTED_INPUT_RULES = {"conventional-commits/v1.0.0"}
+RUNTIME_VERSION_PATTERN = re.compile(r"(?<!\d)(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?!\d)")
 
 
 def load_tool_contract(root: Path) -> ToolContract:
@@ -62,6 +65,22 @@ def load_tool_contract(root: Path) -> ToolContract:
     elif implements_operations:
         raise ValueError("Tool adapter implements-operations requires adapter metadata")
 
+    version_command_value = document.attributes.get("version-command", [])
+    if not isinstance(version_command_value, list) or any(
+        not isinstance(argument, str) or not argument for argument in version_command_value
+    ):
+        raise ValueError("Tool version-command must be a non-empty string array")
+    version_command = list(version_command_value)
+    minimum_runtime_version = optional_string_attribute(
+        document.attributes, "minimum-runtime-version"
+    )
+    if (not version_command) != (minimum_runtime_version is None):
+        raise ValueError(
+            "Tool version-command and minimum-runtime-version must be declared together"
+        )
+    if minimum_runtime_version is not None:
+        validate_pack_version(minimum_runtime_version)
+
     operation_root = root / "operations"
     paths = sorted(operation_root.glob("*.md")) if operation_root.exists() else []
     if not paths:
@@ -87,6 +106,81 @@ def load_tool_contract(root: Path) -> ToolContract:
         transport=transport,
         implements=implements,
         implements_operations=implements_operations,
+        version_command=version_command,
+        minimum_runtime_version=minimum_runtime_version,
+    )
+
+
+def probe_tool_runtime(
+    contract: ToolContract,
+    executable_path: str | None,
+    runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
+) -> ToolRuntimeProbe:
+    if executable_path is None:
+        return ToolRuntimeProbe(
+            available=False,
+            executable_path=None,
+            version=None,
+            compatible=False if contract.minimum_runtime_version is not None else None,
+            detail=f"Executable not found on PATH: {contract.executable}",
+        )
+    if not contract.version_command or contract.minimum_runtime_version is None:
+        return ToolRuntimeProbe(
+            available=True,
+            executable_path=executable_path,
+            version=None,
+            compatible=None,
+            detail="No runtime version requirement declared",
+        )
+
+    command = [executable_path, *contract.version_command]
+    try:
+        result = (runner or _run_runtime_probe)(command)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return ToolRuntimeProbe(
+            available=True,
+            executable_path=executable_path,
+            version=None,
+            compatible=None,
+            detail=f"Runtime version probe failed: {error}",
+        )
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    if result.returncode != 0:
+        return ToolRuntimeProbe(
+            available=True,
+            executable_path=executable_path,
+            version=None,
+            compatible=None,
+            detail=f"Runtime version command exited with code {result.returncode}",
+        )
+    match = RUNTIME_VERSION_PATTERN.search(output)
+    if match is None:
+        return ToolRuntimeProbe(
+            available=True,
+            executable_path=executable_path,
+            version=None,
+            compatible=None,
+            detail="Runtime version command returned no MAJOR.MINOR.PATCH version",
+        )
+    version = ".".join(match.groups())
+    compatible = compare_pack_versions(version, contract.minimum_runtime_version) >= 0
+    relation = "satisfies" if compatible else "does not satisfy"
+    return ToolRuntimeProbe(
+        available=True,
+        executable_path=executable_path,
+        version=version,
+        compatible=compatible,
+        detail=(f"Runtime {version} {relation} minimum version {contract.minimum_runtime_version}"),
+    )
+
+
+def _run_runtime_probe(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
     )
 
 

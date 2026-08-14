@@ -17,6 +17,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
     assert [name for name in names if name.startswith("sample: ")] == [
         "sample: basic-swarm",
         "sample: ci-cd",
+        "sample: cli-runtime-compatibility",
         "sample: cloud-infrastructure",
         "sample: cloud-inventory-cli",
         "sample: concurrent-writes",

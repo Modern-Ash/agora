@@ -112,8 +112,10 @@ A partial adapter lists `implements-operations`; it must contain exactly that co
 cannot be invoked for omitted operations. AWS and Google Cloud inventory use this form for read-only
 resource discovery.
 An adapter may be distributed but unavailable in the current environment. `runtime_available`
-reflects executable discovery only; it does not imply authentication, installation, authority, or a
-successful provider call. The Jira adapter demonstrates this state when ACLI is not installed.
+reflects executable discovery only. A checked adapter additionally reports its detected version and
+whether it meets the manifest's minimum runtime version. Neither result implies authentication,
+installation, authority, or a successful provider call. The Jira adapter demonstrates the absent
+state when ACLI is not installed.
 
 A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution

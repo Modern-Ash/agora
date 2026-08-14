@@ -6,6 +6,8 @@ version: "1.0.0"
 dependencies: []
 category: "cloud"
 executable: "gcloud"
+version-command: ["version"]
+minimum-runtime-version: "300.0.0"
 authentication-reference: "gcloud-active-account-or-workload-identity"
 provider: "google-cloud"
 transport: "cli"

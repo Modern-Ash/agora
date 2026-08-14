@@ -25,6 +25,7 @@ from agora.model import (
     InvokeToolInput,
     SetActorRuntimeInput,
     StartSessionInput,
+    ToolRuntimeProbe,
     TransitionWorkInput,
     WorkActorInput,
 )
@@ -705,7 +706,18 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout='[{"status":"completed"}]', stderr="")
 
-    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, tool_runner=run_tool)
+    governed = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        tool_runner=run_tool,
+        runtime_probe=lambda contract, path: ToolRuntimeProbe(
+            available=True,
+            executable_path=path,
+            version="2.82.1",
+            compatible=True,
+            detail="compatible test runtime",
+        ),
+    )
     listed = governed.invoke_tool(
         InvokeToolInput(
             id="github-actions-runs",
@@ -741,6 +753,32 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
         "--raw-field",
         "suite=all",
     ]
+
+    incompatible = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        tool_runner=run_tool,
+        runtime_probe=lambda contract, path: ToolRuntimeProbe(
+            available=True,
+            executable_path=path,
+            version="2.0.0",
+            compatible=False,
+            detail="Runtime 2.0.0 does not satisfy minimum version 2.45.0",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="runtime compatibility check failed"):
+        incompatible.invoke_tool(
+            InvokeToolInput(
+                id="github-actions-incompatible",
+                tool_id="github-actions",
+                operation_id="list-runs",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"pipeline": "verify.yml"},
+                launch=True,
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "github-actions-incompatible").exists()
 
     with pytest.raises(PermissionError, match="ci.cancel"):
         governed.invoke_tool(

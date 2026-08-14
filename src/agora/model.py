@@ -244,6 +244,8 @@ class ToolContract:
     transport: str | None = None
     implements: str | None = None
     implements_operations: list[str] = field(default_factory=list)
+    version_command: list[str] = field(default_factory=list)
+    minimum_runtime_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -261,6 +263,8 @@ class ToolPackRecord:
     transport: str | None = None
     implements: str | None = None
     implements_operations: list[str] = field(default_factory=list)
+    version_command: list[str] = field(default_factory=list)
+    minimum_runtime_version: str | None = None
     source: PackSourceRecord | None = None
     updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
@@ -276,8 +280,21 @@ class ToolAdapterRecord:
     implements_operations: list[str]
     executable: str
     runtime_available: bool
+    minimum_runtime_version: str | None
+    runtime_version: str | None
+    runtime_compatible: bool | None
+    runtime_detail: str
     installed_scopes: list[str]
     path: str
+
+
+@dataclass(frozen=True)
+class ToolRuntimeProbe:
+    available: bool
+    executable_path: str | None
+    version: str | None
+    compatible: bool | None
+    detail: str
 
 
 @dataclass(frozen=True)

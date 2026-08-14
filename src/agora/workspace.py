@@ -96,6 +96,7 @@ from agora.model import (
     ToolPackRecord,
     ToolRisk,
     ToolRunRecord,
+    ToolRuntimeProbe,
     TransitionWorkInput,
     UpdateCatalogPackInput,
     UpdateRegistryInput,
@@ -138,6 +139,7 @@ from agora.registry_distribution import (
 )
 from agora.tools import (
     load_tool_contract,
+    probe_tool_runtime,
     validate_operation_inputs,
     validate_tool_adapter_contract,
 )
@@ -174,12 +176,14 @@ class AgoraWorkspace:
         tool_runner: (
             Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess[str]] | None
         ) = None,
+        runtime_probe: Callable[[ToolContract, str | None], ToolRuntimeProbe] | None = None,
         lock_timeout: float | None = None,
     ) -> None:
         self.cwd = Path(cwd or Path.cwd()).resolve()
         self._now = now or (lambda: datetime.now(UTC))
         self._launcher = launcher or _launch_process
         self._tool_runner = tool_runner or _run_tool_process
+        self._runtime_probe = runtime_probe or probe_tool_runtime
         configured_timeout = os.environ.get("AGORA_LOCK_TIMEOUT", "0")
         try:
             self.lock_timeout = float(configured_timeout) if lock_timeout is None else lock_timeout
@@ -378,7 +382,12 @@ class AgoraWorkspace:
             InstallToolInput(source=adapter.path, scope=data.scope, force=data.force)
         )
 
-    def list_tool_adapters(self, available_only: bool = False) -> list[ToolAdapterRecord]:
+    def list_tool_adapters(
+        self,
+        available_only: bool = False,
+        compatible_only: bool = False,
+        check_runtime: bool = False,
+    ) -> list[ToolAdapterRecord]:
         project = self._optional_project_root()
         records: list[ToolAdapterRecord] = []
         for manifest in sorted((template_root() / "adapters").glob("*/*/TOOL.md")):
@@ -387,8 +396,22 @@ class AgoraWorkspace:
                 raise ValueError(f"Bundled Tool adapter is missing adapter metadata: {manifest}")
             implemented = load_tool_contract(template_root() / "tools" / contract.implements)
             validate_tool_adapter_contract(contract, implemented)
-            runtime_available = shutil.which(contract.executable) is not None
+            executable_path = shutil.which(contract.executable)
+            runtime_available = executable_path is not None
             if available_only and not runtime_available:
+                continue
+            probe = (
+                self._runtime_probe(contract, executable_path)
+                if check_runtime or compatible_only
+                else ToolRuntimeProbe(
+                    available=runtime_available,
+                    executable_path=executable_path,
+                    version=None,
+                    compatible=None,
+                    detail="Runtime version not checked",
+                )
+            )
+            if compatible_only and probe.compatible is not True:
                 continue
             installed_scopes: list[str] = []
             if (agora_home() / "tools" / contract.id / "TOOL.md").is_file():
@@ -411,6 +434,10 @@ class AgoraWorkspace:
                     ),
                     executable=contract.executable,
                     runtime_available=runtime_available,
+                    minimum_runtime_version=contract.minimum_runtime_version,
+                    runtime_version=probe.version,
+                    runtime_compatible=probe.compatible,
+                    runtime_detail=probe.detail,
                     installed_scopes=installed_scopes,
                     path=str(manifest.parent),
                 )
@@ -2718,9 +2745,16 @@ class AgoraWorkspace:
             self._substitute_tool_inputs(argument, data.inputs) for argument in operation.arguments
         ]
         command = [contract.executable, *arguments]
-        runtime_available = shutil.which(contract.executable) is not None
+        executable_path = shutil.which(contract.executable)
+        runtime_available = executable_path is not None
         if data.launch and not runtime_available:
             raise FileNotFoundError(f"Tool executable not found: {contract.executable}")
+        if data.launch and contract.minimum_runtime_version is not None:
+            probe = self._runtime_probe(contract, executable_path)
+            if probe.compatible is not True:
+                raise RuntimeError(
+                    f"Tool runtime compatibility check failed for {contract.id}: {probe.detail}"
+                )
 
         run_id = data.id or self._now().astimezone(UTC).strftime("tool-%Y%m%dt%H%M%sz")
         assert_slug(run_id, "Tool run id")
@@ -4976,6 +5010,8 @@ class AgoraWorkspace:
             transport=contract.transport,
             implements=contract.implements,
             implements_operations=contract.implements_operations,
+            version_command=contract.version_command,
+            minimum_runtime_version=contract.minimum_runtime_version,
             source=source,
             updates=updates,
         )

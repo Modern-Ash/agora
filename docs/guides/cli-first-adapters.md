@@ -37,8 +37,23 @@ Only show adapters whose executable is currently available on `PATH`:
 agora tool adapter list --available
 ```
 
-Discovery does not contact the provider, inspect credentials, install a pack, or grant authority.
-The result reports `runtime_available` and any `installed_scopes` separately.
+Probe the versions of available CLIs, or return only compatible runtimes:
+
+```bash
+agora tool adapter list --check
+agora tool adapter list --compatible
+```
+
+Plain discovery does not execute the CLI. `--check` runs only the structured version command from
+the reviewed manifest with a five-second timeout. It reports `minimum_runtime_version`,
+`runtime_version`, `runtime_compatible`, and a diagnostic detail. `--compatible` implies the check
+and omits missing, old, failed, or unparseable runtimes. Neither mode contacts the provider,
+inspects credentials, installs a pack, or grants authority.
+
+Installation remains possible before a compatible runtime exists because it only materializes the
+Markdown contract. Preparing a governed invocation also remains possible. A live `--launch` for a
+pack with version requirements fails before `RUN.md` is written when the executable is missing, too
+old, or cannot return a verifiable `MAJOR.MINOR.PATCH` version.
 
 ## Install an adapter
 
@@ -216,6 +231,8 @@ name: "GitHub Actions CLI adapter"
 version: "1.0.0"
 category: "ci"
 executable: "gh"
+version-command: ["--version"]
+minimum-runtime-version: "2.45.0"
 provider: "github"
 transport: "cli"
 implements: "ci-cd"
@@ -224,10 +241,12 @@ implements: "ci-cd"
 
 `provider` identifies the external ecosystem, `transport` identifies how operations execute, and
 `implements` identifies the provider-neutral Tool Pack contract. All three are required together.
-The current executable adapter transport is `cli`. Full adapters must preserve every operation;
-partial adapters declare `implements-operations`. Installation verifies the exact claimed set with
-the same capability, risk, required inputs, and result kind. Adapters may add provider context inputs
-but cannot weaken the contract.
+`version-command` is a structured argument array appended to `executable`, and
+`minimum-runtime-version` is its required numeric version; they must appear together. The current
+executable adapter transport is `cli`. Full adapters must preserve every operation; partial adapters
+declare `implements-operations`. Installation verifies the exact claimed set with the same
+capability, risk, required inputs, and result kind. Adapters may add provider context inputs but
+cannot weaken the contract.
 
 Adapter operations must remain shell-free, non-interactive, credential-free, and bounded. Output
 that may contain secrets or excessive logs should be filtered by the native CLI or a reviewed Python

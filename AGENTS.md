@@ -15,6 +15,8 @@
   cloud translation in reviewed external adapters rather than the kernel.
 - Prefer a reviewed native provider CLI when it is installed and non-interactive; use a team wrapper
   for normalization and MCP only as an explicit alternative transport.
+- Give reviewed CLI adapters a structured local version command and a tested minimum version; never
+  infer compatibility from executable presence alone when launching governed work.
 - Use an explicit conforming operation subset when a provider CLI cannot implement a full neutral
   contract; never invent generic plan, apply, or destructive semantics.
 - Keep CI cancellation and deployment capabilities opt-in; combine production authority with

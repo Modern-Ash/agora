@@ -6,6 +6,8 @@ version: "1.0.0"
 dependencies: []
 category: "ci"
 executable: "gh"
+version-command: ["--version"]
+minimum-runtime-version: "2.45.0"
 authentication-reference: "github-cli-profile"
 provider: "github"
 transport: "cli"

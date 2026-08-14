@@ -8,6 +8,7 @@ from agora.model import (
     CreateSwarmInput,
     CreateWorkInput,
     InitInput,
+    ToolRuntimeProbe,
 )
 from agora.workspace import AgoraWorkspace
 
@@ -111,6 +112,44 @@ def test_discovers_and_installs_a_cli_adapter_from_the_cli(tmp_path: Path, monke
     assert '"transport": "cli"' in output.getvalue()
     assert '"runtime_available": true' in output.getvalue()
     assert (home / "tools" / "github-actions" / "TOOL.md").is_file()
+
+
+def test_filters_cli_adapters_by_checked_runtime_compatibility(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: f"/usr/bin/{executable}" if executable in {"gh", "terraform"} else None,
+    )
+
+    def probe(contract, executable_path):
+        compatible = contract.executable == "gh" and executable_path is not None
+        return ToolRuntimeProbe(
+            available=executable_path is not None,
+            executable_path=executable_path,
+            version="2.82.1" if compatible else "0.14.0" if executable_path else None,
+            compatible=compatible,
+            detail="test compatibility result",
+        )
+
+    monkeypatch.setattr("agora.workspace.probe_tool_runtime", probe)
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert (
+        main(
+            ["tool", "adapter", "list", "--compatible"],
+            cwd=tmp_path,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
+    assert errors.getvalue() == ""
+    assert output.getvalue().count('"runtime_compatible": true') == 2
+    assert '"id": "github-actions"' in output.getvalue()
+    assert '"id": "github-issues"' in output.getvalue()
+    assert '"id": "terraform"' not in output.getvalue()
 
 
 def test_configures_actor_runtime_and_prepares_a_session_from_the_cli(

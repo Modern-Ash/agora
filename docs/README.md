@@ -86,6 +86,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   and constrain dynamic transitions to close or reopen.
 - [Jira ACLI adapter](../samples/jira-cli/README.md): prepare bounded Jira searches and governed
   transitions while keeping ACLI installation and authentication external.
+- [CLI runtime compatibility](../samples/cli-runtime-compatibility/README.md): probe local adapter
+  versions without accessing credentials or contacting providers.
 - [Terraform CLI adapter](../samples/terraform-cli/README.md): prepare state reads and a saved plan
   through native Terraform while preserving separate apply authority.
 - [Governed knowledge base](../samples/knowledge-base/README.md): draft external documentation,

@@ -292,6 +292,8 @@ installs or selects a transport automatically:
 
 ```bash
 agora tool adapter list --available
+agora tool adapter list --check
+agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id github-issues --scope project
 agora tool adapter install --id jira --scope project
@@ -299,6 +301,10 @@ agora tool adapter install --id terraform --scope project
 agora tool adapter install --id aws-resource-inventory --scope project
 agora tool adapter install --id gcp-asset-inventory --scope project
 ```
+
+`--check` runs each available adapter's declared version command and reports the detected and
+minimum versions. `--compatible` performs the same check and returns only runtimes that satisfy the
+adapter contract. Version checks never authenticate or contact the provider.
 
 Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`,
 `knowledge-base`, `cloud-infrastructure`, and `observability` packs:

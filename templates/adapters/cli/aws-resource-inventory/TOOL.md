@@ -6,6 +6,8 @@ version: "1.0.0"
 dependencies: []
 category: "cloud"
 executable: "aws"
+version-command: ["--version"]
+minimum-runtime-version: "2.0.0"
 authentication-reference: "aws-cli-profile-or-workload-identity"
 provider: "aws"
 transport: "cli"

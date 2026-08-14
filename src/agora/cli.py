@@ -234,6 +234,14 @@ def _build_parser() -> argparse.ArgumentParser:
     adapter_list.add_argument(
         "--available", action="store_true", help="Only show adapters whose CLI is on PATH"
     )
+    adapter_list.add_argument(
+        "--check", action="store_true", help="Probe CLI versions and report compatibility"
+    )
+    adapter_list.add_argument(
+        "--compatible",
+        action="store_true",
+        help="Only show adapters with a compatible CLI version",
+    )
     adapter_install = tool_adapter.add_parser("install", help="Install a bundled Tool adapter")
     adapter_install.add_argument("--id", required=True)
     adapter_install.add_argument("--scope", choices=("user", "project"), default="project")
@@ -623,7 +631,11 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         and args.tool_command == "adapter"
         and args.tool_adapter_command == "list"
     ):
-        return workspace.list_tool_adapters(args.available)
+        return workspace.list_tool_adapters(
+            available_only=args.available,
+            compatible_only=args.compatible,
+            check_runtime=args.check,
+        )
     if (
         args.command == "tool"
         and args.tool_command == "adapter"
