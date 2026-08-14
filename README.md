@@ -2,60 +2,74 @@
 
 **Agents, Governance, Orchestration, Roles & Artifacts**
 
-Agora es un framework local, Markdown-first y Git-native para gobernar equipos mixtos de humanos,
-agentes AI, servicios, automatizaciones y otros swarms. Se instala una vez, configura el agente o LLM
-elegido y materializa dentro de cada proyecto los roles, protocolos, herramientas, Method Packs,
-artefactos y gates que restringen el trabajo.
+Agora is a local, Markdown-first, Git-native lifecycle customization framework. It lets teams define
+how humans, AI agents, services, automations, and swarms collaborate from an objective through its
+completion. Install it once, select an agent or LLM environment, and materialize the roles,
+protocols, tools, Method Packs, artifacts, and gates that govern each project.
 
-Agora no es un project manager, un runtime de agentes ni un framework de prompts. Tampoco reemplaza
-Jira, GitHub, CI/CD, Confluence o la nube. Instala una capa portable de gobernanza sobre esos entornos
-y conserva su proceso en archivos revisables y branches Git.
+Agora is deliberately agnostic in three dimensions:
 
-> Estado: MVP experimental. Los contratos Markdown pueden evolucionar antes de la primera versión
-> estable.
+- **Language:** governed projects may use any programming language, runtime, architecture, or stack.
+- **LLM:** providers and models are selected configuration, never dependencies of the core protocol.
+- **Development process:** Scrum and Kanban are included presets; any valid Method Pack can define
+  the roles, states, transitions, policies, and evidence required by a team's own lifecycle.
 
-## Modelo de instalación
+The reference CLI is implemented in Python for portability and maintainability. That is an
+implementation detail of Agora itself, not a constraint placed on projects that use it.
+
+Agora is not a project manager, an agent runtime, a coding framework, or an implementation of a
+particular methodology. It does not replace Jira, GitHub, CI/CD, Confluence, or cloud platforms. It
+installs a portable governance layer over those environments and keeps the customized lifecycle in
+reviewable files and Git branches.
+
+> Status: experimental MVP. Markdown contracts may evolve before the first stable release.
+
+## Installation model
 
 ```text
-Distribución de Agora
-  CLI + templates + Method Packs + adapters
+Agora distribution
+  Python CLI + templates + Method Packs + adapters
 
 ~/.agora/
-  config.md             Defaults de integración, proveedor, modelo y método
-  actors/*.md           Actores reutilizables del usuario
+  config.md             Integration, provider, model, and method defaults
+  actors/*.md           Reusable user actors
 
-<proyecto>/.agora/
-  project.md            Configuración efectiva del proyecto
-  constitution.md       Principios y restricciones locales
-  PROTOCOL.md           Protocolo común de colaboración
-  commands/*.md         Comandos portables para agentes
-  methods/              Scrum y Kanban
-  actors/               Actores propios del proyecto
-  tools/                 Política de herramientas e integraciones
-  artifacts/             Catálogo de artefactos
-  swarms/                Estado durable del trabajo
+<project>/.agora/
+  project.md            Effective project configuration
+  constitution.md       Local principles and restrictions
+  PROTOCOL.md           Shared collaboration protocol
+  commands/*.md         Portable agent commands
+  methods/              Built-in and custom lifecycle Method Packs
+  actors/               Project-specific actors
+  tools/                Tool and integration policy
+  artifacts/            Artifact catalog
+  swarms/               Durable work state
 ```
 
-La precedencia es:
+Configuration precedence is:
 
 ```text
-defaults de Agora < ~/.agora < .agora del proyecto < configuración del swarm
+Agora defaults < ~/.agora < project .agora < swarm configuration
 ```
 
-## Instalación desde este repositorio
+## Install from this repository
 
-Requiere Node.js 20 o posterior.
+Agora requires Python 3.11 or newer. The recommended development and tool manager is
+[uv](https://docs.astral.sh/uv/).
 
 ```bash
-npm install
-npm run build
-npm link
+uv sync --extra dev
+uv tool install .
 agora --help
 ```
 
-Sin instalar globalmente se puede usar `npm run agora -- <comando>` desde este repositorio.
+Run the development checkout without a global installation:
 
-## Configuración e inicialización
+```bash
+uv run agora --help
+```
+
+## Configure and initialize
 
 ```bash
 agora configure \
@@ -64,24 +78,48 @@ agora configure \
   --model configured-by-codex \
   --default-method scrum
 
-cd mi-proyecto
+cd my-project
 agora init
 agora doctor
 ```
 
-Integraciones iniciales:
+Initial integrations:
 
-- `codex`: instala skills en `.agents/skills/agora-*/SKILL.md`.
-- `claude`: instala comandos en `.claude/commands/agora.*.md`.
-- `generic`: mantiene los comandos portables en `.agora/commands`.
+- `codex`: installs skills under `.agents/skills/agora-*/SKILL.md`.
+- `claude`: installs commands under `.claude/commands/agora.*.md`.
+- `generic`: keeps portable commands under `.agora/commands`.
 
-El proveedor y modelo se persisten como selección de entorno. Este MVP no invoca directamente una
-API de LLM ni almacena credenciales.
+Provider and model values describe the selected environment. This MVP does not call an LLM API or
+store credentials.
 
-## Actores y swarms
+## Customize the lifecycle
 
-Los actores pueden ser `human`, `ai-agent`, `swarm`, `service` o `automation`. Un Method Pack decide
-qué tipos, capacidades y acciones admite cada rol.
+A Method Pack is a Markdown contract for a work lifecycle. It defines role requirements, allowed
+actor kinds and actions, ordered work states, the terminal state, protocol, tool policy, and gates.
+The core does not attach special behavior to the names Scrum or Kanban.
+
+Install a custom pack for reuse across projects:
+
+```bash
+agora method install --source ./my-method-pack --scope user
+agora configure --default-method my-method
+agora init
+```
+
+Install a pack only in the current initialized project:
+
+```bash
+agora method install --source ./my-method-pack --scope project
+agora swarm create --id delivery --objective "Deliver the objective" --method my-method
+```
+
+See [the custom lifecycle sample](samples/custom-lifecycle/README.md) for a pack that does not derive
+from Scrum or Kanban.
+
+## Actors and swarms
+
+Actors may be `human`, `ai-agent`, `swarm`, `service`, or `automation`. A Method Pack determines which
+actor kinds, capabilities, and actions each role permits.
 
 ```bash
 agora actor add --scope user \
@@ -100,11 +138,11 @@ agora swarm assign --swarm payments --role scrum-master --actor facilitator
 agora swarm assign --swarm payments --role developer --actor delivery-swarm
 ```
 
-En un repositorio Git, `swarm create` crea por defecto `agora/<swarm-id>`. Use `--no-branch` para
-conservar el branch actual. `--project <path>` permite operar un proyecto desde IDEs, runners o
-ambientes cloud sin depender del directorio actual.
+In a Git repository, `swarm create` creates `agora/<swarm-id>` by default. Use `--no-branch` to retain
+the current branch. The global `--project <path>` option lets IDEs, runners, and cloud environments
+operate on an initialized project without changing their working directory.
 
-## Trabajo gobernado
+## Governed work
 
 ```bash
 agora work create --swarm payments --id payment-api --title "Implement payment API" \
@@ -113,23 +151,23 @@ agora work create --swarm payments --id payment-api --title "Implement payment A
 
 agora work transition --swarm payments --work payment-api --to planned --by delivery-swarm
 agora artifact add --swarm payments --work payment-api \
-  --kind source-code --uri repo://src/payment.ts --by delivery-swarm
+  --kind source-code --uri repo://src/payment.py --by delivery-swarm
 agora evidence add --swarm payments --work payment-api \
-  --type test-run --result success --artifact repo://src/payment.ts --by facilitator
+  --type test-run --result success --artifact repo://src/payment.py --by facilitator
 agora work criterion-satisfy --swarm payments --work payment-api \
   --criterion api-works --by owner
 ```
 
-Los estados se leen del Method Pack instalado. No se pueden saltear. La transición terminal exige:
+States come from the installed Method Pack and cannot be skipped. A terminal transition requires:
 
-1. Todos los criterios satisfechos.
-2. Todos los tipos de artefacto requeridos.
-3. Al menos una evidencia exitosa.
-4. Un actor asignado cuyo rol permita la acción.
+1. Every acceptance criterion is satisfied.
+2. Every required artifact kind is registered.
+3. At least one successful evidence record exists.
+4. The acting participant holds a role that permits the action.
 
-## Persistencia
+## Persistence
 
-Cada swarm contiene manifiesto, asignaciones, interacciones, eventos, trabajo, artefactos y evidencia:
+Each swarm contains its manifest, assignments, interactions, events, work, artifacts, and evidence:
 
 ```text
 .agora/swarms/payments/
@@ -146,30 +184,39 @@ Cada swarm contiene manifiesto, asignaciones, interacciones, eventos, trabajo, a
     evidence.md
 ```
 
-El filesystem es el estado actual. Git aporta historial, branches, revisión, sincronización y
-handoffs entre IDE, CLI, CI/CD y agentes cloud.
+The filesystem represents current state. Git provides history, branches, review, synchronization,
+and handoffs across IDEs, CLIs, CI/CD systems, and cloud agents.
 
-## Desarrollo
+## Development
 
 ```bash
-npm run check
-npm run example
+uv run ruff format --check .
+uv run ruff check .
+uv run pytest
+uv build
+uv run python samples/basic-swarm/run.py
+uv run python samples/custom-lifecycle/run.py
 ```
 
-El ejemplo crea un repositorio temporal, instala Agora para Codex, registra un humano, una AI y un
-swarm anidado, crea el branch, demuestra un gate fallido y completa el trabajo con evidencia.
+The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
+for Codex, registers a human, an AI agent, and a nested swarm, creates a branch, demonstrates a failed
+gate, and completes the work with evidence. The
+[custom lifecycle sample](samples/custom-lifecycle/README.md) installs and selects a Method Pack that
+does not derive from a bundled methodology.
 
-Consulte [arquitectura](docs/architecture.md), [modelo de dominio](docs/domain-model.md),
-[ADR 0001](docs/decisions/0001-initial-architecture.md) y [CONTRIBUTING.md](CONTRIBUTING.md).
+See [architecture](docs/architecture.md), [domain model](docs/domain-model.md),
+[ADR 0001](docs/decisions/0001-initial-architecture.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Límites actuales
+## Current limitations
 
-- Scrum y Kanban son Method Packs iniciales, no implementaciones exhaustivas de ambas metodologías.
-- No hay todavía catálogo instalable de integraciones externas ni ejecución de Jira, CI/CD o cloud.
-- No se implementaron handoffs ejecutables, WIP limits, locks distribuidos ni concurrencia remota.
-- Las credenciales pertenecen al entorno o secret manager; Agora solo documenta referencias.
-- Los front matters aceptan deliberadamente un subconjunto JSON-compatible de YAML.
+- Scrum and Kanban are starter Method Packs, not privileged core workflows or exhaustive methodology
+  implementations.
+- Method Packs are installed from local directories; a package registry is not implemented yet.
+- External adapters for Jira, CI/CD, Confluence, repositories, and cloud are not implemented yet.
+- Executable handoffs, WIP limits, distributed locks, and remote concurrency remain future work.
+- Credentials belong to the environment or secret manager; Agora stores references only.
+- Front matter deliberately accepts a JSON-compatible subset of YAML.
 
-## Licencia
+## License
 
-Apache License 2.0. Consulte [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).

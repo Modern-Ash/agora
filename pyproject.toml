@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agora-framework"
+version = "0.1.0"
+description = "Language-, LLM-, and process-agnostic lifecycle governance for human and agentic teams"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Agora contributors" }]
+keywords = ["agents", "governance", "orchestration", "workflow", "lifecycle"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "pytest>=8.3",
+  "ruff>=0.11",
+]
+
+[project.scripts]
+agora = "agora.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agora"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "agora/templates"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/templates",
+  "/samples",
+  "/docs",
+  "/tests",
+  "/README.md",
+  "/CONTRIBUTING.md",
+  "/AGENTS.md",
+  "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"

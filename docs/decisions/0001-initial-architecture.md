@@ -1,42 +1,45 @@
-# ADR 0001: Agora será local, Markdown-first y Git-native
+# ADR 0001: Agora is local, Markdown-first, and Git-native
 
-- Estado: Aceptado
-- Fecha: 2026-08-14
+- Status: Accepted
+- Date: 2026-08-14
 
-## Contexto
+## Context
 
-Agora debe gobernar swarms humanos y agenticos sin depender de un proveedor, LLM, IDE, metodología,
-plataforma o runtime. También debe integrarse con las herramientas diarias de desarrollo y permitir
-continuar el trabajo entre local, CLI, CI/CD y cloud.
+Agora must customize and govern human and agentic work lifecycles without depending on a programming
+language, provider, LLM, IDE, development methodology, platform, or project runtime. It must also
+integrate with daily development tools and preserve continuity across local, CLI, CI/CD, and cloud
+environments.
 
-El primer prototipo utilizó un kernel TypeScript con snapshot JSON. Aunque demostraba invariantes, ese
-modelo convertía Agora en una aplicación de estado y duplicaba la información que debe vivir en el
-repositorio.
+The first prototype used a TypeScript kernel with a JSON snapshot. Although it demonstrated domain
+invariants, that model turned Agora into a state application and duplicated information that belongs
+in the repository.
 
-## Decisión
+## Decision
 
-Distribuir una CLI instalable y templates versionados, siguiendo el modelo de herramientas locales de
-inicialización. La CLI materializa configuración personal en `~/.agora`, protocolo de proyecto en
-`.agora`, adapters para el agente elegido y un branch por swarm.
+Distribute an installable Python CLI and versioned Markdown templates, following the model of local
+project initialization tools. Python is the implementation language of the distribution tooling and
+does not constrain the language or runtime of governed projects. The CLI materializes personal
+configuration under `~/.agora`, project protocol under `.agora`, adapters for the selected agent, and
+one branch per swarm.
 
-Usar Markdown con front matter JSON-compatible como contrato operativo. Leer workflows, roles,
-capabilities y allowed actions desde Method Packs. Usar filesystem como estado presente y Git como
-historial, sincronización y superficie de revisión. No invocar directamente SDKs de LLM ni almacenar
-credenciales.
+Use Markdown with JSON-compatible front matter as the operational contract. Read workflows, roles,
+capabilities, and allowed actions from open-ended Method Packs rather than hard-coding a development
+process. Use the filesystem for current state and Git for history, synchronization, and review. Do
+not invoke LLM SDKs directly, inspect source languages, or store credentials.
 
-## Consecuencias
+## Consequences
 
-El proceso es visible para humanos, portable entre agentes y recuperable sin una base de datos. Los
-Method Packs pueden revisarse como código y cada ambiente puede instalar su propio adapter.
+The process is visible to humans, portable across agents, and recoverable without a database. Method
+Packs can be reviewed as code and each environment can install its own adapter.
 
-La CLI debe resolver concurrencia, migraciones de documentos y compatibilidad de templates en futuras
-versiones. Markdown no reemplaza validación: el front matter conserva metadatos estructurados y los
-gates siguen siendo ejecutables.
+The CLI will need concurrency controls, document migrations, and template compatibility rules in
+future versions. Markdown does not replace validation: front matter preserves structured metadata and
+gates remain executable.
 
-## Trabajo futuro
+## Future work
 
-- Registro instalable de Method Packs e integraciones.
-- Tool manifests para Jira, repositorios, CI/CD, documentación y cloud.
-- Handoffs ejecutables y swarms recursivos con límites de delegación.
-- Locks o leases para trabajo distribuido.
-- Políticas de aprobación humana, presupuestos y permisos por ambiente.
+- Installable registry of Method Packs and integrations.
+- Tool manifests for Jira, repositories, CI/CD, documentation, and cloud.
+- Executable handoffs and recursive swarms with delegation limits.
+- Locks or leases for distributed work.
+- Human approval policies, budgets, and environment-specific permissions.

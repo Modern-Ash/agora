@@ -1,51 +1,65 @@
-# Modelo de dominio
+# Domain model
 
 ## Method Pack
 
-Un Method Pack define roles requeridos, estados de trabajo, estado terminal, protocolo y política de
-herramientas. Scrum y Kanban son packs instalados, editables y versionables. Un método personalizado
-puede seguir el mismo contrato.
+A Method Pack is the unit of lifecycle customization. It defines required roles, allowed actor kinds
+and actions, ordered work states, terminal state, protocol, tool policy, artifacts, evidence, and
+gates. Its identifier is open: Scrum and Kanban are installed, editable presets, while any custom
+pack may implement the same Markdown contract.
 
-## Actor, role y assignment
+No Method Pack is privileged by the core. A project can model a standard methodology, an internal
+software delivery process, an operational runbook, or a purpose-built hybrid lifecycle.
 
-Un **Actor** tiene identidad, tipo y capacidades. Sus tipos son humano, agente AI, swarm, servicio o
-automatización. Un **Role** declara capacidades, tipos de actor y acciones permitidas. Un
-**Assignment** vincula temporalmente ambos dentro de un swarm.
+## Actor, role, and assignment
 
-La identidad no cambia cuando el trabajo pasa de una persona a una AI o a un swarm. Cambia la
-asignación y se conserva el handoff. Un swarm puede actuar como actor compuesto dentro de otro.
+An **Actor** has an identity, kind, and capabilities. Kinds include human, AI agent, swarm, service,
+and automation. A **Role** declares required capabilities, allowed actor kinds, and allowed actions.
+An **Assignment** temporarily links an actor to a role within a swarm.
+
+Identity does not change when work moves from a person to an AI agent or swarm. The assignment changes
+and the handoff is preserved. A swarm can act as a composite actor inside another swarm.
 
 ## Swarm
 
-Un swarm es un equipo temporal, asociado a un objetivo, Method Pack y branch. Empieza `forming`, pasa
-a `ready` cuando todos los roles requeridos están cubiertos, a `running` cuando avanza su trabajo y a
-`completed` cuando todos sus work items alcanzan el estado terminal.
+A swarm is a temporary team associated with an objective, Method Pack, and branch. It starts as
+`forming`, becomes `ready` when every required role is assigned, becomes `running` when work advances,
+and becomes `completed` when every work item reaches the terminal state.
 
 ## Work
 
-Un work item es un directorio Markdown con descripción, estado, criterios, artefactos y evidencia. Su
-workflow se lee de `METHOD.md`; no está codificado en la integración del LLM.
+A work item is a Markdown directory containing description, state, criteria, artifacts, and evidence.
+Its workflow comes from `METHOD.md`; it is not hard-coded into an LLM integration.
 
-Para actuar, un actor debe:
+Work content and artifact references are opaque to the core. Agora can govern a Python service, a
+Java application, infrastructure definitions, documentation, or a polyglot system without changing
+the lifecycle engine.
 
-1. Estar registrado en el scope de usuario o proyecto.
-2. Estar asignado a un rol del swarm.
-3. Tener las capacidades y kind admitidos por ese rol.
-4. Tener la acción incluida en `allowed-actions`.
+To act, an actor must:
 
-## Artifact y evidence
+1. Be registered in the user or project scope.
+2. Be assigned to a swarm role.
+3. Have a kind and capabilities accepted by that role.
+4. Have the action listed in the role's `allowed-actions`.
 
-Un artefacto es una salida durable o referencia externa: código, especificación, ticket, build,
-review, aprobación o deployment. La evidencia registra un resultado verificable y su productor. El
-gate terminal exige criterios satisfechos, tipos de artefacto requeridos y evidencia exitosa.
+## Artifact and evidence
+
+An artifact is a durable output or external reference, such as code, a specification, ticket, build,
+review, approval, or deployment. Evidence records a verifiable result and its producer. The terminal
+gate requires satisfied criteria, required artifact kinds, and successful evidence.
 
 ## Tool
 
-Una tool representa una capacidad sobre el entorno diario del desarrollador: repositorio, Jira,
-CI/CD, Confluence, cloud, observabilidad o comunicación. Method Pack, proyecto, role y actor restringen
-su uso. Autenticación y secretos permanecen fuera de los documentos versionados.
+A tool represents a capability in the developer's daily ecosystem: repository, Jira, CI/CD,
+Confluence, cloud, observability, or communication. Method Pack, project, role, and actor restrict its
+use. Authentication and secrets remain outside versioned documents.
 
 ## Environment
 
-IDE, CLI, runner y agente cloud son ambientes de ejecución. No poseen el estado de Agora. Todos leen
-y escriben el mismo protocolo en el workspace y sincronizan mediante Git.
+IDE, CLI, runner, and cloud agent are execution environments. They do not own Agora state. Every
+environment reads and writes the same workspace protocol and synchronizes through Git.
+
+## Model configuration
+
+Provider and model identify the selected execution environment. They are strings in configuration,
+not a closed list or a core SDK dependency. Changing an LLM must not change actor identity, workflow
+state, artifacts, or governance history.

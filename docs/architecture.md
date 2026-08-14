@@ -1,70 +1,80 @@
-# Arquitectura inicial
+# Initial architecture
 
-## Propósito
+## Purpose
 
-Agora instala una capa local de gobernanza para agentes y humanos. El producto distribuido es una CLI
-pequeña acompañada de templates Markdown. El producto materializado es el directorio `.agora` y los
-adapters del agente elegido dentro del proyecto.
+Agora installs a local layer for customizing and governing the complete work lifecycle of humans and
+agents. The distributed product is a small Python CLI accompanied by Markdown templates. Python is
+an implementation choice for the CLI, not a required language or runtime for governed projects. The
+materialized product is the `.agora` directory and the selected agent adapter inside a project.
 
 ```text
-CLI + templates
-      |
-      +-> ~/.agora                  configuración personal
-      +-> <project>/.agora          protocolo y estado compartido
-      +-> integration adapter       skills o comandos del agente
-      +-> Git branch                aislamiento e historial del swarm
+Python CLI + templates
+          |
+          +-> ~/.agora                  personal configuration
+          +-> <project>/.agora          shared protocol and state
+          +-> integration adapter       agent skills or commands
+          +-> Git branch                swarm isolation and history
 ```
 
-## Componentes
+## Components
 
 ### CLI
 
-`src/cli-app.ts` traduce comandos de shell a operaciones del workspace. No mantiene un servidor ni una
-base de datos. `src/workspace.ts` materializa y valida documentos, capacidades, acciones, workflows y
-gates. `src/markdown.ts` implementa el front matter JSON-compatible usado por el protocolo.
+`src/agora/cli.py` translates shell commands into workspace operations. It does not maintain a server
+or database, invoke an LLM, inspect project source languages, or impose a development methodology.
+`src/agora/workspace.py` materializes and validates documents, capabilities, actions, workflows, and
+gates. `src/agora/markdown.py` implements the JSON-compatible front matter used by the protocol.
 
 ### Templates
 
-`templates/project` contiene la constitución, protocolo y catálogos base. `templates/methods` aporta
-Scrum y Kanban. `templates/commands` contiene instrucciones portables que los adapters transforman en
-skills de Codex o comandos de otros agentes.
+`templates/project` contains the base constitution, protocol, and catalogs. `templates/methods`
+provides Scrum and Kanban as replaceable presets. User and project scopes may install any Method Pack
+that satisfies the Markdown contract. `templates/commands` contains portable instructions that
+adapters install as Codex skills or commands for other agents.
 
 ### Scopes
 
-- Distribución: defaults versionados con la CLI.
-- Usuario: preferencias y actores reutilizables en `~/.agora` o `$AGORA_HOME`.
-- Proyecto: constitución, integración, métodos y políticas compartidas.
-- Swarm: objetivo, asignaciones, branch, trabajo y evidencia.
+- Distribution: defaults versioned with the Python package.
+- User: reusable preferences and actors under `~/.agora` or `$AGORA_HOME`.
+- Project: shared constitution, integration, methods, and policies.
+- Swarm: objective, assignments, branch, work, and evidence.
 
-Los scopes más específicos pueden restringir a los anteriores. No deberían ampliar silenciosamente
-permisos prohibidos por un scope superior.
+More specific scopes may restrict broader scopes. They must not silently grant permissions prohibited
+by a broader scope.
 
-### Git y filesystem
+Method Packs under `~/.agora/methods` are copied into a newly initialized project. Packs installed in
+the project remain local to it. The active pack, rather than the core CLI, supplies lifecycle roles,
+states, transitions, protocol, tool policy, and completion expectations.
 
-Markdown es el contrato durable y el filesystem representa el estado presente. Git añade historial,
-diff, revisión, sincronización y branches. No existe un snapshot JSON paralelo. Los errores dejan el
-documento anterior intacto mediante reemplazo atómico.
+### Git and filesystem
 
-### Adapters de ambiente
+Markdown is the durable contract and the filesystem represents current state. Git adds history,
+diffs, review, synchronization, and branches. There is no parallel JSON snapshot. Atomic replacement
+keeps the previous document intact when an operation fails.
 
-El protocolo es idéntico en IDE, CLI, CI/CD o cloud. El adapter solo decide dónde instalar las
-instrucciones ejecutables:
+### Environment adapters
+
+The protocol remains identical across IDE, CLI, CI/CD, and cloud environments. An adapter only
+determines where executable instructions are installed:
 
 - Codex: `.agents/skills/agora-*/SKILL.md`.
 - Claude: `.claude/commands/agora.*.md`.
 - Generic: `.agora/commands/*.md`.
 
-Agregar un adapter no debe modificar Method Packs ni reglas de dominio.
+Adding an adapter must not change Method Packs or domain rules.
 
-## Integraciones externas
+Provider and model identifiers are opaque configuration values. The core has no LLM SDK dependency;
+an adapter or execution environment decides how a configured model is reached.
 
-Jira, repositorios, CI/CD, Confluence, cloud y observabilidad se modelarán como tool adapters con
-capabilities explícitas. Las políticas de rol decidirán qué acciones pueden invocarse. Los resultados
-se convertirán en referencias de artefacto o evidencia; las credenciales nunca se copiarán a Git.
+## External integrations
 
-## Seguridad y concurrencia
+Jira, repositories, CI/CD, Confluence, cloud, and observability will be modeled as tool adapters with
+explicit capabilities. Role policies determine which actions may be invoked. Results become artifact
+or evidence references; credentials are never copied into Git.
 
-Este slice valida actor kind, capacidades, asignación, acción permitida, transición y gate. Todavía no
-implementa sandboxing, firmas, locks distribuidos, autenticación de actores ni protección ante dos
-procesos escribiendo simultáneamente. Esas reglas deben agregarse sin convertir chat history o un
-servicio propietario en fuente de verdad.
+## Security and concurrency
+
+This slice validates actor kind, capabilities, assignment, allowed action, transition, and completion
+gate. It does not yet implement sandboxing, signatures, distributed locks, actor authentication, or
+concurrent writer protection. Those rules must be added without turning chat history or a proprietary
+service into the source of truth.

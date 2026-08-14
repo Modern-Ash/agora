@@ -1,7 +1,12 @@
+.venv/
 node_modules/
 dist/
-coverage/
-*.tsbuildinfo
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
 .agora/
 .agents/skills/agora-*/
 .claude/commands/agora.*.md
