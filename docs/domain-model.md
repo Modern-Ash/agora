@@ -120,6 +120,10 @@ When pack ids collide, project registry provenance precedes user provenance, whi
 bundled distribution. Explicit registry selection overrides inference while preserving pack
 validation and destination-scope overwrite rules.
 
+A remote registry index publishes one or more semantic releases. Each release identifies an archive,
+mandatory SHA-256, and optional Ed25519 signature plus key id. After verification Agora installs the
+same local snapshot contract and adds a generated source record containing immutable provenance.
+
 ## Environment
 
 IDE, CLI, runner, and cloud agent are execution environments. They do not own Agora state. Every

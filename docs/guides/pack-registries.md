@@ -1,7 +1,8 @@
 # Pack registries
 
 An Agora registry is a local, Markdown-first catalog of validated Method Packs and Tool Packs. It is
-a versionable directory snapshot, not a package server or remote source of truth.
+a versionable directory snapshot and remains the installed source of truth even when obtained from a
+remote release index.
 
 ## Registry layout
 
@@ -56,8 +57,8 @@ git add .agora/registries/team-catalog
 ```
 
 User registries live under `~/.agora/registries`; project registries live under
-`.agora/registries`. `--force` refreshes matching files but does not delete files removed from a newer
-source snapshot. Review the diff and remove intentionally retired entries explicitly.
+`.agora/registries`. `--force` stages and validates a complete replacement, then swaps it with
+rollback protection. Files removed from the source do not remain in the refreshed snapshot.
 
 ## Discover packs
 
@@ -107,7 +108,6 @@ credentials and must not put credentials in Tool Pack inputs.
 
 ## Current boundary
 
-This release accepts local filesystem sources. A remote index, signed releases, version constraints,
-checksums, dependency resolution, and network download are not implemented yet. Those features can
-later resolve to the same immutable registry snapshot contract without changing installed project
-state or making a hosted catalog authoritative.
+Agora also accepts versioned remote indexes with mandatory checksums and optional or required
+Ed25519 signatures. See [Remote registry releases](remote-registries.md). Dependency resolution,
+organization trust stores, revocation, and update notifications are not implemented yet.

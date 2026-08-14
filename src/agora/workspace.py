@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
@@ -66,6 +67,7 @@ from agora.model import (
     MethodPackRecord,
     ProjectConfiguration,
     RegistryRecord,
+    RegistrySourceRecord,
     SessionRecord,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -87,7 +89,13 @@ from agora.model import (
     WorkspaceLockStatus,
     WorkspaceStatus,
 )
-from agora.registries import bundled_registry, discover_registry_packs, load_registry
+from agora.registries import (
+    bundled_registry,
+    discover_registry_packs,
+    load_registry,
+    render_registry_source,
+)
+from agora.registry_distribution import download_registry_release
 from agora.tools import load_tool_contract, validate_operation_inputs
 from agora.upgrades import (
     CURRENT_PROJECT_VERSION,
@@ -326,17 +334,93 @@ class AgoraWorkspace:
     @_locked_mutation("scoped")
     def install_registry(self, data: InstallRegistryInput) -> RegistryRecord:
         source = Path(data.source).expanduser().resolve()
-        if not source.is_dir():
-            raise FileNotFoundError(f"Registry directory not found: {source}")
-        registry = load_registry(source, data.scope)
-        destination_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        if source.is_dir():
+            if (
+                data.version
+                or data.public_key
+                or data.require_signature
+                or data.allow_insecure_http
+            ):
+                raise ValueError("Remote registry options cannot be used with a local directory")
+            return self._install_registry_snapshot(source, data.scope, data.force)
+        if "://" not in data.source and not source.is_file():
+            raise FileNotFoundError(f"Registry directory or index not found: {source}")
+        with download_registry_release(
+            data.source,
+            version=data.version,
+            public_key=data.public_key,
+            require_signature=data.require_signature,
+            allow_insecure_http=data.allow_insecure_http,
+        ) as (registry_root, index, release, signature_verified, archive):
+            if (registry_root / "SOURCE.md").exists():
+                raise ValueError(
+                    "Remote registry archives must not contain installer-owned SOURCE.md"
+                )
+            registry = load_registry(registry_root, data.scope)
+            if registry.id != index.id:
+                raise ValueError(
+                    f"Registry archive id {registry.id} does not match index id {index.id}"
+                )
+            if registry.version != release.version:
+                raise ValueError(
+                    f"Registry archive version {registry.version or 'missing'} does not match "
+                    f"release {release.version}"
+                )
+            provenance = RegistrySourceRecord(
+                registry=registry.id,
+                version=release.version,
+                index=index.source,
+                archive=archive,
+                sha256=release.sha256,
+                signature_verified=signature_verified,
+                key_id=release.key_id if signature_verified else None,
+                installed_at=self._timestamp(),
+            )
+            return self._install_registry_snapshot(
+                registry_root,
+                data.scope,
+                data.force,
+                provenance=provenance,
+            )
+
+    def _install_registry_snapshot(
+        self,
+        source: Path,
+        scope: str,
+        force: bool,
+        *,
+        provenance: RegistrySourceRecord | None = None,
+    ) -> RegistryRecord:
+        registry = load_registry(source, scope)
+        destination_root = agora_home() if scope == "user" else self.project_root() / ".agora"
         destination = destination_root / "registries" / registry.id
-        if destination.exists() and not data.force:
+        if destination.exists() and not force:
             raise FileExistsError(
                 f"Registry already exists: {destination}. Pass --force to replace its files."
             )
-        copy_template_tree(source, destination, {}, data.force)
-        return load_registry(destination, data.scope)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=f".{registry.id}-install-", dir=destination.parent
+        ) as temporary:
+            staged = Path(temporary) / registry.id
+            copy_template_tree(source, staged, {}, False)
+            if provenance is not None:
+                atomic_write(staged / "SOURCE.md", render_registry_source(provenance))
+            load_registry(staged, scope)
+            backup = destination.with_name(f".{registry.id}-backup")
+            if backup.exists():
+                raise FileExistsError(f"Registry backup already exists: {backup}")
+            if destination.exists():
+                destination.rename(backup)
+            try:
+                staged.rename(destination)
+            except Exception:
+                if backup.exists():
+                    backup.rename(destination)
+                raise
+            if backup.exists():
+                shutil.rmtree(backup)
+        return load_registry(destination, scope)
 
     def list_registries(self) -> list[RegistryRecord]:
         records = [bundled_registry()]

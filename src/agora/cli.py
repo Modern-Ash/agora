@@ -110,11 +110,23 @@ def _build_parser() -> argparse.ArgumentParser:
     upgrade.add_argument("--id", help="Stable id for the durable upgrade record")
 
     registry = commands.add_parser(
-        "registry", help="Manage local Markdown pack registries"
+        "registry", help="Manage local and remote Markdown pack registries"
     ).add_subparsers(dest="registry_command", required=True)
     registry_install = registry.add_parser("install", help="Install a registry snapshot")
     registry_install.add_argument("--source", required=True)
     registry_install.add_argument("--scope", choices=("user", "project"), default="user")
+    registry_install.add_argument("--version", help="Remote release version (default: latest)")
+    registry_install.add_argument("--public-key", help="Trusted Ed25519 public key in PEM format")
+    registry_install.add_argument(
+        "--require-signature",
+        action="store_true",
+        help="Reject a remote release unless its Ed25519 signature verifies",
+    )
+    registry_install.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        help="Permit HTTP for an explicitly trusted development registry",
+    )
     registry_install.add_argument("--force", action="store_true")
     registry.add_parser("list", help="List bundled and installed registries")
 
@@ -437,7 +449,15 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.upgrade(UpgradeInput(apply=args.apply, id=args.id))
     if args.command == "registry" and args.registry_command == "install":
         return workspace.install_registry(
-            InstallRegistryInput(source=args.source, scope=args.scope, force=args.force)
+            InstallRegistryInput(
+                source=args.source,
+                scope=args.scope,
+                force=args.force,
+                version=args.version,
+                public_key=args.public_key,
+                require_signature=args.require_signature,
+                allow_insecure_http=args.allow_insecure_http,
+            )
         )
     if args.command == "registry" and args.registry_command == "list":
         return workspace.list_registries()

@@ -135,10 +135,12 @@ agora swarm create --id delivery --objective "Deliver the objective" --method my
 See [the custom lifecycle sample](samples/custom-lifecycle/README.md) for a pack that does not derive
 from Scrum or Kanban.
 
-Discover bundled and locally registered packs, or install a reviewed registry snapshot:
+Discover bundled and registered packs, or install a reviewed local or remote registry snapshot:
 
 ```bash
 agora registry install --source ./team-registry --scope user
+agora registry install --source https://catalog.example.com/INDEX.md \
+  --version 1.0.0 --public-key ./team-release.pem --require-signature --scope user
 agora registry list
 agora pack search --kind method --query release
 agora pack install --kind method --id release-flow \
@@ -147,6 +149,9 @@ agora pack install --kind method --id release-flow \
 
 Project registries override user registries, which override the bundled catalog when the same pack id
 appears more than once. See the [pack registry guide](docs/guides/pack-registries.md).
+Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
+provenance beside the installed snapshot. See the
+[remote registry guide](docs/guides/remote-registries.md).
 
 ## Actors and swarms
 
@@ -421,6 +426,7 @@ uv run python samples/interruptions/run.py
 uv run python samples/project-upgrade/run.py
 uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
+uv run python samples/remote-registry/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -442,7 +448,9 @@ workspace directly from its Markdown records. The
 resumption, rejection, and cancellation.
 The [project upgrade sample](samples/project-upgrade/README.md) applies a backed-up protocol
 migration, while the [concurrent writers sample](samples/concurrent-writes/README.md) demonstrates
-local process contention and recovery.
+local process contention and recovery. The
+[remote registry sample](samples/remote-registry/README.md) signs, verifies, installs, and validates a
+versioned registry snapshot without persisting a private key.
 
 ## Documentation
 
@@ -462,6 +470,7 @@ local process contention and recovery.
 - [Concurrent writers](docs/guides/concurrent-writers.md)
 - [Conventional Commits](docs/guides/conventional-commits.md)
 - [Pack registries](docs/guides/pack-registries.md)
+- [Remote registry releases](docs/guides/remote-registries.md)
 - [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
 - [ADR 0001](docs/decisions/0001-initial-architecture.md)
 - [Contributing](CONTRIBUTING.md)
@@ -470,8 +479,9 @@ local process contention and recovery.
 
 - Scrum and Kanban are starter Method Packs, not privileged core workflows or exhaustive methodology
   implementations.
-- Method and Tool Packs can be discovered through bundled, user, and project registry snapshots.
-  Remote indexes, signed releases, and dependency resolution are not implemented yet.
+- Method and Tool Packs can be discovered through bundled, user, project, and verified remote
+  registry snapshots. Dependency resolution, organization trust stores, key revocation, and update
+  notifications are not implemented yet.
 - The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
   Confluence, and cloud platforms are not bundled yet.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,

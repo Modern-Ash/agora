@@ -100,6 +100,10 @@ The CLI should list `configure`, `init`, `upgrade`, `doctor`, `status`, `validat
 `artifact`, `evidence`, and `approval`. These commands operate on files; no background process should
 be running.
 
+Registry installation accepts local directories or versioned remote `INDEX.md` sources. Remote
+archives always require SHA-256 verification and can require a trusted Ed25519 signature. See
+[Remote registry releases](remote-registries.md).
+
 ## Configuration scopes
 
 Agora resolves configuration from broad defaults toward the active work context:

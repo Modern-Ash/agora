@@ -30,8 +30,10 @@ Tool Packs and structured external operations. `src/agora/markdown.py` implement
 JSON-compatible front matter used by the protocol. `src/agora/upgrades.py` plans ordered project
 migrations, preserves customization boundaries, backs up changed files, and writes durable upgrade
 manifests.
-`src/agora/registries.py` validates local registry snapshots and discovers Method and Tool Packs
-without introducing a network package manager.
+`src/agora/registries.py` validates installed registry snapshots and discovers Method and Tool Packs.
+`src/agora/registry_distribution.py` resolves remote Markdown indexes, selects semantic releases,
+enforces transport and archive limits, verifies SHA-256 and optional Ed25519 signatures, and extracts
+snapshots into temporary directories before the local registry path accepts them.
 
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
@@ -65,6 +67,10 @@ Registries are immutable-by-review catalog snapshots under user or project scope
 every matching provenance visible; installation resolves project before user before bundled unless a
 registry id is selected explicitly. Pack installation still copies through the ordinary Method or
 Tool Pack validation path.
+
+A remote registry index is a distribution mechanism, not runtime state. Agora verifies its selected
+archive and persists a complete local snapshot plus `SOURCE.md`. Governed work never depends on the
+index remaining available.
 
 ### Git and filesystem
 

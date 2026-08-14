@@ -198,6 +198,40 @@ class RegistryRecord:
     path: str
     methods: list[str]
     tools: list[str]
+    version: str | None = None
+    source: str | None = None
+    checksum: str | None = None
+    signature_verified: bool = False
+
+
+@dataclass(frozen=True)
+class RegistryReleaseRecord:
+    registry: str
+    version: str
+    archive: str
+    sha256: str
+    signature: str | None = None
+    key_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RegistryIndexRecord:
+    id: str
+    name: str
+    source: str
+    releases: list[RegistryReleaseRecord]
+
+
+@dataclass(frozen=True)
+class RegistrySourceRecord:
+    registry: str
+    version: str
+    index: str
+    archive: str
+    sha256: str
+    signature_verified: bool
+    key_id: str | None
+    installed_at: str
 
 
 @dataclass(frozen=True)
@@ -404,6 +438,10 @@ class InstallRegistryInput:
     source: str
     scope: Literal["user", "project"]
     force: bool = False
+    version: str | None = None
+    public_key: str | None = None
+    require_signature: bool = False
+    allow_insecure_http: bool = False
 
 
 @dataclass(frozen=True)

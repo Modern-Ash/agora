@@ -1,11 +1,30 @@
+import base64
+import hashlib
 import io
+import json
 import shutil
+import tarfile
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agora.cli import main
-from agora.model import InitInput, InstallCatalogPackInput, InstallRegistryInput
+from agora.model import (
+    InitInput,
+    InstallCatalogPackInput,
+    InstallRegistryInput,
+    RegistryReleaseRecord,
+)
+from agora.registry_distribution import (
+    load_registry_index,
+    release_signature_payload,
+    select_registry_release,
+)
 from agora.workspace import AgoraWorkspace
 
 ROOT = Path(__file__).parents[1]
@@ -34,6 +53,63 @@ def _registry(
         encoding="utf-8",
     )
     return destination
+
+
+def _release_index(
+    destination: Path,
+    registry: Path,
+    *,
+    version: str = "1.0.0",
+    signed: bool = False,
+    checksum: str | None = None,
+) -> tuple[Path, Path | None]:
+    manifest = registry / "REGISTRY.md"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            'name: "Team Catalog"', f'name: "Team Catalog"\nversion: "{version}"'
+        ),
+        encoding="utf-8",
+    )
+    archive_name = f"team-catalog-{version}.tar.gz"
+    archive_path = destination / archive_name
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(registry, arcname="team-catalog")
+    digest = checksum or hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    release = RegistryReleaseRecord(
+        registry="team-catalog",
+        version=version,
+        archive=archive_name,
+        sha256=digest,
+        key_id="team-release" if signed else None,
+    )
+    public_key_path: Path | None = None
+    signature: str | None = None
+    if signed:
+        private_key = Ed25519PrivateKey.generate()
+        signature = base64.b64encode(private_key.sign(release_signature_payload(release))).decode()
+        public_key_path = destination / "team-release.pem"
+        public_key_path.write_bytes(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+    releases = [
+        {
+            "version": version,
+            "archive": archive_name,
+            "sha256": digest,
+            **({"signature": signature, "key-id": "team-release"} if signed else {}),
+        }
+    ]
+    index = destination / "INDEX.md"
+    index.write_text(
+        '---\nschema: "agora/registry-index/v1"\nid: "team-catalog"\n'
+        f'name: "Team Catalog"\nreleases: {json.dumps(releases, separators=(",", ":"))}\n'
+        "---\n\n# Team Catalog releases\n",
+        encoding="utf-8",
+    )
+    return index, public_key_path
 
 
 def test_discovers_bundled_packs_without_an_initialized_project(
@@ -197,3 +273,245 @@ def test_cli_installs_searches_and_selects_a_catalog_pack(tmp_path: Path, monkey
     assert '"registry": "cli-catalog"' in output.getvalue()
     assert '"id": "release-flow"' in output.getvalue()
     assert (root / ".agora" / "methods" / "release-flow" / "METHOD.md").exists()
+
+
+def test_installs_a_signed_registry_release_with_durable_provenance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, public_key = _release_index(tmp_path, source, signed=True)
+    assert public_key is not None
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+
+    installed = workspace.install_registry(
+        InstallRegistryInput(
+            source=str(index),
+            scope="project",
+            public_key=str(public_key),
+            require_signature=True,
+        )
+    )
+
+    assert installed.version == "1.0.0"
+    assert installed.source == index.as_uri()
+    assert installed.checksum is not None
+    assert installed.signature_verified is True
+    assert (Path(installed.path) / "SOURCE.md").is_file()
+    report = workspace.validate()
+    assert report.ok is True
+    assert report.checked["registries"] == 1
+
+
+def test_rejects_a_remote_registry_checksum_mismatch_before_copy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, _ = _release_index(tmp_path, source, checksum="0" * 64)
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        AgoraWorkspace(cwd=tmp_path).install_registry(
+            InstallRegistryInput(source=str(index), scope="user")
+        )
+
+    assert not (tmp_path / "home" / "registries" / "team-catalog").exists()
+
+
+def test_rejects_unsafe_remote_registry_archive_paths(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    archive_path = tmp_path / "team-catalog-1.0.0.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        member = tarfile.TarInfo("../outside.md")
+        payload = b"outside"
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    releases = [
+        {
+            "version": "1.0.0",
+            "archive": archive_path.name,
+            "sha256": digest,
+        }
+    ]
+    index = tmp_path / "INDEX.md"
+    index.write_text(
+        '---\nschema: "agora/registry-index/v1"\nid: "team-catalog"\n'
+        f'name: "Team Catalog"\nreleases: {json.dumps(releases, separators=(",", ":"))}\n'
+        "---\n\n# Unsafe release\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its destination"):
+        AgoraWorkspace(cwd=tmp_path).install_registry(
+            InstallRegistryInput(source=str(index), scope="user")
+        )
+
+    assert not (tmp_path / "outside.md").exists()
+
+
+def test_remote_http_requires_explicit_opt_in(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+
+    with pytest.raises(PermissionError, match="allow-insecure-http"):
+        AgoraWorkspace(cwd=tmp_path).install_registry(
+            InstallRegistryInput(source="http://127.0.0.1:9/INDEX.md", scope="user")
+        )
+
+
+def test_downloads_a_registry_over_explicitly_allowed_http(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, _ = _release_index(tmp_path, source)
+    handler = partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        installed = AgoraWorkspace(cwd=tmp_path).install_registry(
+            InstallRegistryInput(
+                source=f"http://127.0.0.1:{server.server_port}/{index.name}",
+                scope="user",
+                allow_insecure_http=True,
+            )
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+    assert installed.version == "1.0.0"
+    assert installed.source is not None and installed.source.startswith("http://127.0.0.1:")
+    assert installed.signature_verified is False
+
+
+def test_remote_index_cannot_reference_a_local_archive(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, _ = _release_index(tmp_path, source)
+    archive = tmp_path / "team-catalog-1.0.0.tar.gz"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(archive.name, archive.as_uri()),
+        encoding="utf-8",
+    )
+    handler = partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(ValueError, match="cannot reference local archive"):
+            AgoraWorkspace(cwd=tmp_path).install_registry(
+                InstallRegistryInput(
+                    source=f"http://127.0.0.1:{server.server_port}/{index.name}",
+                    scope="user",
+                    allow_insecure_http=True,
+                )
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_rejects_a_registry_signature_from_an_untrusted_key(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, _ = _release_index(tmp_path, source, signed=True)
+    untrusted = Ed25519PrivateKey.generate().public_key()
+    untrusted_path = tmp_path / "untrusted.pem"
+    untrusted_path.write_bytes(
+        untrusted.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
+    with pytest.raises(ValueError, match="signature is invalid"):
+        AgoraWorkspace(cwd=tmp_path).install_registry(
+            InstallRegistryInput(
+                source=str(index),
+                scope="user",
+                public_key=str(untrusted_path),
+                require_signature=True,
+            )
+        )
+
+
+def test_selects_the_latest_registry_release_by_default() -> None:
+    releases = [
+        {"version": version, "archive": f"release-{version}.zip", "sha256": "0" * 64}
+        for version in ("1.9.0", "2.0.0", "1.10.0")
+    ]
+    contents = (
+        '---\nschema: "agora/registry-index/v1"\nid: "team-catalog"\n'
+        f'name: "Team Catalog"\nreleases: {json.dumps(releases, separators=(",", ":"))}\n'
+        "---\n\n# Releases\n"
+    ).encode()
+
+    index = load_registry_index(contents, "https://example.com/INDEX.md")
+
+    assert select_registry_release(index, None).version == "2.0.0"
+    assert select_registry_release(index, "1.10.0").version == "1.10.0"
+
+
+def test_cli_installs_a_versioned_signed_registry_release(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    source = _registry(
+        tmp_path / "source",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index, public_key = _release_index(tmp_path, source, signed=True)
+    assert public_key is not None
+    AgoraWorkspace(cwd=root).initialize(InitInput(integration="generic"))
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    result = main(
+        [
+            "registry",
+            "install",
+            "--source",
+            str(index),
+            "--scope",
+            "project",
+            "--version",
+            "1.0.0",
+            "--public-key",
+            str(public_key),
+            "--require-signature",
+        ],
+        cwd=root,
+        stdout=output,
+        stderr=errors,
+    )
+
+    assert result == 0
+    assert errors.getvalue() == ""
+    assert '"version": "1.0.0"' in output.getvalue()
+    assert '"signature_verified": true' in output.getvalue()

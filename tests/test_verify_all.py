@@ -26,6 +26,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: pack-registry",
         "sample: project-upgrade",
         "sample: recursive-swarms",
+        "sample: remote-registry",
         "sample: tool-integration",
     ]
     assert not {"node", "npm", "npx"}.intersection(executables)

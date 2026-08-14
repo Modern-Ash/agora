@@ -29,6 +29,7 @@ uv run python samples/interruptions/run.py
 uv run python samples/project-upgrade/run.py
 uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
+uv run python samples/remote-registry/run.py
 ```
 
 ## Rules
