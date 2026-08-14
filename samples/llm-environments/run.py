@@ -66,11 +66,19 @@ def main() -> None:
         adapter = project / example.adapter_path
         if not adapter.is_file():
             raise RuntimeError(f"Expected adapter was not installed: {adapter}")
+        report = workspace.validate()
+        if not report.ok:
+            details = ", ".join(f"{item.code}: {item.path}" for item in report.issues)
+            raise RuntimeError(f"{example.name} adapter validation failed: {details}")
         print(
             f"{example.name}: integration={attributes['integration']} "
             f"provider={attributes['provider']} model={attributes['model']}"
         )
         print(f"  adapter={adapter}")
+        print(
+            f"  validated={report.checked['commands']} commands, "
+            f"{report.checked['adapters']} adapters"
+        )
 
     print("No model APIs were called.")
 

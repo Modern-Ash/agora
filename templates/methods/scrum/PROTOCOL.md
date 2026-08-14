@@ -6,3 +6,7 @@ even when one actor temporarily holds multiple roles.
 
 A linked Developer swarm may propose and collect bounded child work. The child Product Owner accepts
 the proposal, and the parent Product Owner retains independent acceptance authority.
+
+Developers and the Scrum Master may block and resume work with an attributed reason. The Product
+Owner may cancel work. The Scrum Master may block and resume a delegation; the child Product Owner
+may reject a proposal, while the parent Product Owner may cancel it.

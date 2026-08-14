@@ -5,7 +5,16 @@ ActorKind = Literal["human", "ai-agent", "swarm", "service", "automation"]
 Integration = Literal["generic", "codex", "claude"]
 Method = str
 ToolRisk = Literal["read", "write", "destructive"]
-DelegationStatus = Literal["proposed", "accepted", "collected"]
+DelegationStatus = Literal[
+    "proposed",
+    "accepted",
+    "blocked",
+    "collected",
+    "rejected",
+    "cancelled",
+]
+WorkOperationalStatus = Literal["active", "blocked", "cancelled"]
+ValidationSeverity = Literal["error", "warning"]
 
 ACTOR_KINDS: tuple[ActorKind, ...] = (
     "human",
@@ -102,6 +111,10 @@ class WorkRecord:
     evidence_results: list[str]
     approval_roles: list[str]
     path: str
+    operational_status: WorkOperationalStatus = "active"
+    status_reason: str | None = None
+    status_by: str | None = None
+    status_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +242,66 @@ class DelegationRecord:
     accepted_at: str | None = None
     collected_by: str | None = None
     collected_at: str | None = None
+    blocked_from: str | None = None
+    status_reason: str | None = None
+    status_by: str | None = None
+    status_at: str | None = None
+
+
+@dataclass(frozen=True)
+class StatusChangeRecord:
+    id: str
+    subject_type: Literal["work", "delegation"]
+    subject: str
+    action: str
+    previous_status: str
+    target_status: str
+    actor: str
+    reason: str
+    sequence: int
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class EventRecord:
+    timestamp: str
+    type: str
+    detail: str
+    scope: str
+    path: str
+
+
+@dataclass(frozen=True)
+class WorkspaceStatus:
+    project: str
+    integration: Integration
+    default_method: str
+    branch: str
+    counts: dict[str, int]
+    swarm_statuses: dict[str, int]
+    work_states: dict[str, int]
+    work_operational_statuses: dict[str, int]
+    delegation_statuses: dict[str, int]
+    session_statuses: dict[str, int]
+    tool_run_statuses: dict[str, int]
+    attention: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    severity: ValidationSeverity
+    code: str
+    path: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    ok: bool
+    project: str
+    checked: dict[str, int]
+    issues: list[ValidationIssue]
 
 
 @dataclass(frozen=True)
@@ -355,6 +428,18 @@ class WorkActorInput:
     swarm_id: str
     work_id: str
     actor_id: str
+
+
+@dataclass(frozen=True)
+class ChangeWorkStatusInput(WorkActorInput):
+    reason: str = ""
+    id: str | None = None
+
+
+@dataclass(frozen=True)
+class ChangeDelegationStatusInput(DelegationActorInput):
+    reason: str = ""
+    id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ import os
 import shlex
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -36,6 +36,8 @@ from agora.model import (
     AddArtifactInput,
     AddEvidenceInput,
     AssignActorInput,
+    ChangeDelegationStatusInput,
+    ChangeWorkStatusInput,
     ConfigureInput,
     CreateDelegationInput,
     CreateSwarmInput,
@@ -43,6 +45,7 @@ from agora.model import (
     DelegationActorInput,
     DelegationRecord,
     DoctorCheck,
+    EventRecord,
     GatePolicy,
     HandoffActorInput,
     HandoffRecord,
@@ -52,19 +55,26 @@ from agora.model import (
     Integration,
     InvokeToolInput,
     Method,
+    MethodContract,
     MethodPackRecord,
     ProjectConfiguration,
     SessionRecord,
     SetActorRuntimeInput,
     StartSessionInput,
+    StatusChangeRecord,
     SwarmRecord,
     ToolContract,
     ToolPackRecord,
+    ToolRisk,
     ToolRunRecord,
     TransitionWorkInput,
     UserConfiguration,
+    ValidationIssue,
+    ValidationReport,
     WorkActorInput,
+    WorkOperationalStatus,
     WorkRecord,
+    WorkspaceStatus,
 )
 from agora.tools import load_tool_contract
 
@@ -255,6 +265,31 @@ class AgoraWorkspace:
         contract = load_tool_contract(path)
         return self._tool_pack_record(contract, "project", path)
 
+    def list_methods(self) -> list[MethodPackRecord]:
+        method_root = self.project_root() / ".agora" / "methods"
+        records: list[MethodPackRecord] = []
+        for path in sorted(method_root.glob("*/METHOD.md")):
+            contract = load_method_contract(path.parent)
+            records.append(
+                MethodPackRecord(
+                    id=contract.id,
+                    name=contract.name,
+                    scope="project",
+                    path=str(path.parent),
+                    required_roles=contract.required_roles,
+                    work_states=contract.work_states,
+                    terminal_state=contract.terminal_state,
+                )
+            )
+        return records
+
+    def list_tools(self) -> list[ToolPackRecord]:
+        tool_root = self.project_root() / ".agora" / "tools"
+        return [
+            self._tool_pack_record(load_tool_contract(path.parent), "project", path.parent)
+            for path in sorted(tool_root.glob("*/TOOL.md"))
+        ]
+
     def add_actor(self, data: AddActorInput) -> ActorRecord:
         assert_slug(data.id, "Actor id")
         if data.kind not in ACTOR_KINDS:
@@ -347,6 +382,23 @@ class AgoraWorkspace:
             f"- {self._timestamp()} | actor.runtime-updated | actor={actor.reference}",
         )
         return self._find_actor(root, actor.reference)
+
+    def list_actors(self, scope: str = "all") -> list[ActorRecord]:
+        if scope not in {"all", "user", "project"}:
+            raise ValueError("Actor scope must be all, user, or project")
+        root = self.project_root()
+        sources = []
+        if scope in {"all", "project"}:
+            sources.append(("project", root / ".agora" / "actors"))
+        if scope in {"all", "user"}:
+            sources.append(("user", agora_home() / "actors"))
+        return [
+            self._find_actor(root, f"{actor_scope}:{path.stem}")
+            for actor_scope, actor_root in sources
+            if actor_root.exists()
+            for path in sorted(actor_root.glob("*.md"))
+            if path.name != "README.md"
+        ]
 
     def create_swarm(self, data: CreateSwarmInput) -> SwarmRecord:
         assert_slug(data.id, "Swarm id")
@@ -449,7 +501,7 @@ class AgoraWorkspace:
             )
 
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
-        handoff_id = data.id or self._now().astimezone(UTC).strftime("handoff-%Y%m%dt%H%M%Sz")
+        handoff_id = data.id or self._now().astimezone(UTC).strftime("handoff-%Y%m%dt%H%M%sz")
         assert_slug(handoff_id, "Handoff id")
         handoff_path = Path(swarm.path) / "handoffs" / handoff_id / "HANDOFF.md"
         if handoff_path.exists():
@@ -480,6 +532,22 @@ class AgoraWorkspace:
 
     def show_swarm(self, swarm_id: str) -> SwarmRecord:
         return self._load_swarm(self.project_root(), swarm_id)
+
+    def list_swarms(self, status: str | None = None) -> list[SwarmRecord]:
+        root = self.project_root()
+        records = [
+            self._load_swarm(root, path.parent.name)
+            for path in sorted((root / ".agora" / "swarms").glob("*/SWARM.md"))
+        ]
+        return [record for record in records if status is None or record.status == status]
+
+    def list_handoffs(self, swarm_id: str) -> list[HandoffRecord]:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        return [
+            self._load_handoff(swarm, path.parent.name)
+            for path in sorted((Path(swarm.path) / "handoffs").glob("*/HANDOFF.md"))
+        ]
 
     def create_work(self, data: CreateWorkInput) -> WorkRecord:
         assert_slug(data.id, "Work id")
@@ -557,6 +625,7 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "criterion.satisfy")
         work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
         if criterion_id not in work.acceptance_criteria:
             raise FileNotFoundError(f"Acceptance criterion not found: {criterion_id}")
         work.satisfied_criteria = list(dict.fromkeys([*work.satisfied_criteria, criterion_id]))
@@ -573,6 +642,7 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "artifact.add")
         work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
         self._record_artifact(work, data.kind, data.uri, actor.reference)
         return self._load_work(swarm, data.work_id)
 
@@ -597,6 +667,7 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "evidence.add")
         work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
         self._record_evidence(
             work,
             data.type,
@@ -641,6 +712,7 @@ class AgoraWorkspace:
                 f"Actor {actor.reference} is not assigned to approval role {data.role_id}"
             )
         work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
         approval_roles = strings_attribute(document.attributes, "approval-roles")
@@ -663,6 +735,7 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "work.transition")
         work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
         transition = next(
             (
@@ -693,30 +766,118 @@ class AgoraWorkspace:
         previous = work.state
         work.state = data.target_state
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
-        if swarm.status == "ready":
-            swarm.status = "running"
-            atomic_write(Path(swarm.path) / "SWARM.md", self._render_swarm(swarm))
-        if data.target_state == contract.terminal_state:
-            work_directories = [
-                item for item in (Path(swarm.path) / "work").iterdir() if item.is_dir()
-            ]
-            if all(
-                self._load_work(swarm, item.name).state == contract.terminal_state
-                for item in work_directories
-            ):
-                swarm.status = "completed"
-                atomic_write(Path(swarm.path) / "SWARM.md", self._render_swarm(swarm))
-                self._append_swarm_event(root, swarm.id, "swarm.completed", f"work={work.id}")
         self._append_work_event(
             work,
             "work.transitioned",
             f"from={previous} to={data.target_state} actor={actor.reference}",
         )
+        self._refresh_swarm_status(root, swarm)
         return work
 
     def show_work(self, swarm_id: str, work_id: str) -> WorkRecord:
         swarm = self._load_swarm(self.project_root(), swarm_id)
         return self._load_work(swarm, work_id)
+
+    def list_work(
+        self,
+        swarm_id: str | None = None,
+        state: str | None = None,
+        operational_status: str | None = None,
+    ) -> list[WorkRecord]:
+        swarms = [self.show_swarm(swarm_id)] if swarm_id is not None else self.list_swarms()
+        records = [
+            self._load_work(swarm, path.parent.name)
+            for swarm in swarms
+            for path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
+        ]
+        return [
+            record
+            for record in records
+            if (state is None or record.state == state)
+            and (operational_status is None or record.operational_status == operational_status)
+        ]
+
+    def block_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
+        return self._change_work_status(data, "blocked", "work.block")
+
+    def resume_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
+        return self._change_work_status(data, "active", "work.resume")
+
+    def cancel_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
+        return self._change_work_status(data, "cancelled", "work.cancel")
+
+    def list_work_status_changes(self, swarm_id: str, work_id: str) -> list[StatusChangeRecord]:
+        work = self.show_work(swarm_id, work_id)
+        records = [
+            self._load_status_change(path.parent)
+            for path in sorted((Path(work.path) / "status-changes").glob("*/STATUS.md"))
+        ]
+        return sorted(records, key=lambda item: (item.sequence, item.created_at, item.id))
+
+    def _change_work_status(
+        self,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+    ) -> StatusChangeRecord:
+        if not data.reason.strip():
+            raise ValueError("Work status change reason cannot be empty")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
+        work = self._load_work(swarm, data.work_id)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        if work.state == contract.terminal_state:
+            raise ValueError(f"Completed work cannot change operational status: {work.id}")
+        previous = work.operational_status
+        allowed = {
+            ("active", "blocked"),
+            ("blocked", "active"),
+            ("active", "cancelled"),
+            ("blocked", "cancelled"),
+        }
+        if (previous, target_status) not in allowed:
+            raise ValueError(
+                f"Work {work.id} cannot change operational status {previous} -> {target_status}"
+            )
+        if target_status == "cancelled":
+            open_delegations = [
+                item.id
+                for item in self.list_delegations()
+                if item.parent_swarm_id == swarm.id
+                and item.parent_work_id == work.id
+                and item.status in {"proposed", "accepted", "blocked"}
+            ]
+            if open_delegations:
+                raise ValueError(
+                    f"Work {swarm.id}/{work.id} has open delegations; close them first: "
+                    f"{', '.join(open_delegations)}"
+                )
+        change_root = Path(work.path) / "status-changes"
+        self._assert_status_change_id_available(change_root, data.id)
+        work.operational_status = _work_operational_status(target_status)
+        work.status_reason = data.reason.strip()
+        work.status_by = actor.reference
+        work.status_at = self._timestamp()
+        atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
+        record = self._record_status_change(
+            subject_type="work",
+            subject=f"{swarm.id}/{work.id}",
+            action=action,
+            previous_status=previous,
+            target_status=target_status,
+            actor=actor.reference,
+            reason=data.reason.strip(),
+            root=change_root,
+            id_=data.id,
+        )
+        self._append_work_event(
+            work,
+            action,
+            f"from={previous} to={target_status} actor={actor.reference} change={record.id}",
+        )
+        self._refresh_swarm_status(root, swarm)
+        return record
 
     def create_delegation(self, data: CreateDelegationInput) -> DelegationRecord:
         assert_slug(data.child_work_id, "Child work id")
@@ -726,6 +887,7 @@ class AgoraWorkspace:
         if parent.status not in {"ready", "running"}:
             raise ValueError(f"Parent swarm {parent.id} must be ready before work is delegated")
         parent_work = self._load_work(parent, data.parent_work_id)
+        self._assert_work_mutable(root, parent, parent_work)
         parent_contract = load_method_contract(root / ".agora" / "methods" / parent.method)
         if parent_work.state == parent_contract.terminal_state:
             raise ValueError(f"Completed work cannot be delegated: {parent_work.id}")
@@ -754,7 +916,7 @@ class AgoraWorkspace:
             raise ValueError("Delegated acceptance criterion ids must be unique")
         for criterion_id in criteria:
             assert_slug(criterion_id, "Delegated criterion id")
-        delegation_id = data.id or self._now().astimezone(UTC).strftime("delegation-%Y%m%dt%H%M%Sz")
+        delegation_id = data.id or self._now().astimezone(UTC).strftime("delegation-%Y%m%dt%H%M%sz")
         assert_slug(delegation_id, "Delegation id")
         path = root / ".agora" / "delegations" / delegation_id / "DELEGATION.md"
         if path.exists():
@@ -793,6 +955,9 @@ class AgoraWorkspace:
             raise ValueError(
                 f"Delegation {delegation.id} cannot be accepted while {delegation.status}"
             )
+        parent = self._load_swarm(root, delegation.parent_swarm_id)
+        parent_work = self._load_work(parent, delegation.parent_work_id)
+        self._assert_work_mutable(root, parent, parent_work)
         child = self._load_swarm(root, delegation.child_swarm_id)
         actor = self._require_actor_for_action(root, child, data.actor_id, "delegation.accept")
         child_work = self.create_work(
@@ -819,14 +984,27 @@ class AgoraWorkspace:
                 "status": "accepted",
                 "accepted_by": actor.reference,
                 "accepted_at": self._timestamp(),
+                "blocked_from": None,
+                "status_reason": None,
+                "status_by": None,
+                "status_at": None,
             }
         )
         atomic_write(Path(delegation.path), self._render_delegation(accepted))
-        parent = self._load_swarm(root, delegation.parent_swarm_id)
-        parent_work = self._load_work(parent, delegation.parent_work_id)
+        change = self._record_status_change(
+            subject_type="delegation",
+            subject=delegation.id,
+            action="delegation.accept",
+            previous_status="proposed",
+            target_status="accepted",
+            actor=actor.reference,
+            reason="Delegated work accepted by the child swarm",
+            root=Path(delegation.path).parent / "status-changes",
+            id_=None,
+        )
         detail = (
             f"delegation={delegation.id} child-work={child.id}/{child_work.id} "
-            f"actor={actor.reference}"
+            f"actor={actor.reference} change={change.id}"
         )
         self._append_work_event(parent_work, "delegation.accepted", detail)
         self._append_work_event(child_work, "work.delegation-accepted", detail)
@@ -864,6 +1042,7 @@ class AgoraWorkspace:
                 f"state={child_work.state}"
             )
         parent_work = self._load_work(parent, delegation.parent_work_id)
+        self._assert_work_mutable(root, parent, parent_work)
         parent_contract = load_method_contract(root / ".agora" / "methods" / parent.method)
         if parent_work.state == parent_contract.terminal_state:
             raise ValueError(f"Cannot collect into completed work: {parent_work.id}")
@@ -887,18 +1066,162 @@ class AgoraWorkspace:
                 "status": "collected",
                 "collected_by": actor.reference,
                 "collected_at": self._timestamp(),
+                "blocked_from": None,
+                "status_reason": None,
+                "status_by": None,
+                "status_at": None,
             }
         )
         atomic_write(Path(delegation.path), self._render_delegation(collected))
+        change = self._record_status_change(
+            subject_type="delegation",
+            subject=delegation.id,
+            action="delegation.collect",
+            previous_status="accepted",
+            target_status="collected",
+            actor=actor.reference,
+            reason="Completed child result collected into parent work",
+            root=Path(delegation.path).parent / "status-changes",
+            id_=None,
+        )
         parent_work = self._load_work(parent, delegation.parent_work_id)
-        detail = f"delegation={delegation.id} result={result_uri} actor={actor.reference}"
+        detail = (
+            f"delegation={delegation.id} result={result_uri} actor={actor.reference} "
+            f"change={change.id}"
+        )
         self._append_work_event(parent_work, "delegation.collected", detail)
         self._append_work_event(child_work, "work.delegation-collected", detail)
         self._append_swarm_event(root, parent.id, "delegation.collected", detail)
         return collected
 
+    def block_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
+        delegation = self.show_delegation(data.delegation_id)
+        return self._change_delegation_status(
+            data,
+            target_status="blocked",
+            action="delegation.block",
+            authority="parent",
+            allowed_statuses={"proposed", "accepted"},
+            blocked_from=delegation.status,
+        )
+
+    def resume_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
+        delegation = self.show_delegation(data.delegation_id)
+        if delegation.status != "blocked" or delegation.blocked_from not in {
+            "proposed",
+            "accepted",
+        }:
+            raise ValueError(f"Delegation {delegation.id} has no resumable blocked state")
+        return self._change_delegation_status(
+            data,
+            target_status=delegation.blocked_from,
+            action="delegation.resume",
+            authority="parent",
+            allowed_statuses={"blocked"},
+            blocked_from=None,
+        )
+
+    def reject_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
+        return self._change_delegation_status(
+            data,
+            target_status="rejected",
+            action="delegation.reject",
+            authority="child",
+            allowed_statuses={"proposed"},
+        )
+
+    def cancel_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
+        return self._change_delegation_status(
+            data,
+            target_status="cancelled",
+            action="delegation.cancel",
+            authority="parent",
+            allowed_statuses={"proposed", "accepted", "blocked"},
+        )
+
+    def list_delegation_status_changes(self, delegation_id: str) -> list[StatusChangeRecord]:
+        delegation = self.show_delegation(delegation_id)
+        records = [
+            self._load_status_change(path.parent)
+            for path in sorted(
+                (Path(delegation.path).parent / "status-changes").glob("*/STATUS.md")
+            )
+        ]
+        return sorted(records, key=lambda item: (item.sequence, item.created_at, item.id))
+
+    def _change_delegation_status(
+        self,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        authority: str,
+        allowed_statuses: set[str],
+        blocked_from: str | None = None,
+    ) -> StatusChangeRecord:
+        if not data.reason.strip():
+            raise ValueError("Delegation status change reason cannot be empty")
+        root = self.project_root()
+        delegation = self._load_delegation(root, data.delegation_id)
+        if delegation.status not in allowed_statuses:
+            raise ValueError(
+                f"Delegation {delegation.id} cannot perform {action} while {delegation.status}"
+            )
+        swarm_id = (
+            delegation.parent_swarm_id if authority == "parent" else delegation.child_swarm_id
+        )
+        swarm = self._load_swarm(root, swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
+        if action in {"delegation.block", "delegation.resume"}:
+            parent = self._load_swarm(root, delegation.parent_swarm_id)
+            parent_work = self._load_work(parent, delegation.parent_work_id)
+            self._assert_work_mutable(root, parent, parent_work)
+        previous = delegation.status
+        change_root = Path(delegation.path).parent / "status-changes"
+        self._assert_status_change_id_available(change_root, data.id)
+        changed = DelegationRecord(
+            **{
+                **delegation.__dict__,
+                "status": target_status,
+                "blocked_from": blocked_from,
+                "status_reason": data.reason.strip(),
+                "status_by": actor.reference,
+                "status_at": self._timestamp(),
+            }
+        )
+        atomic_write(Path(delegation.path), self._render_delegation(changed))
+        record = self._record_status_change(
+            subject_type="delegation",
+            subject=delegation.id,
+            action=action,
+            previous_status=previous,
+            target_status=target_status,
+            actor=actor.reference,
+            reason=data.reason.strip(),
+            root=change_root,
+            id_=data.id,
+        )
+        detail = (
+            f"delegation={delegation.id} from={previous} to={target_status} "
+            f"actor={actor.reference} change={record.id}"
+        )
+        parent = self._load_swarm(root, delegation.parent_swarm_id)
+        parent_work = self._load_work(parent, delegation.parent_work_id)
+        self._append_work_event(parent_work, action, detail)
+        self._append_swarm_event(root, parent.id, action, detail)
+        self._append_swarm_event(root, delegation.child_swarm_id, action, detail)
+        return record
+
     def show_delegation(self, delegation_id: str) -> DelegationRecord:
         return self._load_delegation(self.project_root(), delegation_id)
+
+    def list_delegations(self, status: str | None = None) -> list[DelegationRecord]:
+        root = self.project_root()
+        records = [
+            self._load_delegation(root, path.parent.name)
+            for path in sorted((root / ".agora" / "delegations").glob("*/DELEGATION.md"))
+        ]
+        return [record for record in records if status is None or record.status == status]
 
     def start_session(self, data: StartSessionInput) -> SessionRecord:
         root = self.project_root()
@@ -912,6 +1235,8 @@ class AgoraWorkspace:
         if not roles:
             raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
+        if work is not None:
+            self._assert_work_mutable(root, swarm, work)
 
         integration = actor.integration or project.integration
         provider = actor.provider or project.provider
@@ -923,7 +1248,7 @@ class AgoraWorkspace:
         if data.launch and not runtime_available:
             raise FileNotFoundError(f"Runtime executable not found: {command[0]}")
 
-        session_id = data.id or self._now().astimezone(UTC).strftime("session-%Y%m%dt%H%M%Sz")
+        session_id = data.id or self._now().astimezone(UTC).strftime("session-%Y%m%dt%H%M%sz")
         assert_slug(session_id, "Session id")
         session_path = root / ".agora" / "sessions" / session_id
         if session_path.exists() and not data.force:
@@ -1000,6 +1325,14 @@ class AgoraWorkspace:
             raise RuntimeError(f"Session runner exited with code {exit_code}: {' '.join(command)}")
         return finished
 
+    def list_sessions(self, status: str | None = None) -> list[SessionRecord]:
+        root = self.project_root()
+        records = [
+            self._load_session(path.parent)
+            for path in sorted((root / ".agora" / "sessions").glob("*/SESSION.md"))
+        ]
+        return [record for record in records if status is None or record.status == status]
+
     def invoke_tool(self, data: InvokeToolInput) -> ToolRunRecord:
         assert_slug(data.tool_id, "Tool id")
         assert_slug(data.operation_id, "Tool operation id")
@@ -1038,6 +1371,8 @@ class AgoraWorkspace:
                 f"empty=[{', '.join(empty_inputs)}]"
             )
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
+        if work is not None:
+            self._assert_work_mutable(root, swarm, work)
         if operation.approval_role is not None:
             if work is None:
                 raise ValueError(
@@ -1058,7 +1393,7 @@ class AgoraWorkspace:
         if data.launch and not runtime_available:
             raise FileNotFoundError(f"Tool executable not found: {contract.executable}")
 
-        run_id = data.id or self._now().astimezone(UTC).strftime("tool-%Y%m%dt%H%M%Sz")
+        run_id = data.id or self._now().astimezone(UTC).strftime("tool-%Y%m%dt%H%M%sz")
         assert_slug(run_id, "Tool run id")
         run_path = root / ".agora" / "tool-runs" / run_id
         if run_path.exists() and not data.force:
@@ -1126,16 +1461,963 @@ class AgoraWorkspace:
             )
         return finished
 
+    def list_tool_runs(self, status: str | None = None) -> list[ToolRunRecord]:
+        root = self.project_root()
+        records = [
+            self._load_tool_run(path.parent)
+            for path in sorted((root / ".agora" / "tool-runs").glob("*/RUN.md"))
+        ]
+        return [record for record in records if status is None or record.status == status]
+
+    def status(self) -> WorkspaceStatus:
+        root = self.project_root()
+        project = self._load_project_configuration(root)
+        actors = self.list_actors()
+        methods = self.list_methods()
+        tools = self.list_tools()
+        swarms = self.list_swarms()
+        work = self.list_work()
+        delegations = self.list_delegations()
+        sessions = self.list_sessions()
+        tool_runs = self.list_tool_runs()
+        terminal_states = {
+            swarm.id: load_method_contract(
+                root / ".agora" / "methods" / swarm.method
+            ).terminal_state
+            for swarm in swarms
+        }
+        attention = {
+            "forming-swarms": [item.id for item in swarms if item.status == "forming"],
+            "active-work": [
+                f"{item.swarm_id}/{item.id}"
+                for item in work
+                if item.operational_status == "active"
+                and item.state != terminal_states[item.swarm_id]
+            ],
+            "blocked-work": [
+                f"{item.swarm_id}/{item.id}"
+                for item in work
+                if item.operational_status == "blocked"
+            ],
+            "open-delegations": [
+                item.id
+                for item in delegations
+                if item.status in {"proposed", "accepted", "blocked"}
+            ],
+            "unfinished-sessions": [
+                item.id for item in sessions if item.status in {"prepared", "running"}
+            ],
+            "failed-sessions": [item.id for item in sessions if item.status == "failed"],
+            "failed-tool-runs": [item.id for item in tool_runs if item.status == "failed"],
+        }
+        return WorkspaceStatus(
+            project=project.project,
+            integration=project.integration,
+            default_method=project.default_method,
+            branch=current_branch(root) if is_git_repository(root) else "filesystem-only",
+            counts={
+                "actors": len(actors),
+                "methods": len(methods),
+                "tools": len(tools),
+                "swarms": len(swarms),
+                "work": len(work),
+                "delegations": len(delegations),
+                "sessions": len(sessions),
+                "tool-runs": len(tool_runs),
+            },
+            swarm_statuses=_count_values(item.status for item in swarms),
+            work_states=_count_values(item.state for item in work),
+            work_operational_statuses=_count_values(item.operational_status for item in work),
+            delegation_statuses=_count_values(item.status for item in delegations),
+            session_statuses=_count_values(item.status for item in sessions),
+            tool_run_statuses=_count_values(item.status for item in tool_runs),
+            attention=attention,
+        )
+
+    def list_events(
+        self,
+        *,
+        swarm_id: str | None = None,
+        work_id: str | None = None,
+        type_: str | None = None,
+        limit: int = 50,
+    ) -> list[EventRecord]:
+        if limit < 1:
+            raise ValueError("Event limit must be a positive integer")
+        if work_id is not None and swarm_id is None:
+            raise ValueError("--work requires --swarm when listing events")
+        root = self.project_root()
+        sources: list[tuple[str, Path]] = []
+        if swarm_id is None:
+            sources.append(("project", root / ".agora" / "events.md"))
+            swarms = self.list_swarms()
+        else:
+            swarms = [self._load_swarm(root, swarm_id)]
+        for swarm in swarms:
+            if work_id is None:
+                sources.append((f"swarm:{swarm.id}", Path(swarm.path) / "events.md"))
+                sources.extend(
+                    (f"work:{swarm.id}/{path.parent.name}", path.parent / "events.md")
+                    for path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
+                )
+            else:
+                work = self._load_work(swarm, work_id)
+                sources.append((f"work:{swarm.id}/{work.id}", Path(work.path) / "events.md"))
+        records = [
+            record
+            for scope, path in sources
+            if path.exists()
+            for record in self._read_events(path, scope)
+            if type_ is None or record.type == type_
+        ]
+        return sorted(records, key=lambda item: (item.timestamp, item.scope, item.type))[-limit:]
+
+    def validate(self) -> ValidationReport:
+        root = self.project_root()
+        checked = {
+            "project": 0,
+            "documents": 0,
+            "commands": 0,
+            "adapters": 0,
+            "methods": 0,
+            "tools": 0,
+            "actors": 0,
+            "swarms": 0,
+            "work": 0,
+            "handoffs": 0,
+            "delegations": 0,
+            "status-changes": 0,
+            "sessions": 0,
+            "tool-runs": 0,
+            "event-files": 0,
+        }
+        issues: list[ValidationIssue] = []
+
+        def issue(code: str, path: Path, message: str, severity: str = "error") -> None:
+            issues.append(
+                ValidationIssue(
+                    severity="warning" if severity == "warning" else "error",
+                    code=code,
+                    path=_display_path(root, path),
+                    message=message,
+                )
+            )
+
+        def inspect(
+            kind: str, code: str, path: Path, loader: Callable[[], object]
+        ) -> object | None:
+            try:
+                value = loader()
+            except Exception as error:
+                issue(code, path, str(error))
+                return None
+            checked[kind] += 1
+            return value
+
+        project_path = root / ".agora" / "project.md"
+        project = inspect(
+            "project",
+            "project.invalid",
+            project_path,
+            lambda: self._load_project_configuration(root),
+        )
+        for path, schema in (
+            (root / ".agora" / "constitution.md", "agora/constitution/v1"),
+            (root / ".agora" / "PROTOCOL.md", "agora/protocol/v1"),
+            (root / ".agora" / "tools" / "TOOLS.md", "agora/tool-policy/v1"),
+        ):
+            inspect(
+                "documents",
+                "document.invalid",
+                path,
+                lambda path=path, schema=schema: _assert_schema(read_markdown(path), schema, path),
+            )
+
+        command_root = root / ".agora" / "commands"
+        commands: dict[str, Path] = {}
+        for path in sorted(command_root.glob("*.md")):
+            command_id = path.stem
+            command = inspect(
+                "commands",
+                "command.invalid",
+                path,
+                lambda path=path, command_id=command_id: self._load_agent_command(path, command_id),
+            )
+            if isinstance(command, MarkdownDocument):
+                commands[command_id] = path
+        if not commands:
+            issue(
+                "commands.missing",
+                command_root,
+                "Project has no portable agent command Markdown files",
+            )
+
+        if isinstance(project, ProjectConfiguration):
+            expected_adapters = {
+                command_id: self._integration_command_path(root, project.integration, command_id)
+                for command_id in commands
+            }
+            for command_id, adapter_path in expected_adapters.items():
+                adapter = inspect(
+                    "adapters",
+                    "adapter.invalid",
+                    adapter_path,
+                    lambda adapter_path=adapter_path, command_id=command_id: (
+                        self._load_agent_command(adapter_path, command_id)
+                    ),
+                )
+                source_path = commands[command_id]
+                if (
+                    isinstance(adapter, MarkdownDocument)
+                    and adapter_path != source_path
+                    and adapter_path.read_text(encoding="utf-8")
+                    != source_path.read_text(encoding="utf-8")
+                ):
+                    issue(
+                        "adapter.content-mismatch",
+                        adapter_path,
+                        f"{project.integration} adapter differs from "
+                        f".agora/commands/{source_path.name}",
+                    )
+            expected_paths = set(expected_adapters.values())
+            for adapter_path in self._integration_command_paths(root, project.integration):
+                if adapter_path not in expected_paths:
+                    issue(
+                        "adapter.orphan",
+                        adapter_path,
+                        "Adapter has no matching portable command",
+                        "warning",
+                    )
+
+        methods: dict[str, MethodContract] = {}
+        method_root = root / ".agora" / "methods"
+        for directory in _child_directories(method_root):
+            path = directory / "METHOD.md"
+            contract = inspect(
+                "methods",
+                "method.invalid",
+                path,
+                lambda path=path: load_method_contract(path.parent),
+            )
+            if isinstance(contract, MethodContract):
+                methods[path.parent.name] = contract
+                if contract.id != path.parent.name:
+                    issue(
+                        "method.id-mismatch",
+                        path,
+                        f"Method id {contract.id} does not match directory {path.parent.name}",
+                    )
+        if isinstance(project, ProjectConfiguration) and project.default_method not in methods:
+            issue(
+                "project.default-method-missing",
+                project_path,
+                f"Default Method Pack is not valid or installed: {project.default_method}",
+            )
+
+        tools: dict[str, ToolContract] = {}
+        tool_root = root / ".agora" / "tools"
+        for directory in _child_directories(tool_root):
+            path = directory / "TOOL.md"
+            contract = inspect(
+                "tools",
+                "tool.invalid",
+                path,
+                lambda path=path: load_tool_contract(path.parent),
+            )
+            if isinstance(contract, ToolContract):
+                tools[path.parent.name] = contract
+                if contract.id != path.parent.name:
+                    issue(
+                        "tool.id-mismatch",
+                        path,
+                        f"Tool id {contract.id} does not match directory {path.parent.name}",
+                    )
+
+        actor_cache: dict[str, ActorRecord] = {}
+        actor_root = root / ".agora" / "actors"
+        for path in sorted(actor_root.glob("*.md")):
+            if path.name == "README.md":
+                continue
+            actor = inspect(
+                "actors",
+                "actor.invalid",
+                path,
+                lambda path=path: self._find_actor(root, f"project:{path.stem}"),
+            )
+            if isinstance(actor, ActorRecord):
+                actor_cache[actor.reference] = actor
+                if actor.id != path.stem:
+                    issue(
+                        "actor.id-mismatch",
+                        path,
+                        f"Actor id {actor.id} does not match filename {path.stem}",
+                    )
+
+        def resolve_actor(reference: str, path: Path) -> ActorRecord | None:
+            if reference in actor_cache:
+                return actor_cache[reference]
+            actor = inspect(
+                "actors",
+                "actor.reference-invalid",
+                path,
+                lambda: self._find_actor(root, reference),
+            )
+            if isinstance(actor, ActorRecord):
+                actor_cache[actor.reference] = actor
+                if actor.id != Path(actor.path).stem:
+                    issue(
+                        "actor.id-mismatch",
+                        Path(actor.path),
+                        f"Actor id {actor.id} does not match filename {Path(actor.path).stem}",
+                    )
+                return actor
+            return None
+
+        def inspect_status_changes(
+            owner: Path,
+            *,
+            subject_type: str,
+            subject: str,
+            statuses: set[str],
+            transitions: dict[tuple[str, str], str],
+        ) -> list[StatusChangeRecord]:
+            records: list[StatusChangeRecord] = []
+            for directory in _child_directories(owner / "status-changes"):
+                path = directory / "STATUS.md"
+                change = inspect(
+                    "status-changes",
+                    "status-change.invalid",
+                    path,
+                    lambda directory=directory: self._load_status_change(directory),
+                )
+                if not isinstance(change, StatusChangeRecord):
+                    continue
+                records.append(change)
+                if change.id != directory.name:
+                    issue(
+                        "status-change.id-mismatch",
+                        path,
+                        f"Status change id {change.id} does not match directory {directory.name}",
+                    )
+                if change.subject_type != subject_type or change.subject != subject:
+                    issue(
+                        "status-change.subject-mismatch",
+                        path,
+                        f"Status change does not belong to {subject_type} {subject}",
+                    )
+                edge = (change.previous_status, change.target_status)
+                if (
+                    change.previous_status not in statuses
+                    or change.target_status not in statuses
+                    or edge not in transitions
+                    or transitions.get(edge) != change.action
+                ):
+                    issue(
+                        "status-change.transition-invalid",
+                        path,
+                        f"Unsupported status action {change.action}: "
+                        f"{change.previous_status} -> {change.target_status}",
+                    )
+                if not change.reason.strip():
+                    issue("status-change.reason-missing", path, "Status change reason is empty")
+                resolve_actor(change.actor, path)
+            sequences = [item.sequence for item in records]
+            if sequences and sorted(sequences) != list(range(1, len(sequences) + 1)):
+                issue(
+                    "status-change.sequence-invalid",
+                    owner / "status-changes",
+                    "Status change sequence must be unique and contiguous from 1",
+                )
+            records.sort(key=lambda item: (item.sequence, item.created_at, item.id))
+            for previous, current in zip(records, records[1:], strict=False):
+                if previous.target_status != current.previous_status:
+                    issue(
+                        "status-change.history-discontinuous",
+                        Path(current.path),
+                        f"Previous target {previous.target_status} does not match "
+                        f"next source {current.previous_status}",
+                    )
+            return records
+
+        swarms: dict[str, SwarmRecord] = {}
+        swarm_root = root / ".agora" / "swarms"
+        for directory in _child_directories(swarm_root):
+            path = directory / "SWARM.md"
+            swarm = inspect(
+                "swarms",
+                "swarm.invalid",
+                path,
+                lambda path=path: self._load_swarm(root, path.parent.name),
+            )
+            if not isinstance(swarm, SwarmRecord):
+                continue
+            swarms[swarm.id] = swarm
+            if swarm.id != path.parent.name:
+                issue(
+                    "swarm.id-mismatch",
+                    path,
+                    f"Swarm id {swarm.id} does not match directory {path.parent.name}",
+                )
+            if swarm.status not in {
+                "forming",
+                "ready",
+                "running",
+                "blocked",
+                "completed",
+                "cancelled",
+            }:
+                issue("swarm.status-invalid", path, f"Unsupported swarm status: {swarm.status}")
+            contract = methods.get(swarm.method)
+            if contract is None:
+                issue(
+                    "swarm.method-missing",
+                    path,
+                    f"Method Pack is not valid or installed: {swarm.method}",
+                )
+                continue
+            if swarm.required_roles != contract.required_roles:
+                issue(
+                    "swarm.roles-mismatch",
+                    path,
+                    "Swarm required roles do not match its Method Pack",
+                )
+            unknown_roles = sorted(set(swarm.assignments) - set(swarm.required_roles))
+            if unknown_roles:
+                issue(
+                    "swarm.assignment-role-invalid",
+                    path,
+                    f"Assignments use unknown roles: {', '.join(unknown_roles)}",
+                )
+            for role_id, reference in swarm.assignments.items():
+                actor = resolve_actor(reference, path)
+                if actor is None or role_id not in swarm.required_roles:
+                    continue
+                try:
+                    self._assert_actor_role_compatibility(root, swarm.method, role_id, actor)
+                except Exception as error:
+                    issue("swarm.assignment-incompatible", path, str(error))
+            complete_assignments = all(
+                role_id in swarm.assignments for role_id in swarm.required_roles
+            )
+            if swarm.status == "forming" and complete_assignments:
+                issue(
+                    "swarm.status-stale",
+                    path,
+                    "Forming swarm has every required role assigned",
+                    "warning",
+                )
+            if swarm.status != "forming" and not complete_assignments:
+                issue(
+                    "swarm.assignments-incomplete",
+                    path,
+                    "Non-forming swarm is missing required role assignments",
+                )
+
+        work_records: dict[tuple[str, str], WorkRecord] = {}
+        for swarm in swarms.values():
+            contract = methods.get(swarm.method)
+            state_counts: dict[str, int] = {}
+            for directory in _child_directories(Path(swarm.path) / "work"):
+                path = directory / "WORK.md"
+                work = inspect(
+                    "work",
+                    "work.invalid",
+                    path,
+                    lambda swarm=swarm, path=path: self._load_work(swarm, path.parent.name),
+                )
+                if not isinstance(work, WorkRecord):
+                    continue
+                work_records[(swarm.id, work.id)] = work
+                if work.id != path.parent.name:
+                    issue(
+                        "work.id-mismatch",
+                        path,
+                        f"Work id {work.id} does not match directory {path.parent.name}",
+                    )
+                if work.swarm_id != swarm.id:
+                    issue(
+                        "work.swarm-mismatch",
+                        path,
+                        f"Work references swarm {work.swarm_id}, expected {swarm.id}",
+                    )
+                if contract is not None and work.state not in contract.work_states:
+                    issue(
+                        "work.state-invalid",
+                        path,
+                        f"State {work.state} is not defined by Method Pack {swarm.method}",
+                    )
+                changes = inspect_status_changes(
+                    Path(work.path),
+                    subject_type="work",
+                    subject=f"{swarm.id}/{work.id}",
+                    statuses={"active", "blocked", "cancelled"},
+                    transitions={
+                        ("active", "blocked"): "work.block",
+                        ("blocked", "active"): "work.resume",
+                        ("active", "cancelled"): "work.cancel",
+                        ("blocked", "cancelled"): "work.cancel",
+                    },
+                )
+                if work.operational_status != "active" and (
+                    work.status_reason is None or work.status_by is None or work.status_at is None
+                ):
+                    issue(
+                        "work.status-attribution-missing",
+                        path,
+                        f"{work.operational_status.title()} work lacks reason, actor, or timestamp",
+                    )
+                if work.status_by is not None:
+                    resolve_actor(work.status_by, path)
+                if changes and changes[-1].target_status != work.operational_status:
+                    issue(
+                        "work.status-history-stale",
+                        path,
+                        "Latest status change does not match work operational status",
+                    )
+                if work.operational_status != "active" and not changes:
+                    issue(
+                        "work.status-history-missing",
+                        path,
+                        f"{work.operational_status.title()} work has no durable status change",
+                    )
+                unknown_criteria = sorted(
+                    set(work.satisfied_criteria) - set(work.acceptance_criteria)
+                )
+                if unknown_criteria:
+                    issue(
+                        "work.criteria-invalid",
+                        path,
+                        f"Satisfied criteria are not declared: {', '.join(unknown_criteria)}",
+                    )
+                if work.operational_status != "cancelled":
+                    state_counts[work.state] = state_counts.get(work.state, 0) + 1
+            if contract is not None:
+                for state, limit in contract.wip_limits.items():
+                    if state_counts.get(state, 0) > limit:
+                        issue(
+                            "swarm.wip-exceeded",
+                            Path(swarm.path) / "SWARM.md",
+                            f"State {state} has {state_counts[state]} work items; limit={limit}",
+                        )
+                swarm_work = [
+                    item for (owner, _), item in work_records.items() if owner == swarm.id
+                ]
+                expected_status = self._derived_swarm_status(swarm, swarm_work, contract)
+                if swarm.status != expected_status:
+                    issue(
+                        "swarm.status-derived-mismatch",
+                        Path(swarm.path) / "SWARM.md",
+                        f"Stored status {swarm.status} does not match derived status "
+                        f"{expected_status}",
+                    )
+
+            for directory in _child_directories(Path(swarm.path) / "handoffs"):
+                path = directory / "HANDOFF.md"
+                handoff = inspect(
+                    "handoffs",
+                    "handoff.invalid",
+                    path,
+                    lambda swarm=swarm, path=path: self._load_handoff(swarm, path.parent.name),
+                )
+                if not isinstance(handoff, HandoffRecord):
+                    continue
+                if handoff.id != path.parent.name or handoff.swarm_id != swarm.id:
+                    issue(
+                        "handoff.identity-mismatch",
+                        path,
+                        "Handoff id or swarm does not match its filesystem owner",
+                    )
+                if handoff.role_id not in swarm.required_roles:
+                    issue(
+                        "handoff.role-invalid",
+                        path,
+                        f"Handoff uses unknown role: {handoff.role_id}",
+                    )
+                for reference in (
+                    handoff.from_actor,
+                    handoff.to_actor,
+                    handoff.authorized_by,
+                ):
+                    resolve_actor(reference, path)
+                if (
+                    handoff.work_id is not None
+                    and (
+                        swarm.id,
+                        handoff.work_id,
+                    )
+                    not in work_records
+                ):
+                    issue(
+                        "handoff.work-missing",
+                        path,
+                        f"Handoff references missing work: {handoff.work_id}",
+                    )
+
+        try:
+            maximum = (
+                project.max_delegation_depth if isinstance(project, ProjectConfiguration) else 3
+            )
+            self._validate_delegation_graph(self._delegation_graph(root), maximum)
+        except Exception as error:
+            issue("swarm.graph-invalid", swarm_root, str(error))
+
+        for directory in _child_directories(root / ".agora" / "delegations"):
+            path = directory / "DELEGATION.md"
+            delegation = inspect(
+                "delegations",
+                "delegation.invalid",
+                path,
+                lambda path=path: self._load_delegation(root, path.parent.name),
+            )
+            if not isinstance(delegation, DelegationRecord):
+                continue
+            if delegation.id != path.parent.name:
+                issue(
+                    "delegation.id-mismatch",
+                    path,
+                    f"Delegation id {delegation.id} does not match directory {path.parent.name}",
+                )
+            parent_key = (delegation.parent_swarm_id, delegation.parent_work_id)
+            child_key = (delegation.child_swarm_id, delegation.child_work_id)
+            if delegation.parent_swarm_id not in swarms:
+                issue(
+                    "delegation.parent-swarm-missing",
+                    path,
+                    f"Parent swarm does not exist: {delegation.parent_swarm_id}",
+                )
+            if delegation.child_swarm_id not in swarms:
+                issue(
+                    "delegation.child-swarm-missing",
+                    path,
+                    f"Child swarm does not exist: {delegation.child_swarm_id}",
+                )
+            if parent_key not in work_records:
+                issue(
+                    "delegation.parent-work-missing",
+                    path,
+                    f"Parent work does not exist: {'/'.join(parent_key)}",
+                )
+            elif work_records[
+                parent_key
+            ].operational_status == "cancelled" and delegation.status in {
+                "proposed",
+                "accepted",
+                "blocked",
+            }:
+                issue(
+                    "delegation.parent-work-cancelled",
+                    path,
+                    "Open delegation belongs to cancelled parent work",
+                )
+            child_exists = child_key in work_records
+            was_accepted = delegation.accepted_at is not None
+            requires_child = delegation.status in {"accepted", "collected"} or (
+                delegation.status == "blocked" and delegation.blocked_from == "accepted"
+            )
+            forbids_child = delegation.status in {"proposed", "rejected"} or (
+                delegation.status == "blocked" and delegation.blocked_from == "proposed"
+            )
+            if forbids_child and child_exists:
+                issue(
+                    "delegation.child-work-premature",
+                    path,
+                    f"Unaccepted delegation already has child work: {'/'.join(child_key)}",
+                )
+            if requires_child and not child_exists:
+                issue(
+                    "delegation.child-work-missing",
+                    path,
+                    f"Accepted delegation has no child work: {'/'.join(child_key)}",
+                )
+            if (requires_child or was_accepted) and child_exists:
+                child_work = work_records[child_key]
+                child_document = read_markdown(Path(child_work.path) / "WORK.md")
+                if optional_string_attribute(
+                    child_document.attributes, "delegation"
+                ) != delegation.id or optional_string_attribute(
+                    child_document.attributes, "parent-work"
+                ) != "/".join(parent_key):
+                    issue(
+                        "delegation.child-link-invalid",
+                        Path(child_work.path) / "WORK.md",
+                        "Child work does not link to its delegation and parent work",
+                    )
+            represented = resolve_actor(delegation.represented_by, path)
+            resolve_actor(delegation.requested_by, path)
+            acceptance_expected = delegation.status in {"accepted", "collected"} or (
+                delegation.status == "blocked" and delegation.blocked_from == "accepted"
+            )
+            if acceptance_expected or was_accepted:
+                if delegation.accepted_by is None or delegation.accepted_at is None:
+                    issue(
+                        "delegation.acceptance-missing",
+                        path,
+                        "Accepted delegation is missing acceptance attribution",
+                    )
+                else:
+                    resolve_actor(delegation.accepted_by, path)
+            if delegation.status == "blocked" and delegation.blocked_from not in {
+                "proposed",
+                "accepted",
+            }:
+                issue(
+                    "delegation.blocked-from-invalid",
+                    path,
+                    "Blocked delegation must identify proposed or accepted as its prior state",
+                )
+            if delegation.status != "blocked" and delegation.blocked_from is not None:
+                issue(
+                    "delegation.blocked-from-stale",
+                    path,
+                    "Non-blocked delegation retains blocked-from metadata",
+                )
+            changes = inspect_status_changes(
+                path.parent,
+                subject_type="delegation",
+                subject=delegation.id,
+                statuses={
+                    "proposed",
+                    "accepted",
+                    "blocked",
+                    "collected",
+                    "rejected",
+                    "cancelled",
+                },
+                transitions={
+                    ("proposed", "blocked"): "delegation.block",
+                    ("proposed", "accepted"): "delegation.accept",
+                    ("accepted", "blocked"): "delegation.block",
+                    ("accepted", "collected"): "delegation.collect",
+                    ("blocked", "proposed"): "delegation.resume",
+                    ("blocked", "accepted"): "delegation.resume",
+                    ("proposed", "rejected"): "delegation.reject",
+                    ("proposed", "cancelled"): "delegation.cancel",
+                    ("accepted", "cancelled"): "delegation.cancel",
+                    ("blocked", "cancelled"): "delegation.cancel",
+                },
+            )
+            if delegation.status in {"blocked", "rejected", "cancelled"} and (
+                delegation.status_reason is None
+                or delegation.status_by is None
+                or delegation.status_at is None
+            ):
+                issue(
+                    "delegation.status-attribution-missing",
+                    path,
+                    f"{delegation.status.title()} delegation lacks reason, actor, or timestamp",
+                )
+            if delegation.status_by is not None:
+                resolve_actor(delegation.status_by, path)
+            if changes and changes[-1].target_status != delegation.status:
+                issue(
+                    "delegation.status-history-stale",
+                    path,
+                    "Latest status change does not match delegation status",
+                )
+            if delegation.status in {"blocked", "rejected", "cancelled"} and not changes:
+                issue(
+                    "delegation.status-history-missing",
+                    path,
+                    f"{delegation.status.title()} delegation has no durable status change",
+                )
+            if delegation.status == "collected":
+                if delegation.collected_by is None or delegation.collected_at is None:
+                    issue(
+                        "delegation.collection-missing",
+                        path,
+                        "Collected delegation is missing collection attribution",
+                    )
+                else:
+                    resolve_actor(delegation.collected_by, path)
+            if (
+                represented is not None
+                and represented.represented_swarm != delegation.child_swarm_id
+            ):
+                issue(
+                    "delegation.actor-mismatch",
+                    path,
+                    f"Actor {represented.reference} does not represent {delegation.child_swarm_id}",
+                )
+            if delegation.status == "collected" and child_exists:
+                child_swarm = swarms.get(delegation.child_swarm_id)
+                child_work = work_records[child_key]
+                child_contract = methods.get(child_swarm.method) if child_swarm else None
+                if child_contract is None or child_work.state != child_contract.terminal_state:
+                    issue(
+                        "delegation.result-not-terminal",
+                        path,
+                        "Collected delegation does not reference terminal child work",
+                    )
+                parent_work = work_records.get(parent_key)
+                result_uri = (
+                    f"agora://swarms/{delegation.child_swarm_id}/work/{delegation.child_work_id}"
+                )
+                if parent_work is not None:
+                    artifact_path = Path(parent_work.path) / "artifacts.md"
+                    evidence_path = Path(parent_work.path) / "evidence.md"
+                    if (
+                        delegation.result_kind not in parent_work.artifact_kinds
+                        or result_uri not in artifact_path.read_text(encoding="utf-8")
+                    ):
+                        issue(
+                            "delegation.result-artifact-missing",
+                            artifact_path,
+                            "Collected result artifact is missing from parent work",
+                        )
+                    if (
+                        "success" not in parent_work.evidence_results
+                        or result_uri not in evidence_path.read_text(encoding="utf-8")
+                    ):
+                        issue(
+                            "delegation.result-evidence-missing",
+                            evidence_path,
+                            "Collected result evidence is missing from parent work",
+                        )
+
+        for directory in _child_directories(root / ".agora" / "sessions"):
+            path = directory / "SESSION.md"
+            session = inspect(
+                "sessions",
+                "session.invalid",
+                path,
+                lambda path=path: self._load_session(path.parent),
+            )
+            if not isinstance(session, SessionRecord):
+                continue
+            if session.id != path.parent.name:
+                issue(
+                    "session.id-mismatch",
+                    path,
+                    f"Session id {session.id} does not match directory {path.parent.name}",
+                )
+            resolve_actor(session.actor, path)
+            swarm = swarms.get(session.swarm_id)
+            if swarm is None:
+                issue(
+                    "session.swarm-missing",
+                    path,
+                    f"Session references missing swarm: {session.swarm_id}",
+                )
+            else:
+                contract = methods.get(swarm.method)
+                unknown_roles = (
+                    sorted(set(session.roles) - set(contract.required_roles))
+                    if contract is not None
+                    else []
+                )
+                if unknown_roles:
+                    issue(
+                        "session.roles-invalid",
+                        path,
+                        f"Session records unknown roles: {', '.join(unknown_roles)}",
+                    )
+            if (
+                session.work_id is not None
+                and (
+                    session.swarm_id,
+                    session.work_id,
+                )
+                not in work_records
+            ):
+                issue(
+                    "session.work-missing",
+                    path,
+                    f"Session references missing work: {session.work_id}",
+                )
+            if not (path.parent / "CONTEXT.md").is_file():
+                issue("session.context-missing", path, "Session CONTEXT.md is missing")
+
+        for directory in _child_directories(root / ".agora" / "tool-runs"):
+            path = directory / "RUN.md"
+            run = inspect(
+                "tool-runs",
+                "tool-run.invalid",
+                path,
+                lambda path=path: self._load_tool_run(path.parent),
+            )
+            if not isinstance(run, ToolRunRecord):
+                continue
+            if run.id != path.parent.name:
+                issue(
+                    "tool-run.id-mismatch",
+                    path,
+                    f"Tool run id {run.id} does not match directory {path.parent.name}",
+                )
+            contract = tools.get(run.tool_id)
+            operation = contract.operations.get(run.operation_id) if contract else None
+            if operation is None:
+                issue(
+                    "tool-run.operation-missing",
+                    path,
+                    f"Tool operation is not installed: {run.tool_id}/{run.operation_id}",
+                )
+            elif operation.capability != run.capability or operation.risk != run.risk:
+                issue(
+                    "tool-run.contract-mismatch",
+                    path,
+                    "Tool run capability or risk differs from its installed operation",
+                )
+            resolve_actor(run.actor, path)
+            if run.swarm_id not in swarms:
+                issue(
+                    "tool-run.swarm-missing",
+                    path,
+                    f"Tool run references missing swarm: {run.swarm_id}",
+                )
+            if run.work_id is not None and (run.swarm_id, run.work_id) not in work_records:
+                issue(
+                    "tool-run.work-missing",
+                    path,
+                    f"Tool run references missing work: {run.work_id}",
+                )
+            result_path = path.parent / "RESULT.md"
+            if run.status in {"completed", "failed"}:
+                inspect(
+                    "documents",
+                    "tool-result.invalid",
+                    result_path,
+                    lambda result_path=result_path: _assert_schema(
+                        read_markdown(result_path), "agora/tool-result/v1", result_path
+                    ),
+                )
+
+        event_sources = [("project", root / ".agora" / "events.md")]
+        event_sources.extend(
+            (f"swarm:{swarm.id}", Path(swarm.path) / "events.md") for swarm in swarms.values()
+        )
+        event_sources.extend(
+            (f"work:{swarm_id}/{work_id}", Path(work.path) / "events.md")
+            for (swarm_id, work_id), work in work_records.items()
+        )
+        for scope, path in event_sources:
+            inspect(
+                "event-files",
+                "events.invalid",
+                path,
+                lambda path=path, scope=scope: self._read_events(path, scope),
+            )
+
+        ordered = sorted(
+            issues,
+            key=lambda item: (item.severity != "error", item.path, item.code, item.message),
+        )
+        return ValidationReport(
+            ok=not any(item.severity == "error" for item in ordered),
+            project=root.name,
+            checked=checked,
+            issues=ordered,
+        )
+
     def doctor(self) -> list[DoctorCheck]:
         root = self.project_root()
         configuration = self._load_project_configuration(root)
         agora = root / ".agora"
-        if configuration.integration == "codex":
-            integration_path = root / ".agents" / "skills" / "agora-objective" / "SKILL.md"
-        elif configuration.integration == "claude":
-            integration_path = root / ".claude" / "commands" / "agora.objective.md"
-        else:
-            integration_path = agora / "commands" / "objective.md"
+        command_ids = sorted(path.stem for path in (agora / "commands").glob("*.md"))
+        integration_paths = [
+            self._integration_command_path(root, configuration.integration, command_id)
+            for command_id in command_ids
+        ]
+        available_integrations = sum(path.is_file() for path in integration_paths)
         git_enabled = is_git_repository(root)
         return [
             DoctorCheck("project", True, str(root)),
@@ -1151,8 +2433,9 @@ class AgoraWorkspace:
             ),
             DoctorCheck(
                 "integration",
-                integration_path.exists(),
-                f"{configuration.integration}: {integration_path}",
+                bool(integration_paths) and available_integrations == len(integration_paths),
+                f"{configuration.integration}: {available_integrations}/{len(integration_paths)} "
+                "commands available",
             ),
             DoctorCheck(
                 "tool-policy",
@@ -1183,7 +2466,9 @@ class AgoraWorkspace:
         path = agora_home() / "config.md"
         if not path.exists():
             return None
-        attributes = read_markdown(path).attributes
+        document = read_markdown(path)
+        _assert_schema(document, "agora/user-config/v1", path)
+        attributes = document.attributes
         return UserConfiguration(
             integration=self._integration(string_attribute(attributes, "integration")),
             provider=string_attribute(attributes, "provider"),
@@ -1193,7 +2478,10 @@ class AgoraWorkspace:
         )
 
     def _load_project_configuration(self, root: Path) -> ProjectConfiguration:
-        attributes = read_markdown(root / ".agora" / "project.md").attributes
+        path = root / ".agora" / "project.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/project/v1", path)
+        attributes = document.attributes
         return ProjectConfiguration(
             project=string_attribute(attributes, "project"),
             integration=self._integration(string_attribute(attributes, "integration")),
@@ -1224,6 +2512,39 @@ class AgoraWorkspace:
                 destination = target / ".claude" / "commands" / f"agora.{command_id}.md"
             write_new(destination, contents, force)
 
+    @staticmethod
+    def _integration_command_path(root: Path, integration: Integration, command_id: str) -> Path:
+        assert_slug(command_id, "Agent command id")
+        if integration == "codex":
+            return root / ".agents" / "skills" / f"agora-{command_id}" / "SKILL.md"
+        if integration == "claude":
+            return root / ".claude" / "commands" / f"agora.{command_id}.md"
+        return root / ".agora" / "commands" / f"{command_id}.md"
+
+    @staticmethod
+    def _integration_command_paths(root: Path, integration: Integration) -> list[Path]:
+        if integration == "codex":
+            return sorted((root / ".agents" / "skills").glob("agora-*/SKILL.md"))
+        if integration == "claude":
+            return sorted((root / ".claude" / "commands").glob("agora.*.md"))
+        return sorted((root / ".agora" / "commands").glob("*.md"))
+
+    @staticmethod
+    def _load_agent_command(path: Path, command_id: str) -> MarkdownDocument:
+        assert_slug(command_id, "Agent command id")
+        document = read_markdown(path)
+        name = string_attribute(document.attributes, "name")
+        description = string_attribute(document.attributes, "description")
+        if name != f"agora-{command_id}":
+            raise ValueError(f"Agent command name must be agora-{command_id}, found {name}: {path}")
+        if not description.strip():
+            raise ValueError(f"Agent command description cannot be empty: {path}")
+        if not document.body.strip():
+            raise ValueError(f"Agent command instructions cannot be empty: {path}")
+        if "{{" in document.body or "}}" in document.body:
+            raise ValueError(f"Agent command contains an unresolved template value: {path}")
+        return document
+
     def _find_actor(self, root: Path, reference: str) -> ActorRecord:
         if ":" in reference:
             scope, actor_id = reference.split(":", 1)
@@ -1248,7 +2569,9 @@ class AgoraWorkspace:
         if match is None:
             raise FileNotFoundError(f"Actor not found: {reference}")
         scope, path = match
-        attributes = read_markdown(path).attributes
+        document = read_markdown(path)
+        _assert_schema(document, "agora/actor/v1", path)
+        attributes = document.attributes
         kind = string_attribute(attributes, "kind")
         if kind not in ACTOR_KINDS:
             raise ValueError(f"Unsupported actor kind: {kind}")
@@ -1413,10 +2736,71 @@ class AgoraWorkspace:
             role for role, reference in swarm.assignments.items() if reference == actor_reference
         ]
 
+    def _assert_work_mutable(self, root: Path, swarm: SwarmRecord, work: WorkRecord) -> None:
+        if work.operational_status != "active":
+            raise ValueError(
+                f"Work {swarm.id}/{work.id} is {work.operational_status}; resume it before "
+                "performing work mutations"
+            )
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        if work.state == contract.terminal_state:
+            raise ValueError(f"Completed work cannot be modified: {swarm.id}/{work.id}")
+
+    @staticmethod
+    def _derived_swarm_status(
+        swarm: SwarmRecord,
+        work: list[WorkRecord],
+        contract: MethodContract,
+    ) -> str:
+        if not all(role in swarm.assignments for role in swarm.required_roles):
+            return "forming"
+        if not work:
+            return "ready"
+        if all(item.operational_status == "cancelled" for item in work):
+            return "cancelled"
+        if all(
+            item.operational_status == "cancelled" or item.state == contract.terminal_state
+            for item in work
+        ):
+            return "completed"
+        outstanding = [
+            item
+            for item in work
+            if item.operational_status != "cancelled" and item.state != contract.terminal_state
+        ]
+        if outstanding and all(item.operational_status == "blocked" for item in outstanding):
+            return "blocked"
+        if any(
+            item.operational_status != "cancelled" and item.state != contract.work_states[0]
+            for item in work
+        ):
+            return "running"
+        return "ready"
+
+    def _refresh_swarm_status(self, root: Path, swarm: SwarmRecord) -> None:
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        work = [
+            self._load_work(swarm, path.parent.name)
+            for path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
+        ]
+        target = self._derived_swarm_status(swarm, work, contract)
+        if target == swarm.status:
+            return
+        previous = swarm.status
+        swarm.status = target
+        atomic_write(Path(swarm.path) / "SWARM.md", self._render_swarm(swarm))
+        self._append_swarm_event(
+            root,
+            swarm.id,
+            "swarm.status-changed",
+            f"from={previous} to={target}",
+        )
+
     def _load_swarm(self, root: Path, swarm_id: str) -> SwarmRecord:
         assert_slug(swarm_id, "Swarm id")
         path = root / ".agora" / "swarms" / swarm_id
         document = read_markdown(path / "SWARM.md")
+        _assert_schema(document, "agora/swarm/v1", path / "SWARM.md")
         return SwarmRecord(
             id=string_attribute(document.attributes, "id"),
             method=string_attribute(document.attributes, "method"),
@@ -1476,6 +2860,117 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _load_handoff(swarm: SwarmRecord, handoff_id: str) -> HandoffRecord:
+        assert_slug(handoff_id, "Handoff id")
+        path = Path(swarm.path) / "handoffs" / handoff_id / "HANDOFF.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/handoff/v1", path)
+        return HandoffRecord(
+            id=string_attribute(document.attributes, "id"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            role_id=string_attribute(document.attributes, "role"),
+            from_actor=string_attribute(document.attributes, "from"),
+            to_actor=string_attribute(document.attributes, "to"),
+            authorized_by=string_attribute(document.attributes, "authorized-by"),
+            reason=_extract_section(document.body, "Reason"),
+            work_id=optional_string_attribute(document.attributes, "work"),
+            created_at=string_attribute(document.attributes, "created-at"),
+            path=str(path),
+        )
+
+    def _record_status_change(
+        self,
+        *,
+        subject_type: str,
+        subject: str,
+        action: str,
+        previous_status: str,
+        target_status: str,
+        actor: str,
+        reason: str,
+        root: Path,
+        id_: str | None,
+    ) -> StatusChangeRecord:
+        if subject_type not in {"work", "delegation"}:
+            raise ValueError(f"Unsupported status change subject type: {subject_type}")
+        change_id = id_ or self._now().astimezone(UTC).strftime("change-%Y%m%dt%H%M%S%fz")
+        if id_ is None:
+            base = change_id
+            suffix = 2
+            while (root / change_id / "STATUS.md").exists():
+                change_id = f"{base}-{suffix}"
+                suffix += 1
+        assert_slug(change_id, "Status change id")
+        path = root / change_id / "STATUS.md"
+        if path.exists():
+            raise FileExistsError(f"Status change already exists: {change_id}")
+        sequence = len(list(root.glob("*/STATUS.md"))) + 1
+        record = StatusChangeRecord(
+            id=change_id,
+            subject_type="work" if subject_type == "work" else "delegation",
+            subject=subject,
+            action=action,
+            previous_status=previous_status,
+            target_status=target_status,
+            actor=actor,
+            reason=reason,
+            sequence=sequence,
+            created_at=self._timestamp(),
+            path=str(path),
+        )
+        write_new(path, self._render_status_change(record))
+        return record
+
+    @staticmethod
+    def _assert_status_change_id_available(root: Path, id_: str | None) -> None:
+        if id_ is None:
+            return
+        assert_slug(id_, "Status change id")
+        if (root / id_ / "STATUS.md").exists():
+            raise FileExistsError(f"Status change already exists: {id_}")
+
+    @staticmethod
+    def _render_status_change(record: StatusChangeRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/status-change/v1",
+                    "id": record.id,
+                    "subject-type": record.subject_type,
+                    "subject": record.subject,
+                    "action": record.action,
+                    "previous-status": record.previous_status,
+                    "target-status": record.target_status,
+                    "actor": record.actor,
+                    "sequence": record.sequence,
+                    "created-at": record.created_at,
+                },
+                body=f"# Status change {record.id}\n\n## Reason\n\n{record.reason}",
+            )
+        )
+
+    @staticmethod
+    def _load_status_change(path: Path) -> StatusChangeRecord:
+        document = read_markdown(path / "STATUS.md")
+        _assert_schema(document, "agora/status-change/v1", path / "STATUS.md")
+        subject_type = string_attribute(document.attributes, "subject-type")
+        if subject_type not in {"work", "delegation"}:
+            raise ValueError(f"Unsupported status change subject type: {subject_type}")
+        return StatusChangeRecord(
+            id=string_attribute(document.attributes, "id"),
+            subject_type="work" if subject_type == "work" else "delegation",
+            subject=string_attribute(document.attributes, "subject"),
+            action=string_attribute(document.attributes, "action"),
+            previous_status=string_attribute(document.attributes, "previous-status"),
+            target_status=string_attribute(document.attributes, "target-status"),
+            actor=string_attribute(document.attributes, "actor"),
+            reason=_extract_section(document.body, "Reason"),
+            sequence=_optional_integer_attribute(document.attributes, "sequence") or 0,
+            created_at=string_attribute(document.attributes, "created-at"),
+            path=str(path / "STATUS.md"),
+        )
+
+    @staticmethod
     def _render_delegation(record: DelegationRecord) -> str:
         criteria = (
             "\n".join(
@@ -1506,6 +3001,10 @@ class AgoraWorkspace:
                     "accepted-at": record.accepted_at,
                     "collected-by": record.collected_by,
                     "collected-at": record.collected_at,
+                    "blocked-from": record.blocked_from,
+                    "status-reason": record.status_reason,
+                    "status-by": record.status_by,
+                    "status-at": record.status_at,
                 },
                 body=(
                     f"# Delegation {record.id}\n\n## Description\n\n"
@@ -1523,7 +3022,14 @@ class AgoraWorkspace:
         if string_attribute(document.attributes, "schema") != "agora/delegation/v1":
             raise ValueError(f"Delegation schema must be agora/delegation/v1: {path}")
         status = string_attribute(document.attributes, "status")
-        if status not in {"proposed", "accepted", "collected"}:
+        if status not in {
+            "proposed",
+            "accepted",
+            "blocked",
+            "collected",
+            "rejected",
+            "cancelled",
+        }:
             raise ValueError(f"Unsupported delegation status: {status}")
         return DelegationRecord(
             id=string_attribute(document.attributes, "id"),
@@ -1544,6 +3050,10 @@ class AgoraWorkspace:
             accepted_at=optional_string_attribute(document.attributes, "accepted-at"),
             collected_by=optional_string_attribute(document.attributes, "collected-by"),
             collected_at=optional_string_attribute(document.attributes, "collected-at"),
+            blocked_from=optional_string_attribute(document.attributes, "blocked-from"),
+            status_reason=optional_string_attribute(document.attributes, "status-reason"),
+            status_by=optional_string_attribute(document.attributes, "status-by"),
+            status_at=optional_string_attribute(document.attributes, "status-at"),
             path=str(path),
         )
 
@@ -1553,12 +3063,16 @@ class AgoraWorkspace:
         document = read_markdown(path / "WORK.md")
         artifacts = read_markdown(path / "artifacts.md")
         evidence = read_markdown(path / "evidence.md")
+        _assert_schema(document, "agora/work/v1", path / "WORK.md")
+        _assert_schema(artifacts, "agora/artifacts/v1", path / "artifacts.md")
+        _assert_schema(evidence, "agora/evidence/v1", path / "evidence.md")
         approvals_path = path / "approvals.md"
-        approval_roles = (
-            strings_attribute(read_markdown(approvals_path).attributes, "approval-roles")
-            if approvals_path.exists()
-            else []
-        )
+        if approvals_path.exists():
+            approvals = read_markdown(approvals_path)
+            _assert_schema(approvals, "agora/approvals/v1", approvals_path)
+            approval_roles = strings_attribute(approvals.attributes, "approval-roles")
+        else:
+            approval_roles = []
         return WorkRecord(
             id=string_attribute(document.attributes, "id"),
             swarm_id=string_attribute(document.attributes, "swarm"),
@@ -1572,6 +3086,12 @@ class AgoraWorkspace:
             evidence_results=strings_attribute(evidence.attributes, "results"),
             approval_roles=approval_roles,
             path=str(path),
+            operational_status=_work_operational_status(
+                document.attributes.get("operational-status", "active")
+            ),
+            status_reason=optional_string_attribute(document.attributes, "status-reason"),
+            status_by=optional_string_attribute(document.attributes, "status-by"),
+            status_at=optional_string_attribute(document.attributes, "status-at"),
         )
 
     def _render_work(self, work: WorkRecord) -> str:
@@ -1588,6 +3108,10 @@ class AgoraWorkspace:
                     "swarm": work.swarm_id,
                     "title": work.title,
                     "state": work.state,
+                    "operational-status": work.operational_status,
+                    "status-reason": work.status_reason,
+                    "status-by": work.status_by,
+                    "status-at": work.status_at,
                     "acceptance-criteria": work.acceptance_criteria,
                     "satisfied-criteria": work.satisfied_criteria,
                     "required-artifacts": work.required_artifacts,
@@ -1642,6 +3166,30 @@ class AgoraWorkspace:
                     "history is not project state unless its outcome is recorded in Agora files."
                 ),
             )
+        )
+
+    def _load_session(self, path: Path) -> SessionRecord:
+        document = read_markdown(path / "SESSION.md")
+        _assert_schema(document, "agora/session/v1", path / "SESSION.md")
+        status = string_attribute(document.attributes, "status")
+        if status not in {"prepared", "running", "completed", "failed"}:
+            raise ValueError(f"Unsupported session status: {status}")
+        return SessionRecord(
+            id=string_attribute(document.attributes, "id"),
+            actor=string_attribute(document.attributes, "actor"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=optional_string_attribute(document.attributes, "work"),
+            roles=strings_attribute(document.attributes, "roles"),
+            integration=self._integration(string_attribute(document.attributes, "integration")),
+            provider=string_attribute(document.attributes, "provider"),
+            model=string_attribute(document.attributes, "model"),
+            status=status,
+            path=str(path),
+            context_path=string_attribute(document.attributes, "context"),
+            launch_command=strings_attribute(document.attributes, "launch-command"),
+            runtime_available=_boolean_attribute(document.attributes, "runtime-available"),
+            created_at=string_attribute(document.attributes, "created-at"),
+            exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
         )
 
     def _render_session_context(
@@ -1811,6 +3359,35 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _load_tool_run(path: Path) -> ToolRunRecord:
+        document = read_markdown(path / "RUN.md")
+        _assert_schema(document, "agora/tool-run/v1", path / "RUN.md")
+        risk = string_attribute(document.attributes, "risk")
+        if risk not in {"read", "write", "destructive"}:
+            raise ValueError(f"Unsupported tool run risk: {risk}")
+        status = string_attribute(document.attributes, "status")
+        if status not in {"prepared", "running", "completed", "failed"}:
+            raise ValueError(f"Unsupported tool run status: {status}")
+        return ToolRunRecord(
+            id=string_attribute(document.attributes, "id"),
+            tool_id=string_attribute(document.attributes, "tool"),
+            operation_id=string_attribute(document.attributes, "operation"),
+            actor=string_attribute(document.attributes, "actor"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=optional_string_attribute(document.attributes, "work"),
+            capability=string_attribute(document.attributes, "capability"),
+            risk=_tool_risk(risk),
+            inputs=record_attribute(document.attributes, "inputs"),
+            command=strings_attribute(document.attributes, "command"),
+            runtime_available=_boolean_attribute(document.attributes, "runtime-available"),
+            status=status,
+            path=str(path),
+            created_at=string_attribute(document.attributes, "created-at"),
+            result_kind=optional_string_attribute(document.attributes, "result-kind"),
+            exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
+        )
+
+    @staticmethod
     def _render_tool_result(record: ToolRunRecord, stdout: str, stderr: str) -> str:
         def block(value: str) -> str:
             lines = value.rstrip().splitlines() or ["(empty)"]
@@ -1848,7 +3425,8 @@ class AgoraWorkspace:
             for path in work_root.iterdir()
             if path.is_dir()
             and path.name != work.id
-            and self._load_work(swarm, path.name).state == target_state
+            and (item := self._load_work(swarm, path.name)).state == target_state
+            and item.operational_status != "cancelled"
         )
         if active >= limit:
             raise ValueError(
@@ -1902,6 +3480,30 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _read_events(path: Path, scope: str) -> list[EventRecord]:
+        records: list[EventRecord] = []
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.startswith("- "):
+                continue
+            parts = line[2:].split(" | ", 2)
+            if len(parts) != 3 or any(not part.strip() for part in parts[:2]):
+                raise ValueError(f"Invalid event entry at {path}:{number}")
+            try:
+                datetime.fromisoformat(parts[0].strip().replace("Z", "+00:00"))
+            except ValueError as error:
+                raise ValueError(f"Invalid event timestamp at {path}:{number}") from error
+            records.append(
+                EventRecord(
+                    timestamp=parts[0].strip(),
+                    type=parts[1].strip(),
+                    detail=parts[2].strip(),
+                    scope=scope,
+                    path=str(path),
+                )
+            )
+        return records
+
+    @staticmethod
     def _assert_integration(value: str) -> None:
         if value not in INTEGRATIONS:
             raise ValueError(f"Unsupported integration: {value}. Choose {', '.join(INTEGRATIONS)}.")
@@ -1953,6 +3555,60 @@ def _extract_section(body: str, heading: str) -> str:
         return ""
     section = body.split(marker, 1)[1]
     return section.split("\n\n## ", 1)[0].strip()
+
+
+def _assert_schema(document: MarkdownDocument, expected: str, path: Path) -> None:
+    actual = string_attribute(document.attributes, "schema")
+    if actual != expected:
+        raise ValueError(f"Expected schema {expected}, found {actual}: {path}")
+
+
+def _boolean_attribute(attributes: dict[str, object], key: str) -> bool:
+    value = attributes.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"Expected boolean attribute: {key}")
+    return value
+
+
+def _optional_integer_attribute(attributes: dict[str, object], key: str) -> int | None:
+    value = attributes.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Expected integer attribute or null: {key}")
+    return value
+
+
+def _tool_risk(value: str) -> ToolRisk:
+    if value not in {"read", "write", "destructive"}:
+        raise ValueError(f"Unsupported tool risk: {value}")
+    return value  # type: ignore[return-value]
+
+
+def _work_operational_status(value: object) -> WorkOperationalStatus:
+    if value not in {"active", "blocked", "cancelled"}:
+        raise ValueError(f"Unsupported work operational status: {value}")
+    return value  # type: ignore[return-value]
+
+
+def _count_values(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _display_path(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _child_directories(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    return sorted(path for path in root.iterdir() if path.is_dir())
 
 
 def _launch_process(command: list[str], cwd: Path, environment: dict[str, str]) -> int:

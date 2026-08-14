@@ -368,6 +368,55 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
     )
     assert (
         main(
+            [
+                "delegation",
+                "block",
+                "--delegation",
+                "cli-delegation",
+                "--by",
+                "facilitator",
+                "--reason",
+                "Pause for contract clarification",
+                "--id",
+                "cli-delegation-blocked",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "delegation",
+                "resume",
+                "--delegation",
+                "cli-delegation",
+                "--by",
+                "facilitator",
+                "--reason",
+                "The contract is clear",
+                "--id",
+                "cli-delegation-resumed",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            ["delegation", "status-changes", "--delegation", "cli-delegation"],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
             ["delegation", "show", "--delegation", "cli-delegation"],
             cwd=root,
             stdout=output,
@@ -378,7 +427,136 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
 
     assert errors.getvalue() == ""
     assert '"status": "proposed"' in output.getvalue()
-    assert output.getvalue().count('"status": "accepted"') == 2
+    assert output.getvalue().count('"status": "accepted"') >= 2
+    assert '"action": "delegation.block"' in output.getvalue()
+    assert '"action": "delegation.resume"' in output.getvalue()
     assert (
         root / ".agora" / "swarms" / "specialists" / "work" / "specialist-work" / "WORK.md"
     ).exists()
+
+
+def test_blocks_resumes_and_lists_work_status_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    for actor in (
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="facilitator",
+            name="Facilitator",
+            kind="ai-agent",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="developer",
+            name="Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        ),
+    ):
+        workspace.add_actor(actor)
+    workspace.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Deliver work", create_branch=False)
+    )
+    for role, actor in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "developer"),
+    ):
+        workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor))
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="cli-work",
+            title="Exercise work controls",
+            actor_id="owner",
+        )
+    )
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    for arguments in (
+        [
+            "work",
+            "block",
+            "--swarm",
+            "delivery",
+            "--work",
+            "cli-work",
+            "--by",
+            "developer",
+            "--reason",
+            "Wait for input",
+            "--id",
+            "cli-work-blocked",
+        ],
+        [
+            "work",
+            "list",
+            "--swarm",
+            "delivery",
+            "--operational-status",
+            "blocked",
+        ],
+        [
+            "work",
+            "resume",
+            "--swarm",
+            "delivery",
+            "--work",
+            "cli-work",
+            "--by",
+            "facilitator",
+            "--reason",
+            "Input received",
+            "--id",
+            "cli-work-resumed",
+        ],
+        ["work", "status-changes", "--swarm", "delivery", "--work", "cli-work"],
+    ):
+        assert main(arguments, cwd=root, stdout=output, stderr=errors) == 0
+
+    assert errors.getvalue() == ""
+    assert '"operational_status": "blocked"' in output.getvalue()
+    assert '"action": "work.resume"' in output.getvalue()
+
+
+def test_queries_status_and_returns_a_failure_code_for_invalid_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    AgoraWorkspace(cwd=root).initialize(InitInput(integration="generic"))
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert main(["status"], cwd=root, stdout=output, stderr=errors) == 0
+    assert main(["actor", "list"], cwd=root, stdout=output, stderr=errors) == 0
+    assert main(["method", "list"], cwd=root, stdout=output, stderr=errors) == 0
+    assert main(["validate"], cwd=root, stdout=output, stderr=errors) == 0
+    assert '"project": "project"' in output.getvalue()
+    assert '"methods": 2' in output.getvalue()
+    assert '"ok": true' in output.getvalue()
+
+    constitution = root / ".agora" / "constitution.md"
+    constitution.write_text(
+        constitution.read_text().replace(
+            'schema: "agora/constitution/v1"', 'schema: "invalid/schema"'
+        )
+    )
+    invalid_output = io.StringIO()
+    assert main(["validate"], cwd=root, stdout=invalid_output, stderr=errors) == 1
+    assert '"ok": false' in invalid_output.getvalue()
+    assert '"code": "document.invalid"' in invalid_output.getvalue()
+    assert errors.getvalue() == ""

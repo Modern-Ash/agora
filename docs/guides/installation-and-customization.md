@@ -95,9 +95,9 @@ agora configure --help
 agora method install --help
 ```
 
-The CLI should list `configure`, `init`, `doctor`, `start`, `method`, `tool`, `actor`, `swarm`,
-`work`, `artifact`, `evidence`, and `approval`. These commands operate on files; no background process
-should be running.
+The CLI should list `configure`, `init`, `doctor`, `status`, `validate`, `start`, `method`, `tool`,
+`delegation`, `actor`, `swarm`, `work`, `session`, `event`, `artifact`, `evidence`, and `approval`.
+These commands operate on files; no background process should be running.
 
 ## Configuration scopes
 
@@ -173,7 +173,11 @@ Initialize a project with user defaults:
 cd my-project
 agora init
 agora doctor
+agora validate
 ```
+
+Validation includes the portable command Markdown and every generated Codex, Claude, or generic
+adapter. The [complete verification guide](verification.md) covers repository-wide tests and samples.
 
 Override selected defaults for one new project:
 
@@ -230,6 +234,11 @@ agora swarm create \
 A Method Pack customizes required roles, compatible actor kinds, capabilities, allowed actions,
 transition graphs, WIP limits, gates, approvals, collaboration protocol, and tool guidance. Read the
 [Method Pack reference](../reference/method-packs.md) before authoring one.
+
+Operational interruption authority is also role-defined. Grant `work.block` and `work.resume` to
+delivery or flow roles, `work.cancel` to the appropriate owner, and the corresponding delegation
+actions according to parent and child authority. See
+[Interruptions and cancellation](interruptions-and-cancellation.md) for the full action matrix.
 
 ## Customize developer tool integrations
 
@@ -403,6 +412,7 @@ Run commands inside an initialized project or target it explicitly:
 
 ```bash
 agora --project /path/to/project doctor
+agora --project /path/to/project validate
 ```
 
 ### Method Pack is not installed

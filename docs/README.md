@@ -16,6 +16,12 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Recursive swarms](guides/recursive-swarms.md): link a real child swarm with cycle and depth limits.
 - [Delegated work](guides/delegated-work.md): propose child work, accept it, and collect a terminal
   result into its parent.
+- [Operations and validation](guides/operations-and-validation.md): query active state, inspect
+  events, and audit every durable record.
+- [Complete verification](guides/verification.md): validate all command Markdown, generated agent
+  adapters, executable samples, tests, and distributions with one Python runner.
+- [Interruptions and cancellation](guides/interruptions-and-cancellation.md): block, resume,
+  reject, or cancel work and delegations without erasing lifecycle history.
 - [Method Pack reference](reference/method-packs.md): create and install a custom lifecycle.
 - [Tool Pack reference](reference/tool-packs.md): govern external CLIs and persist their results.
 
@@ -42,11 +48,16 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   swarm and reject excessive nesting.
 - [Delegated work](../samples/delegated-work/README.md): execute the proposal, child acceptance, and
   result collection lifecycle.
+- [Operational queries](../samples/operational-query/README.md): summarize and validate a generated
+  workspace without a database.
+- [Interruptions and cancellation](../samples/interruptions/README.md): exercise durable status
+  histories and parent-child authority.
 
 ## MVP boundaries
 
 Agora currently validates transition graphs, role capabilities and actions, WIP limits, gates,
-required artifacts, acceptance criteria, successful evidence, approvals, handoffs, delegated work,
-and Tool Pack operations. It can launch local LLM and tool CLIs with durable context, but does not
-call provider APIs directly, manage credentials, implement a remote scheduler, or replace external
+required artifacts, acceptance criteria, successful evidence, approvals, handoffs, work and
+delegation interruption histories, delegated work, Tool Pack operations, cross-record integrity,
+and event syntax. It can launch local LLM and tool CLIs with durable context, but does not call
+provider APIs directly, manage credentials, implement a remote scheduler, or replace external
 systems.

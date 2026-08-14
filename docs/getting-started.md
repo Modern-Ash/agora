@@ -194,11 +194,27 @@ The final transition fails without satisfied criteria, every required artifact k
 evidence, Product Owner approval, and permission for the exact edge. A failed gate leaves the work
 unchanged.
 
+When an external dependency interrupts delivery, preserve the current method state instead of
+inventing a transition:
+
+```bash
+agora work block --swarm payment-api --work authenticated-endpoint --by delivery \
+  --reason "Waiting for the identity provider contract"
+agora work resume --swarm payment-api --work authenticated-endpoint --by facilitator \
+  --reason "The identity provider contract is available"
+```
+
+See [Interruptions and cancellation](guides/interruptions-and-cancellation.md) for cancellation and
+delegation rules.
+
 ## 9. Inspect and commit the durable record
 
 ```bash
+agora status
 agora swarm show --swarm payment-api
 agora work show --swarm payment-api --work authenticated-endpoint
+agora event list --swarm payment-api --work authenticated-endpoint --limit 20
+agora validate
 git status
 git add .agora
 git commit -m "record governed payment API delivery"
@@ -209,6 +225,7 @@ The resulting work directory contains current state and append-only operational 
 ```text
 .agora/swarms/payment-api/work/authenticated-endpoint/
   WORK.md
+  status-changes/<change-id>/STATUS.md
   artifacts.md
   evidence.md
   approvals.md
@@ -220,6 +237,10 @@ The prepared execution record remains under `.agora/sessions/payment-delivery/`,
 resolved runtime and compiled context. The governed repository result remains under
 `.agora/tool-runs/payment-status/`.
 
-Continue with the [Scrum delivery guide](guides/scrum-delivery.md) for role semantics and LLM
+`status` reports active and attention-worthy records. `validate` audits the complete workspace and
+returns a nonzero exit status for CI when schemas or cross-record references are invalid.
+
+Continue with the [operations and validation guide](guides/operations-and-validation.md) for query
+and CI semantics, the [Scrum delivery guide](guides/scrum-delivery.md) for role semantics and LLM
 interaction patterns, or the [Method Pack reference](reference/method-packs.md) to define a different
 lifecycle.

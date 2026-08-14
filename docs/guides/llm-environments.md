@@ -41,6 +41,7 @@ The adapter creates one skill directory per portable Agora command:
   agora-review/SKILL.md
   agora-handoff/SKILL.md
   agora-complete/SKILL.md
+  agora-status/SKILL.md
 ```
 
 `configured-by-codex` means that Codex owns the concrete model selection. Use a model id or internal
@@ -85,6 +86,7 @@ The adapter materializes portable instructions as Claude command files:
   agora.review.md
   agora.handoff.md
   agora.complete.md
+  agora.status.md
 ```
 
 Agora only creates these files. Command discovery, invocation syntax, model access, permissions, and
@@ -116,6 +118,21 @@ Portable instructions remain under `.agora/commands/*.md`. The external runner s
 
 `local-runtime` and `team-approved-coder` are illustrative labels. They are not built-in providers or
 models and do not cause Agora to open a network connection.
+
+## Validate generated instructions
+
+`agora validate` parses every portable command and every adapter for the configured integration. It
+detects missing files, invalid command metadata, unresolved template values, and content drift
+between `.agora/commands` and Codex or Claude output:
+
+```bash
+agora doctor
+agora validate
+```
+
+The validation report includes separate `commands` and `adapters` counts. See
+[Complete verification](verification.md) to test all three environments and every swarm sample in
+one repository run.
 
 ## Per-project overrides
 

@@ -9,9 +9,10 @@ from agora.markdown import (
     string_attribute,
     strings_attribute,
 )
-from agora.model import GatePolicy, MethodContract, TransitionRule
+from agora.model import ACTOR_KINDS, GatePolicy, MethodContract, TransitionRule
 
 TOOL_CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
+ACTION_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
 
 
 def load_method_contract(root: Path) -> MethodContract:
@@ -44,7 +45,24 @@ def load_method_contract(root: Path) -> MethodContract:
             f"Method Pack {method_id} is missing role files: {', '.join(missing_roles)}"
         )
     for role in required_roles:
-        attributes = read_markdown(root / "roles" / f"{role}.md").attributes
+        role_path = root / "roles" / f"{role}.md"
+        attributes = read_markdown(role_path).attributes
+        if string_attribute(attributes, "schema") != "agora/role/v1":
+            raise ValueError(f"Role schema must be agora/role/v1: {role_path}")
+        if string_attribute(attributes, "id") != role:
+            raise ValueError(f"Role id must match its Method Pack role: {role}")
+        required_capabilities = strings_attribute(attributes, "required-capabilities")
+        if any(
+            not TOOL_CAPABILITY_PATTERN.fullmatch(capability)
+            for capability in required_capabilities
+        ):
+            raise ValueError(f"Role {role} required-capabilities must be a valid string array")
+        allowed_kinds = strings_attribute(attributes, "allowed-actor-kinds")
+        if not allowed_kinds or any(kind not in ACTOR_KINDS for kind in allowed_kinds):
+            raise ValueError(f"Role {role} allowed-actor-kinds contains an unsupported actor kind")
+        allowed_actions = strings_attribute(attributes, "allowed-actions")
+        if any(not ACTION_PATTERN.fullmatch(action) for action in allowed_actions):
+            raise ValueError(f"Role {role} allowed-actions must be a valid string array")
         tool_capabilities = attributes.get("allowed-tool-capabilities", [])
         if not isinstance(tool_capabilities, list) or any(
             not isinstance(item, str) or not TOOL_CAPABILITY_PATTERN.fullmatch(item)

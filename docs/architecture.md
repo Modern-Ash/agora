@@ -23,10 +23,17 @@ Python CLI + templates
 `src/agora/cli.py` translates shell commands into workspace operations. It does not maintain a server
 or database, invoke an LLM, inspect project source languages, or impose a development methodology.
 `src/agora/workspace.py` materializes and validates documents, capabilities, actions, workflows,
-gates, approvals, handoffs, delegations, sessions, and tool runs. `src/agora/methods.py` loads
+gates, approvals, handoffs, interruptions, delegations, sessions, and tool runs.
+`src/agora/methods.py` loads
 transition graphs, WIP limits, and gate policies. `src/agora/tools.py` validates provider-neutral
 Tool Packs and structured external operations. `src/agora/markdown.py` implements the
 JSON-compatible front matter used by the protocol.
+
+Read operations traverse those same records to produce deterministic JSON lists and summaries.
+There is no query database or generated index. Full validation catches errors per record, continues
+the scan, then checks portable commands, generated adapters, cross-record ownership, references,
+lifecycle state, recursive graphs, and terminal results. This makes `agora validate` suitable for CI
+without changing the source of truth.
 
 ### Templates
 
@@ -102,10 +109,17 @@ child item through the ordinary lifecycle API. Collection is allowed only after 
 and registers a reference plus evidence in the parent. Sessions include matching delegation records;
 no child artifact content is copied or merged.
 
+Operational work status is orthogonal to Method Pack state. Blocking and cancellation update the
+current owner document and append a sequenced `STATUS.md` beneath it. Swarm status is derived from
+assignments and owned work, so it cannot legitimately claim completion while active work remains.
+Delegations use the same status-change record shape while preserving separate parent and child
+authority.
+
 ## Security and concurrency
 
 This slice validates actor kind, capabilities, assignment, handoff authority, allowed action,
-transition-specific role, WIP, gates, approval records, Tool Pack inputs, and tool capabilities.
+transition-specific role, WIP, gates, approval records, Tool Pack inputs, tool capabilities,
+interruption edges, status attribution, sequence continuity, and derived swarm state.
 External commands still run with the caller's operating-system permissions. Agora does not yet
 implement sandboxing, signatures, distributed locks, actor authentication, or concurrent writer
 protection. Those rules must be added without turning chat history or a proprietary service into the

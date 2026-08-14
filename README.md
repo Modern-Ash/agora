@@ -202,6 +202,10 @@ Collection registers an `agora://` reference and successful delegated-work evide
 it does not copy child artifacts or bypass parent acceptance. See the
 [delegated work guide](docs/guides/delegated-work.md).
 
+Delegations may also be blocked and resumed by parent governance, rejected by the child, or
+cancelled by the parent. Each operation requires an attributed reason and preserves a sequenced
+`STATUS.md` history.
+
 ## Governed sessions
 
 Prepare a durable context for an assigned actor and work item:
@@ -254,6 +258,22 @@ agora approval add --swarm payments --work payment-api \
   --role product-owner --by owner --note "Accepted for completion"
 ```
 
+Method state and operational status are independent. A blocker preserves the current lifecycle
+state while suspending mutations; cancellation closes the item without claiming method completion:
+
+```bash
+agora work block --swarm payments --work payment-api --by delivery \
+  --reason "Waiting for an upstream contract"
+agora work status-changes --swarm payments --work payment-api
+agora work resume --swarm payments --work payment-api --by facilitator \
+  --reason "The contract is available"
+agora work cancel --swarm payments --work payment-api --by owner \
+  --reason "The objective no longer requires this work"
+```
+
+See [interruptions and cancellation](docs/guides/interruptions-and-cancellation.md) for state,
+authority, delegation, and child-ownership rules.
+
 Transitions come from Markdown files in the installed Method Pack. Packs may define rework paths and
 per-state WIP limits. A gated terminal transition can require:
 
@@ -270,6 +290,7 @@ Each swarm contains its manifest, assignments, interactions, events, work, artif
 ```text
 .agora/delegations/specialist-task/
   DELEGATION.md
+  status-changes/<change-id>/STATUS.md
 
 .agora/swarms/payments/
   SWARM.md
@@ -281,6 +302,7 @@ Each swarm contains its manifest, assignments, interactions, events, work, artif
     delivery-to-ai/HANDOFF.md
   work/payment-api/
     WORK.md
+    status-changes/<change-id>/STATUS.md
     events.md
     interactions.md
     artifacts.md
@@ -291,7 +313,43 @@ Each swarm contains its manifest, assignments, interactions, events, work, artif
 The filesystem represents current state. Git provides history, branches, review, synchronization,
 and handoffs across IDEs, CLIs, CI/CD systems, and cloud agents.
 
+## Operational queries and validation
+
+Agora reads the Markdown source of truth into deterministic JSON views for humans, agents, IDEs,
+and CI:
+
+```bash
+agora status
+agora actor list --scope project
+agora swarm list --status running
+agora work list --swarm payments --state reviewing
+agora work list --swarm payments --operational-status blocked
+agora work status-changes --swarm payments --work payment-api
+agora delegation list --status accepted
+agora delegation status-changes --delegation specialist-task
+agora session list --status prepared
+agora tool runs --status failed
+agora event list --swarm payments --work payment-api --limit 20
+agora validate
+```
+
+`doctor` checks environment prerequisites. `validate` performs a complete, non-mutating integrity
+audit across schemas, portable commands, generated agent adapters, Method and Tool Packs, actors,
+role assignments, work, WIP, handoffs, delegations, sessions, tool runs, events, and recursive swarm
+constraints. Validation emits all findings and exits with status `1` when errors are present. See the
+[operations and validation guide](docs/guides/operations-and-validation.md).
+
 ## Development
+
+Run the complete Python verification entry point:
+
+```bash
+uv run python scripts/verify_all.py
+```
+
+It checks Python, Markdown links, generated adapter semantics, all samples, tests, and both package
+distributions. See the [complete verification guide](docs/guides/verification.md). The individual
+commands are:
 
 ```bash
 uv run ruff format --check .
@@ -306,6 +364,8 @@ uv run python samples/tool-integration/run.py
 uv run python samples/handoffs/run.py
 uv run python samples/recursive-swarms/run.py
 uv run python samples/delegated-work/run.py
+uv run python samples/operational-query/run.py
+uv run python samples/interruptions/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -320,7 +380,11 @@ Pack and persists its output. The [handoff sample](samples/handoffs/README.md) t
 Developer role from a human to an AI agent and then a swarm. The
 [recursive swarm sample](samples/recursive-swarms/README.md) links a child team and enforces nesting
 depth. The [delegated work sample](samples/delegated-work/README.md) creates accepted child work and
-collects its terminal result into the parent.
+collects its terminal result into the parent. The
+[operational query sample](samples/operational-query/README.md) summarizes and validates a complete
+workspace directly from its Markdown records. The
+[interruption sample](samples/interruptions/README.md) exercises work and delegation blocking,
+resumption, rejection, and cancellation.
 
 ## Documentation
 
@@ -334,6 +398,9 @@ collects its terminal result into the parent.
 - [Governed handoffs](docs/guides/handoffs.md)
 - [Recursive swarms](docs/guides/recursive-swarms.md)
 - [Delegated work](docs/guides/delegated-work.md)
+- [Operations and validation](docs/guides/operations-and-validation.md)
+- [Complete verification](docs/guides/verification.md)
+- [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
 - [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
 - [ADR 0001](docs/decisions/0001-initial-architecture.md)
 - [Contributing](CONTRIBUTING.md)
@@ -346,8 +413,8 @@ collects its terminal result into the parent.
 - The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
   Confluence, and cloud platforms are not bundled yet.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
-  distributed locks, and remote concurrency remain future work. Explicit child work acceptance and
-  reference-based result collection are implemented.
+  distributed locks, and remote concurrency remain future work. Explicit child work acceptance,
+  interruption, cancellation, and reference-based result collection are implemented.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.
 

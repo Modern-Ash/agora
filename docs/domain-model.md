@@ -35,21 +35,35 @@ A **Delegation** binds nonterminal parent work to a proposed child work item thr
 actor assigned in the parent. It records the child contract, including title, description,
 acceptance criteria, required artifacts, and the result artifact kind expected by the parent.
 
-The record moves from `proposed` to `accepted` to `collected`. Acceptance creates child work under
-the child's own Method Pack. Collection requires that work to reach its terminal state, then adds an
-`agora://` child-work artifact reference and successful delegated-work evidence to the parent.
-Child artifacts remain authoritative in the child and parent completion gates remain independent.
+The primary path moves from `proposed` to `accepted` to `collected`. A proposal or accepted contract
+may be blocked and resumed to its prior state. The child may reject a proposal; the parent may cancel
+a proposed, accepted, or blocked delegation. Acceptance creates child work under the child's own
+Method Pack. Collection requires that work to reach its terminal state, then adds an `agora://`
+child-work artifact reference and successful delegated-work evidence to the parent. Cancelling an
+accepted delegation does not rewrite its independently owned child work. Child artifacts remain
+authoritative in the child and parent completion gates remain independent.
 
 ## Swarm
 
 A swarm is a temporary team associated with an objective, Method Pack, and branch. It starts as
 `forming`, becomes `ready` when every required role is assigned, becomes `running` when work advances,
-and becomes `completed` when every work item reaches the terminal state.
+and becomes `completed` when every work item reaches the terminal state or is explicitly cancelled,
+provided at least one item completed normally. It is `blocked` when every remaining nonterminal item
+is blocked and `cancelled` when every item is cancelled.
 
 ## Work
 
 A work item is a Markdown directory containing description, state, criteria, artifacts, and evidence.
 Its workflow comes from `METHOD.md`; it is not hard-coded into an LLM integration.
+
+Work also has an orthogonal operational status: `active`, `blocked`, or `cancelled`. Blocking
+preserves method state while suspending mutations. Resumption restores activity without traversing a
+method edge. Cancellation is terminal for the item but does not claim that its Method Pack gate was
+satisfied.
+
+A **Status Change** is a nested, attributed `STATUS.md` record. Its monotonic sequence, action,
+source, target, actor, timestamp, and reason preserve interruption history independently of folder
+names. The owning `WORK.md` or `DELEGATION.md` remains the current-state projection.
 
 Transition documents connect source and target states and restrict the roles allowed to traverse
 each edge. A graph may contain review or verification loops. WIP limits reject entry into a state
@@ -110,3 +124,13 @@ A session binds an assigned actor, its active roles, a swarm, optional work, and
 `SESSION.md` records the selection and launch result; `CONTEXT.md` lists the project, method, roles,
 work, related delegations, policies, and operating rules the external agent must read. Conversation
 history remains external unless a material outcome is persisted in Agora files.
+
+## Operational view and validation
+
+An operational view is a computed projection of current Markdown records. Status counts, filtered
+lists, and event queries are never persisted as parallel state and can always be reconstructed.
+
+A validation issue identifies a severity, stable code, source path, and diagnostic message. A
+validation report counts successfully inspected domain records and aggregates every issue found in
+one pass. Errors make the report fail; warnings describe reviewable conditions without invalidating
+the workspace. Validation is read-only and does not infer or repair missing state.

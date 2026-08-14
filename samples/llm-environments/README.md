@@ -17,6 +17,8 @@ uv run python samples/llm-environments/run.py
 The labels are configuration examples, not hard-coded provider integrations. The sample does not
 make network requests, invoke models, read credentials, or require provider SDKs. It leaves each
 temporary project on disk so its Markdown configuration and installed adapter can be inspected.
+Each project also runs `agora validate` semantics across every portable command and generated
+adapter, not only the example `objective` file printed in the summary.
 
 See [the LLM environments guide](../../docs/guides/llm-environments.md) for responsibilities,
 security guidance, and example agent prompts.

@@ -10,6 +10,8 @@ from agora.model import (
     AddArtifactInput,
     AddEvidenceInput,
     AssignActorInput,
+    ChangeDelegationStatusInput,
+    ChangeWorkStatusInput,
     ConfigureInput,
     CreateDelegationInput,
     CreateSwarmInput,
@@ -72,6 +74,49 @@ def test_supports_filesystem_only_environments(
     git_check = next(item for item in workspace.doctor() if item.name == "git")
     assert git_check.ok is False
     assert git_check.detail == "filesystem-only mode"
+
+
+def test_validates_every_codex_command_and_detects_a_missing_adapter(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    workspace.initialize(InitInput(integration="codex"))
+
+    report = workspace.validate()
+
+    assert report.ok is True
+    assert report.checked["commands"] == 8
+    assert report.checked["adapters"] == 8
+    missing = root / ".agents" / "skills" / "agora-execute" / "SKILL.md"
+    missing.unlink()
+
+    report = workspace.validate()
+    integration_check = next(item for item in workspace.doctor() if item.name == "integration")
+
+    assert report.ok is False
+    assert any(
+        item.code == "adapter.invalid" and item.path.endswith("agora-execute/SKILL.md")
+        for item in report.issues
+    )
+    assert integration_check.ok is False
+    assert integration_check.detail == "codex: 7/8 commands available"
+
+
+def test_detects_claude_adapter_drift_from_portable_markdown(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    workspace.initialize(InitInput(integration="claude"))
+    adapter = root / ".claude" / "commands" / "agora.review.md"
+    adapter.write_text(f"{adapter.read_text()}\nLocal ungoverned override.\n")
+
+    report = workspace.validate()
+
+    assert report.ok is False
+    assert any(
+        item.code == "adapter.content-mismatch" and item.path.endswith("agora.review.md")
+        for item in report.issues
+    )
 
 
 def test_installs_and_uses_a_user_defined_method_pack(
@@ -1108,6 +1153,359 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
         )
 
 
+def test_lists_and_summarizes_operational_workspace_state(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="observable-work",
+            title="Expose operational state",
+            actor_id="owner",
+        )
+    )
+    workspace.start_session(
+        StartSessionInput(
+            id="observable-session",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="observable-work",
+        )
+    )
+    workspace.invoke_tool(
+        InvokeToolInput(
+            id="observable-tool-run",
+            tool_id="repository",
+            operation_id="status",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="observable-work",
+        )
+    )
+
+    status = workspace.status()
+
+    assert status.counts == {
+        "actors": 3,
+        "methods": 2,
+        "tools": 1,
+        "swarms": 1,
+        "work": 1,
+        "delegations": 0,
+        "sessions": 1,
+        "tool-runs": 1,
+    }
+    assert status.swarm_statuses == {"ready": 1}
+    assert status.work_states == {"specified": 1}
+    assert status.attention["active-work"] == ["delivery/observable-work"]
+    assert status.attention["unfinished-sessions"] == ["observable-session"]
+    assert [item.id for item in workspace.list_methods()] == ["kanban", "scrum"]
+    assert [item.id for item in workspace.list_tools()] == ["repository"]
+    assert [item.id for item in workspace.list_actors("project")] == [
+        "developer",
+        "facilitator",
+        "owner",
+    ]
+    assert [item.id for item in workspace.list_swarms("ready")] == ["delivery"]
+    assert [item.id for item in workspace.list_work("delivery", "specified")] == ["observable-work"]
+    assert [item.id for item in workspace.list_sessions("prepared")] == ["observable-session"]
+    assert [item.id for item in workspace.list_tool_runs("prepared")] == ["observable-tool-run"]
+    work_events = workspace.list_events(
+        swarm_id="delivery", work_id="observable-work", type_="work.created"
+    )
+    assert len(work_events) == 1
+    assert work_events[0].scope == "work:delivery/observable-work"
+    assert workspace.validate().ok is True
+
+
+def test_validation_reports_multiple_workspace_integrity_errors(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="invalid-work",
+            title="Detect invalid state",
+            actor_id="owner",
+        )
+    )
+    work_path = root / ".agora" / "swarms" / "delivery" / "work" / "invalid-work"
+    manifest = work_path / "WORK.md"
+    manifest.write_text(manifest.read_text().replace('state: "specified"', 'state: "unknown"'))
+    actor_path = root / ".agora" / "actors" / "developer.md"
+    actor_path.write_text(actor_path.read_text().replace('id: "developer"', 'id: "renamed"'))
+    with (work_path / "events.md").open("a", encoding="utf-8") as stream:
+        stream.write("- malformed event\n")
+    (root / ".agora" / "sessions" / "orphan-session").mkdir()
+
+    report = workspace.validate()
+    codes = {item.code for item in report.issues}
+
+    assert report.ok is False
+    assert "actor.id-mismatch" in codes
+    assert "work.state-invalid" in codes
+    assert "events.invalid" in codes
+    assert "session.invalid" in codes
+    assert report.checked["work"] == 1
+
+
+def test_blocks_resumes_and_cancels_work_with_durable_history(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="interruptible-work",
+            title="Handle an external dependency",
+            actor_id="owner",
+        )
+    )
+
+    blocked = workspace.block_work(
+        ChangeWorkStatusInput(
+            swarm_id="delivery",
+            work_id="interruptible-work",
+            actor_id="developer",
+            reason="Waiting for the upstream contract",
+            id="work-blocked",
+        )
+    )
+
+    assert blocked.target_status == "blocked"
+    assert workspace.show_swarm("delivery").status == "blocked"
+    assert workspace.status().attention["blocked-work"] == ["delivery/interruptible-work"]
+    with pytest.raises(ValueError, match="is blocked"):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="interruptible-work",
+                actor_id="developer",
+                target_state="planned",
+            )
+        )
+    with pytest.raises(FileExistsError, match="work-blocked"):
+        workspace.resume_work(
+            ChangeWorkStatusInput(
+                swarm_id="delivery",
+                work_id="interruptible-work",
+                actor_id="facilitator",
+                reason="This id already belongs to the blocking decision",
+                id="work-blocked",
+            )
+        )
+    assert workspace.show_work("delivery", "interruptible-work").operational_status == "blocked"
+
+    workspace.resume_work(
+        ChangeWorkStatusInput(
+            swarm_id="delivery",
+            work_id="interruptible-work",
+            actor_id="facilitator",
+            reason="The contract is available",
+            id="work-resumed",
+        )
+    )
+    assert workspace.show_swarm("delivery").status == "ready"
+    workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery",
+            work_id="interruptible-work",
+            actor_id="developer",
+            target_state="planned",
+        )
+    )
+    assert workspace.show_swarm("delivery").status == "running"
+    workspace.cancel_work(
+        ChangeWorkStatusInput(
+            swarm_id="delivery",
+            work_id="interruptible-work",
+            actor_id="owner",
+            reason="The product objective no longer needs this work",
+            id="work-cancelled",
+        )
+    )
+
+    work = workspace.show_work("delivery", "interruptible-work")
+    assert work.state == "planned"
+    assert work.operational_status == "cancelled"
+    assert workspace.show_swarm("delivery").status == "cancelled"
+    assert [
+        item.operational_status
+        for item in workspace.list_work("delivery", operational_status="cancelled")
+    ] == ["cancelled"]
+    assert [
+        item.target_status
+        for item in workspace.list_work_status_changes("delivery", "interruptible-work")
+    ] == ["blocked", "active", "cancelled"]
+    with pytest.raises(ValueError, match="cancelled -> active"):
+        workspace.resume_work(
+            ChangeWorkStatusInput(
+                swarm_id="delivery",
+                work_id="interruptible-work",
+                actor_id="facilitator",
+                reason="Attempt to reopen terminally cancelled work",
+            )
+        )
+    assert workspace.validate().ok is True
+
+
+def test_governs_delegation_interruptions_rejection_and_cancellation(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_delegated_scrum_teams(workspace)
+
+    first = workspace.create_delegation(
+        CreateDelegationInput(
+            id="rejected-delegation",
+            parent_swarm_id="delivery",
+            parent_work_id="parent-work",
+            child_actor_id="specialist-swarm",
+            child_work_id="rejected-child-work",
+            actor_id="specialist-swarm",
+            title="Explore an unsuitable approach",
+        )
+    )
+    workspace.block_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=first.id,
+            actor_id="facilitator",
+            reason="Clarify the requested boundary",
+            id="delegation-blocked",
+        )
+    )
+    with pytest.raises(ValueError, match="cannot be accepted while blocked"):
+        workspace.accept_delegation(DelegationActorInput(delegation_id=first.id, actor_id="owner"))
+    workspace.resume_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=first.id,
+            actor_id="facilitator",
+            reason="The boundary is now explicit",
+            id="delegation-resumed",
+        )
+    )
+    workspace.reject_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=first.id,
+            actor_id="owner",
+            reason="The child swarm cannot meet the requested contract",
+            id="delegation-rejected",
+        )
+    )
+    assert workspace.show_delegation(first.id).status == "rejected"
+
+    second = workspace.create_delegation(
+        CreateDelegationInput(
+            id="cancelled-delegation",
+            parent_swarm_id="delivery",
+            parent_work_id="parent-work",
+            child_actor_id="specialist-swarm",
+            child_work_id="cancelled-child-work",
+            actor_id="specialist-swarm",
+            title="Produce a result that becomes unnecessary",
+        )
+    )
+    workspace.accept_delegation(DelegationActorInput(delegation_id=second.id, actor_id="owner"))
+    workspace.block_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=second.id,
+            actor_id="facilitator",
+            reason="Parent priorities are under review",
+            id="accepted-delegation-blocked",
+        )
+    )
+    workspace.resume_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=second.id,
+            actor_id="facilitator",
+            reason="The priority review is complete",
+            id="accepted-delegation-resumed",
+        )
+    )
+    with pytest.raises(ValueError, match="open delegations"):
+        workspace.cancel_work(
+            ChangeWorkStatusInput(
+                swarm_id="delivery",
+                work_id="parent-work",
+                actor_id="owner",
+                reason="Attempt to cancel before closing child contracts",
+            )
+        )
+    assert workspace.show_work("delivery", "parent-work").operational_status == "active"
+    workspace.cancel_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=second.id,
+            actor_id="owner",
+            reason="The parent no longer needs this result",
+            id="delegation-cancelled",
+        )
+    )
+
+    cancelled = workspace.show_delegation(second.id)
+    assert cancelled.status == "cancelled"
+    assert workspace.show_work("specialists", "cancelled-child-work").operational_status == "active"
+    assert [item.target_status for item in workspace.list_delegation_status_changes(second.id)] == [
+        "accepted",
+        "blocked",
+        "accepted",
+        "cancelled",
+    ]
+    assert workspace.status().attention["open-delegations"] == []
+    assert workspace.validate().ok is True
+
+
+def test_validation_reports_corrupt_status_change_semantics(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="audited-work",
+            title="Audit interruption history",
+            actor_id="owner",
+        )
+    )
+    workspace.block_work(
+        ChangeWorkStatusInput(
+            swarm_id="delivery",
+            work_id="audited-work",
+            actor_id="developer",
+            reason="Wait for a dependency",
+            id="audited-block",
+        )
+    )
+    status_path = (
+        root
+        / ".agora"
+        / "swarms"
+        / "delivery"
+        / "work"
+        / "audited-work"
+        / "status-changes"
+        / "audited-block"
+        / "STATUS.md"
+    )
+    status_path.write_text(
+        status_path.read_text()
+        .replace('action: "work.block"', 'action: "work.cancel"')
+        .replace("sequence: 1", "sequence: 3")
+    )
+
+    report = workspace.validate()
+    codes = {item.code for item in report.issues}
+
+    assert report.ok is False
+    assert "status-change.transition-invalid" in codes
+    assert "status-change.sequence-invalid" in codes
+
+
 def _prepare_scrum_team(workspace: AgoraWorkspace) -> None:
     workspace.initialize(
         InitInput(
@@ -1153,3 +1551,69 @@ def _prepare_scrum_team(workspace: AgoraWorkspace) -> None:
         ("developer", "developer"),
     ):
         workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor))
+
+
+def _prepare_delegated_scrum_teams(workspace: AgoraWorkspace) -> None:
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
+    for actor in (
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="facilitator",
+            name="Facilitator",
+            kind="ai-agent",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="specialist",
+            name="Specialist",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        ),
+    ):
+        workspace.add_actor(actor)
+    workspace.create_swarm(
+        CreateSwarmInput(id="specialists", objective="Produce results", create_branch=False)
+    )
+    for role, actor in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "specialist"),
+    ):
+        workspace.assign_actor(
+            AssignActorInput(swarm_id="specialists", role_id=role, actor_id=actor)
+        )
+    workspace.add_actor(
+        AddActorInput(
+            id="specialist-swarm",
+            name="Specialist Swarm",
+            kind="swarm",
+            capabilities=["implementation"],
+            scope="project",
+            represented_swarm="specialists",
+        )
+    )
+    workspace.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Integrate results", create_branch=False)
+    )
+    for role, actor in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "specialist-swarm"),
+    ):
+        workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor))
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="parent-work",
+            title="Integrate delegated work",
+            actor_id="owner",
+        )
+    )

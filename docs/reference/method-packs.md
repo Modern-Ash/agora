@@ -118,6 +118,9 @@ Actions currently issued by the CLI are:
 | --- | --- |
 | `work.create` | Create a governed work item |
 | `work.transition` | Traverse an allowed transition edge |
+| `work.block` | Suspend mutations without changing method state |
+| `work.resume` | Resume blocked work in its preserved method state |
+| `work.cancel` | Close work without claiming method completion |
 | `criterion.satisfy` | Mark an acceptance criterion satisfied |
 | `artifact.add` | Register a durable output or reference |
 | `evidence.add` | Register a successful or failed result |
@@ -128,10 +131,16 @@ Actions currently issued by the CLI are:
 | `delegation.manage` | Propose child work on behalf of a governance role |
 | `delegation.accept` | Accept a proposal and create work inside the child swarm |
 | `delegation.collect` | Register a terminal child result in its parent work |
+| `delegation.block` | Suspend a proposal or accepted delegation from the parent |
+| `delegation.resume` | Restore a blocked delegation to its prior state |
+| `delegation.reject` | Reject a proposal under child authority |
+| `delegation.cancel` | Close a delegation under parent authority |
 
 A role may combine actions, but projects should grant only the authority required by that role.
 Delegation actions require a linked swarm graph in addition to role authority. See the
 [delegated work guide](../guides/delegated-work.md) for the state and attribution rules.
+See [interruptions and cancellation](../guides/interruptions-and-cancellation.md) for operational
+status rules and recommended authority boundaries.
 
 ## Gate manifest
 
@@ -160,8 +169,9 @@ For backward compatibility, a legacy pack that has no gate files receives a stri
 requiring all criteria, required artifacts, and at least one successful evidence record. The derived
 transition into its terminal state uses that gate.
 
-Model exceptional paths as explicit transitions with their own allowed roles and gates. Agora does
-not currently implement a global gate waiver or transition bypass.
+Model method-specific rework as explicit transitions with their own allowed roles and gates. Use the
+shared operational status only for suspension or cancellation. Agora does not implement a global
+gate waiver or transition bypass.
 
 ## Protocol and tool policy
 

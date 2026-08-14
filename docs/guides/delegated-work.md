@@ -6,8 +6,8 @@ methods, roles, events, gates, and artifacts.
 
 ## Lifecycle
 
-Every delegation is stored at `.agora/delegations/<delegation-id>/DELEGATION.md` and moves through
-three states:
+Every delegation is stored at `.agora/delegations/<delegation-id>/DELEGATION.md`. Its primary path
+uses three states:
 
 1. `proposed`: an authorized parent participant defines the child work contract.
 2. `accepted`: an authorized child participant accepts the contract and Agora creates the child work.
@@ -15,6 +15,11 @@ three states:
 
 There is no implicit acceptance or completion. A delegation cannot skip a state, be accepted twice,
 or be collected twice.
+
+The parent may block a proposal or accepted contract and later resume it to the exact prior state.
+The child may reject a proposal. The parent may cancel a proposed, accepted, or blocked contract.
+Every such change requires a reason and writes a sequenced `status-changes/<id>/STATUS.md` record.
+See [Interruptions and cancellation](interruptions-and-cancellation.md) for the complete graph.
 
 ## Preconditions
 
@@ -112,6 +117,7 @@ re-enable other actions for a completed child.
 
 ```bash
 agora delegation show --delegation specialist-task
+agora delegation status-changes --delegation specialist-task
 agora start --id child-session \
   --actor specialist --swarm specialists --work child-slice
 ```
@@ -130,6 +136,10 @@ Custom methods opt into delegation by granting only the actions their roles need
 | `delegation.manage` | Propose work to a linked child actor on behalf of governance |
 | `delegation.accept` | Accept the proposal inside the child |
 | `delegation.collect` | Register a terminal child result in parent work |
+| `delegation.block` | Suspend the contract under parent governance |
+| `delegation.resume` | Restore a blocked contract to its prior state |
+| `delegation.reject` | Reject a proposal under child authority |
+| `delegation.cancel` | Close the contract under parent authority |
 
 Granting these actions never bypasses assignment, actor compatibility, lifecycle, depth, artifact,
 evidence, approval, or transition checks.

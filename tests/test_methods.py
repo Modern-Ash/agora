@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -40,4 +41,14 @@ def test_rejects_an_explicit_transition_without_an_authorized_role(tmp_path: Pat
     )
 
     with pytest.raises(ValueError, match="must define at least one role"):
+        load_method_contract(method)
+
+
+def test_rejects_an_invalid_role_manifest(tmp_path: Path) -> None:
+    method = tmp_path / "scrum"
+    shutil.copytree(template_root() / "methods" / "scrum", method)
+    role = method / "roles" / "developer.md"
+    role.write_text(role.read_text().replace('schema: "agora/role/v1"', 'schema: "invalid/role"'))
+
+    with pytest.raises(ValueError, match="Role schema must be agora/role/v1"):
         load_method_contract(method)
