@@ -96,9 +96,17 @@ agora method install --help
 ```
 
 The CLI should list `configure`, `init`, `upgrade`, `doctor`, `status`, `validate`, `lock`, `registry`,
-`pack`, `start`, `method`, `tool`, `delegation`, `actor`, `swarm`, `work`, `session`, `event`,
+`pack`, `trust`, `start`, `method`, `tool`, `delegation`, `actor`, `swarm`, `work`, `session`, `event`,
 `artifact`, `evidence`, and `approval`. These commands operate on files; no background process should
 be running.
+
+Registry installation accepts local directories or versioned remote `INDEX.md` sources. Remote
+archives always require SHA-256 verification and can require a trusted Ed25519 signature. See
+[Remote registry releases](remote-registries.md).
+Trusted registry public keys can be persisted, rotated, and revoked as described in
+[Registry trust stores](registry-trust.md).
+Installed remote registries can be checked and updated explicitly as described in
+[Registry updates](registry-updates.md).
 
 ## Configuration scopes
 
@@ -207,6 +215,7 @@ and version the files that define the shared contract:
 
 ```text
 .agora/project.md
+.agora/PACKS.lock.md
 .agora/constitution.md
 .agora/PROTOCOL.md
 .agora/STANDARDS.md
@@ -217,6 +226,22 @@ and version the files that define the shared contract:
 .agora/commands/
 .agora/sessions/
 ```
+
+`PACKS.lock.md` is the deterministic inventory of installed Method and Tool Pack trees. Managed pack
+mutations refresh it; use `agora pack lock` only after reviewing manual pack changes. See
+[Pack composition locks](pack-locks.md).
+
+Remove an installed pack through a read-only plan before applying the composition change:
+
+```bash
+agora pack remove --kind method --id retired-flow
+agora pack remove --kind method --id retired-flow --apply
+```
+
+Agora blocks installed dependents and durable runtime references. Optional dependency pruning must
+appear in both preview and apply commands as `--with-unused-dependencies`. Applied removals write
+`pack-removals/*/REMOVAL.md` and refresh the lock transactionally. See
+[Safe pack removal](pack-removal.md).
 
 Edit the constitution for engineering, security, compliance, and approval rules. Edit the protocol
 for handoffs, escalation, communication, and durable-record expectations. `STANDARDS.md` enables
@@ -286,6 +311,22 @@ Add `--launch` only when the selected environment should execute the external CL
 result but leaves authentication in that CLI's profile, environment, workload identity, or secret
 manager. Never use durable Tool Pack inputs for credentials. See the
 [Tool Pack reference](../reference/tool-packs.md) for the complete contract.
+
+New projects include the `work-management` pack with the stable executable name `workctl`. Point a
+reviewed wrapper at Jira, Linear, or an internal tracker while preserving the pack's provider-neutral
+capabilities. See [Work-management integrations](work-management-integrations.md) for the operation
+interface, existing-project installation command, role matrix, authentication boundary, and
+executable Python example.
+
+New projects also include the `ci-cd` pack with the stable executable name `cictl`. Its default role
+matrix permits technical roles to inspect and trigger pipelines but grants no cancellation or
+deployment authority. See [CI/CD integrations](ci-cd-integrations.md) for existing-project
+installation, provider mapping, guarded deployment approvals, and the executable Python example.
+
+The bundled `knowledge-base` pack uses `docsctl` as a stable adapter for Confluence, Notion, or an
+internal documentation platform. Draft access is distinct from publication and archival authority.
+See [Knowledge-base integrations](knowledge-base-integrations.md) for existing-project installation,
+content sensitivity, guarded publication, provider mapping, and the executable Python example.
 
 ## Customize actors and responsibility
 

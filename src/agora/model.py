@@ -76,9 +76,65 @@ class TransitionRule:
 
 
 @dataclass(frozen=True)
+class PackDependency:
+    kind: PackKind
+    id: str
+    version: str
+
+
+@dataclass(frozen=True)
+class PackSourceRecord:
+    kind: PackKind
+    id: str
+    version: str
+    registry: str
+    registry_scope: Literal["bundled", "user", "project"]
+    registry_version: str | None
+    registry_source: str | None
+    sha256: str
+    installed_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class PackUpdateHistoryRecord:
+    id: str
+    kind: PackKind
+    pack_id: str
+    from_version: str | None
+    to_version: str
+    from_sha256: str | None
+    to_sha256: str
+    registry: str
+    registry_scope: Literal["bundled", "user", "project"]
+    applied_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class PackLockEntry:
+    kind: PackKind
+    id: str
+    version: str
+    sha256: str
+    registry: str | None
+    source_sha256: str | None
+
+
+@dataclass(frozen=True)
+class PackLockRecord:
+    scope: Literal["user", "project"]
+    generated_at: str
+    packs: list[PackLockEntry]
+    path: str
+
+
+@dataclass(frozen=True)
 class MethodContract:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     required_roles: list[str]
     work_states: list[str]
     terminal_state: str
@@ -149,11 +205,15 @@ class DoctorCheck:
 class MethodPackRecord:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     scope: Literal["user", "project"]
     path: str
     required_roles: list[str]
     work_states: list[str]
     terminal_state: str
+    source: PackSourceRecord | None = None
+    updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -173,6 +233,8 @@ class ToolOperation:
 class ToolContract:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     category: str
     executable: str
     authentication_reference: str | None
@@ -183,11 +245,15 @@ class ToolContract:
 class ToolPackRecord:
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     category: str
     executable: str
     scope: Literal["user", "project"]
     path: str
     operations: list[str]
+    source: PackSourceRecord | None = None
+    updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -198,6 +264,84 @@ class RegistryRecord:
     path: str
     methods: list[str]
     tools: list[str]
+    version: str | None = None
+    source: str | None = None
+    checksum: str | None = None
+    signature_verified: bool = False
+
+
+@dataclass(frozen=True)
+class RegistryReleaseRecord:
+    registry: str
+    version: str
+    archive: str
+    sha256: str
+    signature: str | None = None
+    key_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RegistryIndexRecord:
+    id: str
+    name: str
+    source: str
+    releases: list[RegistryReleaseRecord]
+
+
+@dataclass(frozen=True)
+class RegistrySourceRecord:
+    registry: str
+    version: str
+    index: str
+    archive: str
+    sha256: str
+    signature_verified: bool
+    key_id: str | None
+    installed_at: str
+
+
+@dataclass(frozen=True)
+class RegistryTrustKeyRecord:
+    id: str
+    registry: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    status: Literal["active", "revoked"]
+    scope: Literal["user", "project"]
+    path: str
+    created_at: str
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
+    replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class RegistryUpdateRecord:
+    id: str
+    registry: str
+    from_version: str
+    to_version: str
+    from_sha256: str
+    to_sha256: str
+    index: str
+    signature_verified: bool
+    applied_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class RegistryUpdateResult:
+    registry: str
+    scope: Literal["user", "project"]
+    from_version: str
+    to_version: str
+    update_available: bool
+    applied: bool
+    index: str
+    checksum: str
+    signature_verified: bool
+    record_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -205,10 +349,67 @@ class CatalogPackRecord:
     kind: PackKind
     id: str
     name: str
+    version: str
+    dependencies: list[PackDependency]
     registry: str
     registry_scope: Literal["bundled", "user", "project"]
     path: str
     installed: bool
+
+
+@dataclass(frozen=True)
+class PackUpdateStep:
+    kind: PackKind
+    id: str
+    from_version: str | None
+    to_version: str
+    registry: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class PackUpdateResult:
+    kind: PackKind
+    id: str
+    scope: Literal["user", "project"]
+    from_version: str
+    to_version: str
+    update_available: bool
+    applied: bool
+    modified: bool
+    packs: list[PackUpdateStep]
+    history_paths: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PackRemovalStep:
+    kind: PackKind
+    id: str
+    version: str
+    sha256: str
+    registry: str | None
+    reason: Literal["requested", "unused-dependency"]
+
+
+@dataclass(frozen=True)
+class PackRemovalRecord:
+    id: str
+    scope: Literal["user", "project"]
+    requested_kind: PackKind
+    requested_id: str
+    removed_at: str
+    packs: list[PackRemovalStep]
+    path: str
+
+
+@dataclass(frozen=True)
+class PackRemovalResult:
+    kind: PackKind
+    id: str
+    scope: Literal["user", "project"]
+    applied: bool
+    packs: list[PackRemovalStep]
+    record_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +605,37 @@ class InstallRegistryInput:
     source: str
     scope: Literal["user", "project"]
     force: bool = False
+    version: str | None = None
+    public_key: str | None = None
+    require_signature: bool = False
+    allow_insecure_http: bool = False
+
+
+@dataclass(frozen=True)
+class AddRegistryTrustKeyInput:
+    id: str
+    registry_id: str
+    public_key: str
+    scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class RevokeRegistryTrustKeyInput:
+    id: str
+    scope: Literal["user", "project"]
+    reason: str
+    replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class UpdateRegistryInput:
+    id: str
+    scope: Literal["user", "project"] | None = None
+    version: str | None = None
+    apply: bool = False
+    public_key: str | None = None
+    require_signature: bool = False
+    allow_insecure_http: bool = False
 
 
 @dataclass(frozen=True)
@@ -413,6 +645,30 @@ class InstallCatalogPackInput:
     scope: Literal["user", "project"]
     registry_id: str | None = None
     force: bool = False
+
+
+@dataclass(frozen=True)
+class UpdateCatalogPackInput:
+    kind: PackKind
+    pack_id: str
+    scope: Literal["user", "project"] | None = None
+    registry_id: str | None = None
+    apply: bool = False
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class RefreshPackLockInput:
+    scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class RemovePackInput:
+    kind: PackKind
+    pack_id: str
+    scope: Literal["user", "project"] | None = None
+    apply: bool = False
+    with_unused_dependencies: bool = False
 
 
 @dataclass(frozen=True)

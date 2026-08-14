@@ -13,8 +13,28 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   and configure bounded contention waits.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
+- [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
+  internal trackers through one provider-neutral, role-governed operation contract.
+- [CI/CD integrations](guides/ci-cd-integrations.md): inspect and trigger pipelines, restrict
+  cancellation, and guard deployments with explicit role approval.
+- [Knowledge-base integrations](guides/knowledge-base-integrations.md): connect Confluence, Notion,
+  or internal documentation while separating drafts, publication, and archival authority.
 - [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
   Tool Packs, and select provenance with deterministic scope precedence.
+- [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
+  resolve catalog dependencies, and reject broken or cyclic compositions.
+- [Pack updates](guides/pack-updates.md): persist catalog provenance, preview dependency-aware
+  upgrades, and protect local pack amendments.
+- [Pack composition locks](guides/pack-locks.md): inventory installed trees and validate durable,
+  continuous per-pack update histories.
+- [Pack removal](guides/pack-removal.md): preview safe removals, protect dependents and durable
+  references, and explicitly prune unused dependency closures.
+- [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
+  checksum-pinned and Ed25519-signed registry snapshots.
+- [Registry trust stores](guides/registry-trust.md): approve, resolve, rotate, and revoke registry
+  signing keys through local Markdown and Git.
+- [Registry updates](guides/registry-updates.md): preview and transactionally apply authenticated
+  releases while preserving provenance and update history.
 - [Getting started](getting-started.md): install Agora, initialize a project, form a swarm, and
   complete governed work.
 - [LLM environments](guides/llm-environments.md): configure project and actor runtimes, prepare
@@ -50,6 +70,12 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   or Kanban.
 - [Governed tool integration](../samples/tool-integration/README.md): invoke Git through a
   role-authorized Tool Pack and inspect its durable result.
+- [Governed work management](../samples/work-management/README.md): execute a provider-neutral issue
+  tracker contract through a local Python adapter and reject unauthorized transitions.
+- [Governed CI/CD](../samples/ci-cd/README.md): trigger a pipeline and require explicit capability
+  plus Product Owner approval before deployment.
+- [Governed knowledge base](../samples/knowledge-base/README.md): draft external documentation,
+  require approval before publication, and reject unauthorized archival.
 - [Governed handoffs](../samples/handoffs/README.md): preserve one work item while its Developer role
   moves from a human to an AI agent and a swarm.
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child
@@ -66,6 +92,12 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   continue safely after the operating-system lock is released.
 - [Pack registry](../samples/pack-registry/README.md): discover and install a custom lifecycle from a
   user-scoped Markdown catalog.
+- [Pack dependencies](../samples/pack-dependencies/README.md): install a Method Pack and recursively
+  resolve its compatible Tool Pack dependency.
+- [Pack removal](../samples/pack-removal/README.md): preview and atomically apply a dependency-aware
+  composition removal with durable audit evidence.
+- [Remote registry](../samples/remote-registry/README.md): verify a signed, versioned registry release
+  and persist its provenance.
 
 ## MVP boundaries
 

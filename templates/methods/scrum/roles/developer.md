@@ -4,7 +4,7 @@ id: "developer"
 required-capabilities: ["implementation"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm"]
 allowed-actions: ["work.transition", "work.block", "work.resume", "work.delegate", "delegation.collect", "artifact.add", "evidence.add", "handoff.create"]
-allowed-tool-capabilities: ["repository.read", "repository.write", "ci.read", "ci.run"]
+allowed-tool-capabilities: ["repository.read", "repository.write", "issue.read", "ci.read", "ci.run", "docs.read", "docs.write"]
 ---
 
 # Developer

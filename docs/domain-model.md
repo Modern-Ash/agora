@@ -10,6 +10,11 @@ custom pack may implement the same Markdown contract.
 No Method Pack is privileged by the core. A project can model a standard methodology, an internal
 software delivery process, an operational runbook, or a purpose-built hybrid lifecycle.
 
+Every Method and Tool Pack has a numeric semantic version and may depend on version ranges of other
+packs. A **Pack Dependency** names a `method` or `tool`, its id, and a compatibility constraint.
+Catalog resolution selects dependencies before their consumer; project validation treats all
+installed packs as one composition and rejects missing, incompatible, or cyclic relationships.
+
 ## Actor, role, and assignment
 
 An **Actor** has an identity, kind, and capabilities. Kinds include human, AI agent, swarm, service,
@@ -102,6 +107,18 @@ A **Tool Run** binds the pack and operation to an assigned actor, swarm, optiona
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
 and command metadata, while `RESULT.md` captures status, output, and exit code.
 
+The bundled **Work Management Tool Pack** separates `issue.read`, `issue.write`, and
+`issue.transition` authority behind a stable `workctl` interface. External ticket state and Agora
+work state remain independent records; synchronization requires explicit governed operations.
+
+The bundled **CI/CD Tool Pack** separates routine inspection and execution from destructive
+cancellation and deployment creation. A project may combine role capability with an operation-level
+approval requirement; both must pass before a guarded deployment is prepared.
+
+The bundled **Knowledge Base Tool Pack** grants reading, drafting, publication, and archival as four
+separate authorities. Remote publication can become an artifact or evidence reference, but it never
+replaces Agora's local work and governance state.
+
 ## Standard
 
 A standard is a versioned, provider-neutral rule enabled by `.agora/STANDARDS.md`. It applies across
@@ -119,6 +136,39 @@ registry after installation.
 When pack ids collide, project registry provenance precedes user provenance, which precedes the
 bundled distribution. Explicit registry selection overrides inference while preserving pack
 validation and destination-scope overwrite rules.
+
+Dependencies may resolve across visible registries, but installed copies remain bound to their
+target scope. Replacing one pack is rejected when the prospective version would break another
+installed pack.
+
+A **Pack Source** is installer-owned Markdown attached to a catalog-installed pack. It records the
+pack and registry versions, registry scope and source, published tree checksum, and installation
+time. A **Pack Update** compares that immutable source evidence with the current installed tree and
+visible catalog, produces a dependency-first preview, and changes files only when application is
+explicit. Local amendments are visible divergence rather than silent loss.
+
+A **Pack Update History** is a per-pack transition from the previous installed version and actual
+checksum to a selected catalog version and published checksum. A **Pack Composition Lock** is the
+sorted projection of every Method and Tool Pack in one scope, including its actual checksum and
+optional source identity. Histories explain change; the lock identifies current state.
+
+A **Pack Removal** is an immutable scope-level record of an applied composition subtraction. It
+identifies the requested pack, every explicitly pruned unused dependency, their last versions,
+actual checksums, optional registries, and the removal timestamp. The pack directories represent
+current state; the removal record and Git preserve why they disappeared.
+
+A remote registry index publishes one or more semantic releases. Each release identifies an archive,
+mandatory SHA-256, and optional Ed25519 signature plus key id. After verification Agora installs the
+same local snapshot contract and adds a generated source record containing immutable provenance.
+
+A registry trust key authorizes one Ed25519 public key id for one registry. Its user or project scope,
+fingerprint, active or revoked status, and optional replacement are durable Markdown. Rotation adds a
+new identity before revoking the previous identity; it never overwrites key history.
+
+A registry update is a forward-only transition between immutable semantic releases. Preview state is
+ephemeral; each applied transition persists its previous and target versions, checksums, index,
+signature result, and timestamp under the installed registry. Updating the catalog does not update a
+Method Pack or Tool Pack already copied into another scope.
 
 ## Environment
 

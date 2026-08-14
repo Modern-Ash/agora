@@ -58,8 +58,8 @@ The runner continues through independent failures and returns status `1` if any 
 6. Source and wheel distribution builds.
 
 The sample matrix covers human and AI actors, recursive swarms, delegation, handoffs, interruptions,
-custom methods, tools, operational queries, and Codex, Claude, and generic adapters. It prepares
-contexts but does not launch an LLM or make provider API requests.
+signed remote registry distribution, custom methods, tools, operational queries, and Codex, Claude,
+and generic adapters. It prepares contexts but does not launch an LLM or make provider API requests.
 
 Use quiet output in CI:
 

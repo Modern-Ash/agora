@@ -11,8 +11,27 @@
   bodies and footers separated by a blank line.
 - Keep environment-specific output in integration adapters.
 - Keep Tool Pack commands structured, shell-free, and free of credential inputs.
-- Keep registry sources Markdown-first and local; validate every contained pack before copying a
-  registry snapshot and preserve project-over-user-over-bundled precedence.
+- Keep ecosystem Tool Pack capabilities provider-neutral; place Jira, CI/CD, documentation, and
+  cloud translation in reviewed external adapters rather than the kernel.
+- Keep CI cancellation and deployment capabilities opt-in; combine production authority with
+  explicit Method Pack policy, evidence, and operation approval requirements.
+- Keep documentation publication and archival opt-in; treat remote pages as external state and
+  persist their identifiers as Agora artifacts or evidence when lifecycle gates require them.
+- Keep registry indexes and snapshots Markdown-first; verify remote releases before extraction,
+  validate every contained pack before copying, persist provenance, and preserve
+  project-over-user-over-bundled precedence.
+- Keep registry trust public-only and Markdown-first; preserve project-over-user key precedence and
+  never allow explicit key input to bypass a persisted revocation.
+- Keep registry updates preview-first, forward-only, authenticated, transactional, and historically
+  auditable; never refresh installed packs implicitly.
+- Keep pack dependencies versioned, cross-kind, scope-local, cycle-free, and resolved before writes;
+  never replace a dependency when that would break an installed consumer.
+- Keep catalog pack provenance installer-owned and checksum-pinned; keep pack updates preview-first,
+  forward-only, composition-safe, and protective of local amendments.
+- Keep pack update histories continuous and pack composition locks deterministic; refresh locks only
+  after successful managed mutations or an explicit reviewed lock command.
+- Keep pack removal preview-first and rollback-protected; block reverse dependents and durable
+  references, require explicit unused-dependency pruning, and preserve a scope-level audit record.
 - Treat Scrum and Kanban as bundled examples, never as privileged core workflows.
 - Preserve recursive swarm cycle checks and configured delegation depth.
 - Preserve explicit child-work acceptance and reference-based result collection across swarms.

@@ -17,6 +17,51 @@ def test_loads_a_provider_neutral_tool_pack() -> None:
     assert contract.operations["commit"].input_rules == {"message": "conventional-commits/v1.0.0"}
 
 
+def test_loads_the_bundled_work_management_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "work-management")
+
+    assert contract.id == "work-management"
+    assert contract.executable == "workctl"
+    assert list(contract.operations) == ["comment", "create", "search", "transition", "view"]
+    assert contract.operations["search"].capability == "issue.read"
+    assert contract.operations["create"].capability == "issue.write"
+    assert contract.operations["transition"].capability == "issue.transition"
+    assert contract.operations["transition"].risk == "write"
+
+
+def test_loads_the_bundled_ci_cd_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "ci-cd")
+
+    assert contract.id == "ci-cd"
+    assert contract.executable == "cictl"
+    assert list(contract.operations) == [
+        "cancel-run",
+        "create-deployment",
+        "list-runs",
+        "trigger",
+        "view-deployment",
+        "view-run",
+    ]
+    assert contract.operations["list-runs"].capability == "ci.read"
+    assert contract.operations["trigger"].capability == "ci.run"
+    assert contract.operations["cancel-run"].capability == "ci.cancel"
+    assert contract.operations["cancel-run"].risk == "destructive"
+    assert contract.operations["create-deployment"].capability == "deployment.create"
+
+
+def test_loads_the_bundled_knowledge_base_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "knowledge-base")
+
+    assert contract.id == "knowledge-base"
+    assert contract.executable == "docsctl"
+    assert list(contract.operations) == ["archive", "create", "publish", "search", "update", "view"]
+    assert contract.operations["search"].capability == "docs.read"
+    assert contract.operations["create"].capability == "docs.write"
+    assert contract.operations["publish"].capability == "docs.publish"
+    assert contract.operations["archive"].capability == "docs.archive"
+    assert contract.operations["archive"].risk == "destructive"
+
+
 @pytest.mark.parametrize(
     "message",
     [

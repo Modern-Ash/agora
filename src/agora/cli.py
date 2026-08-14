@@ -12,6 +12,7 @@ from agora.model import (
     AddApprovalInput,
     AddArtifactInput,
     AddEvidenceInput,
+    AddRegistryTrustKeyInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
@@ -27,9 +28,14 @@ from agora.model import (
     InstallRegistryInput,
     InstallToolInput,
     InvokeToolInput,
+    RefreshPackLockInput,
+    RemovePackInput,
+    RevokeRegistryTrustKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
+    UpdateCatalogPackInput,
+    UpdateRegistryInput,
     UpgradeInput,
     ValidationReport,
     WorkActorInput,
@@ -110,15 +116,53 @@ def _build_parser() -> argparse.ArgumentParser:
     upgrade.add_argument("--id", help="Stable id for the durable upgrade record")
 
     registry = commands.add_parser(
-        "registry", help="Manage local Markdown pack registries"
+        "registry", help="Manage local and remote Markdown pack registries"
     ).add_subparsers(dest="registry_command", required=True)
     registry_install = registry.add_parser("install", help="Install a registry snapshot")
     registry_install.add_argument("--source", required=True)
     registry_install.add_argument("--scope", choices=("user", "project"), default="user")
+    registry_install.add_argument("--version", help="Remote release version (default: latest)")
+    registry_install.add_argument("--public-key", help="Trusted Ed25519 public key in PEM format")
+    registry_install.add_argument(
+        "--require-signature",
+        action="store_true",
+        help="Reject a remote release unless its Ed25519 signature verifies",
+    )
+    registry_install.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        help="Permit HTTP for an explicitly trusted development registry",
+    )
     registry_install.add_argument("--force", action="store_true")
+    registry_update = registry.add_parser(
+        "update", help="Check or apply a verified registry release update"
+    )
+    registry_update.add_argument("--id", required=True)
+    registry_update.add_argument("--scope", choices=("user", "project"))
+    registry_update.add_argument("--version", help="Target release version (default: latest)")
+    registry_update.add_argument("--public-key", help="Explicit trusted Ed25519 public key")
+    registry_update.add_argument("--require-signature", action="store_true")
+    registry_update.add_argument("--allow-insecure-http", action="store_true")
+    registry_update.add_argument("--apply", action="store_true")
     registry.add_parser("list", help="List bundled and installed registries")
 
-    pack = commands.add_parser("pack", help="Discover and install catalog packs").add_subparsers(
+    trust = commands.add_parser(
+        "trust", help="Manage trusted registry release keys"
+    ).add_subparsers(dest="trust_command", required=True)
+    trust_add = trust.add_parser("add", help="Trust an Ed25519 registry release key")
+    trust_add.add_argument("--id", required=True)
+    trust_add.add_argument("--registry", required=True)
+    trust_add.add_argument("--public-key", required=True)
+    trust_add.add_argument("--scope", choices=("user", "project"), default="user")
+    trust_list = trust.add_parser("list", help="List active and revoked registry keys")
+    trust_list.add_argument("--registry")
+    trust_revoke = trust.add_parser("revoke", help="Revoke a trusted registry release key")
+    trust_revoke.add_argument("--id", required=True)
+    trust_revoke.add_argument("--scope", choices=("user", "project"), default="user")
+    trust_revoke.add_argument("--reason", required=True)
+    trust_revoke.add_argument("--replaced-by")
+
+    pack = commands.add_parser("pack", help="Manage installed and catalog packs").add_subparsers(
         dest="pack_command", required=True
     )
     pack_search = pack.add_parser("search", help="Search registered Method and Tool Packs")
@@ -131,6 +175,25 @@ def _build_parser() -> argparse.ArgumentParser:
     pack_install.add_argument("--registry")
     pack_install.add_argument("--scope", choices=("user", "project"), default="project")
     pack_install.add_argument("--force", action="store_true")
+    pack_update = pack.add_parser("update", help="Check or apply a catalog pack update")
+    pack_update.add_argument("--kind", choices=("method", "tool"), required=True)
+    pack_update.add_argument("--id", required=True)
+    pack_update.add_argument("--registry")
+    pack_update.add_argument("--scope", choices=("user", "project"))
+    pack_update.add_argument("--apply", action="store_true")
+    pack_update.add_argument("--force", action="store_true")
+    pack_lock = pack.add_parser("lock", help="Refresh the installed pack composition lock")
+    pack_lock.add_argument("--scope", choices=("user", "project"), default="project")
+    pack_remove = pack.add_parser("remove", help="Preview or apply a safe pack removal")
+    pack_remove.add_argument("--kind", choices=("method", "tool"), required=True)
+    pack_remove.add_argument("--id", required=True)
+    pack_remove.add_argument("--scope", choices=("user", "project"))
+    pack_remove.add_argument(
+        "--with-unused-dependencies",
+        action="store_true",
+        help="Also remove dependencies unused by the remaining pack composition",
+    )
+    pack_remove.add_argument("--apply", action="store_true")
 
     start = commands.add_parser("start", help="Prepare or launch a governed actor session")
     start.add_argument("--id")
@@ -437,10 +500,50 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.upgrade(UpgradeInput(apply=args.apply, id=args.id))
     if args.command == "registry" and args.registry_command == "install":
         return workspace.install_registry(
-            InstallRegistryInput(source=args.source, scope=args.scope, force=args.force)
+            InstallRegistryInput(
+                source=args.source,
+                scope=args.scope,
+                force=args.force,
+                version=args.version,
+                public_key=args.public_key,
+                require_signature=args.require_signature,
+                allow_insecure_http=args.allow_insecure_http,
+            )
+        )
+    if args.command == "registry" and args.registry_command == "update":
+        return workspace.update_registry(
+            UpdateRegistryInput(
+                id=args.id,
+                scope=args.scope,
+                version=args.version,
+                apply=args.apply,
+                public_key=args.public_key,
+                require_signature=args.require_signature,
+                allow_insecure_http=args.allow_insecure_http,
+            )
         )
     if args.command == "registry" and args.registry_command == "list":
         return workspace.list_registries()
+    if args.command == "trust" and args.trust_command == "add":
+        return workspace.add_registry_trust_key(
+            AddRegistryTrustKeyInput(
+                id=args.id,
+                registry_id=args.registry,
+                public_key=args.public_key,
+                scope=args.scope,
+            )
+        )
+    if args.command == "trust" and args.trust_command == "list":
+        return workspace.list_registry_trust_keys(args.registry)
+    if args.command == "trust" and args.trust_command == "revoke":
+        return workspace.revoke_registry_trust_key(
+            RevokeRegistryTrustKeyInput(
+                id=args.id,
+                scope=args.scope,
+                reason=args.reason,
+                replaced_by=args.replaced_by,
+            )
+        )
     if args.command == "pack" and args.pack_command == "search":
         return workspace.search_catalog(args.kind, args.query, args.registry)
     if args.command == "pack" and args.pack_command == "install":
@@ -451,6 +554,29 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 registry_id=args.registry,
                 scope=args.scope,
                 force=args.force,
+            )
+        )
+    if args.command == "pack" and args.pack_command == "update":
+        return workspace.update_catalog_pack(
+            UpdateCatalogPackInput(
+                kind=args.kind,
+                pack_id=args.id,
+                registry_id=args.registry,
+                scope=args.scope,
+                apply=args.apply,
+                force=args.force,
+            )
+        )
+    if args.command == "pack" and args.pack_command == "lock":
+        return workspace.refresh_pack_lock(RefreshPackLockInput(scope=args.scope))
+    if args.command == "pack" and args.pack_command == "remove":
+        return workspace.remove_pack(
+            RemovePackInput(
+                kind=args.kind,
+                pack_id=args.id,
+                scope=args.scope,
+                apply=args.apply,
+                with_unused_dependencies=args.with_unused_dependencies,
             )
         )
     if args.command == "start":

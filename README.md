@@ -36,6 +36,8 @@ Agora distribution
 
 <project>/.agora/
   project.md            Effective project configuration
+  PACKS.lock.md         Exact installed Method and Tool Pack composition
+  pack-removals/        Auditable records for applied composition removals
   constitution.md       Local principles and restrictions
   PROTOCOL.md           Shared collaboration protocol
   STANDARDS.md          Enforced cross-actor engineering standards
@@ -111,6 +113,10 @@ agora validate
 Each applied migration is recorded under `.agora/upgrades` with backups of every updated file. See
 the [project upgrade guide](docs/guides/project-upgrades.md) for compatibility and recovery rules.
 
+Pack lifecycle changes are also preview-first. Removing a pack checks reverse dependencies and
+durable project references before deleting files, updates `PACKS.lock.md`, and writes an auditable
+record under `.agora/pack-removals`. See the [pack removal guide](docs/guides/pack-removal.md).
+
 ## Customize the lifecycle
 
 A Method Pack is a Markdown contract for a work lifecycle. It defines role requirements, allowed
@@ -135,18 +141,42 @@ agora swarm create --id delivery --objective "Deliver the objective" --method my
 See [the custom lifecycle sample](samples/custom-lifecycle/README.md) for a pack that does not derive
 from Scrum or Kanban.
 
-Discover bundled and locally registered packs, or install a reviewed registry snapshot:
+Discover bundled and registered packs, or install a reviewed local or remote registry snapshot:
 
 ```bash
 agora registry install --source ./team-registry --scope user
+agora trust add --id team-release --registry team-catalog \
+  --public-key ./team-release.pem --scope user
+agora registry install --source https://catalog.example.com/INDEX.md \
+  --version 1.0.0 --require-signature --scope user
+agora registry update --id team-catalog
+agora registry update --id team-catalog --apply
 agora registry list
 agora pack search --kind method --query release
 agora pack install --kind method --id release-flow \
   --registry team-catalog --scope project
+agora pack update --kind method --id release-flow
+agora pack update --kind method --id release-flow --apply
 ```
 
 Project registries override user registries, which override the bundled catalog when the same pack id
 appears more than once. See the [pack registry guide](docs/guides/pack-registries.md).
+Pack manifests declare versions and optional Method or Tool dependencies. Catalog installation
+resolves compatible dependencies before copying and rejects broken or cyclic compositions. See the
+[pack dependency guide](docs/guides/pack-dependencies.md).
+Each catalog-installed pack persists its registry and checksum in `SOURCE.md`. Explicit
+`agora pack update` previews dependency-aware changes and applies them only with `--apply`; see the
+[pack update guide](docs/guides/pack-updates.md).
+`PACKS.lock.md` inventories the exact installed composition, while per-pack `UPDATE.md` files retain
+each applied transition; see the [pack lock guide](docs/guides/pack-locks.md).
+Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
+provenance beside the installed snapshot. See the
+[remote registry guide](docs/guides/remote-registries.md).
+Trusted public keys, rotations, and revocations can be persisted at user or project scope. See the
+[registry trust guide](docs/guides/registry-trust.md).
+Registry updates are preview-only unless `--apply` is passed, preserve provenance and history, and
+never update installed packs implicitly. See the
+[registry update guide](docs/guides/registry-updates.md).
 
 ## Actors and swarms
 
@@ -255,7 +285,8 @@ observability, or communication CLIs. An operation declares structured arguments
 risk, a provider-neutral capability, and optional approval policy. Method Pack roles grant those
 capabilities explicitly.
 
-Agora includes a Git-backed `repository` pack:
+Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`, and
+`knowledge-base` packs:
 
 ```bash
 agora tool show --tool repository
@@ -268,12 +299,41 @@ agora tool invoke --id payment-commit \
   --tool repository --operation commit \
   --actor delivery-swarm --swarm payments \
   --input message="feat(payments): add governed payment API" --launch
+
+agora tool invoke --id inspect-payment-ticket \
+  --tool work-management --operation view \
+  --actor delivery-swarm --swarm payments \
+  --input issue=PAY-42 --launch
+
+agora tool invoke --id verify-payments \
+  --tool ci-cd --operation trigger \
+  --actor delivery-swarm --swarm payments \
+  --input pipeline=verify --input ref=main \
+  --input parameters=suite=payments --launch
+
+agora tool invoke --id inspect-payment-guide \
+  --tool knowledge-base --operation view \
+  --actor delivery-swarm --swarm payments \
+  --input document=DOC-42 --launch
 ```
 
 The executable runs without a shell. Agora persists `RUN.md`, captures output and exit status in
 `RESULT.md`, and stores no credentials. Omitting `--launch` creates a portable invocation for an IDE,
 CI worker, or cloud executor. The commit operation validates Conventional Commits 1.0.0 before a run
 record or Git commit is created.
+
+The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
+tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
+Method Pack. See the
+[work-management integration guide](docs/guides/work-management-integrations.md).
+
+The `ci-cd` pack defines a stable `cictl` interface for GitHub Actions, GitLab CI/CD, Jenkins, or an
+internal platform. Routine pipeline access is separate from cancellation and deployment authority.
+See the [CI/CD integration guide](docs/guides/ci-cd-integrations.md).
+
+The `knowledge-base` pack defines a stable `docsctl` interface for Confluence, Notion, and internal
+documentation. Draft access remains separate from publication and destructive archival. See the
+[knowledge-base integration guide](docs/guides/knowledge-base-integrations.md).
 
 ## Governed work
 
@@ -421,6 +481,8 @@ uv run python samples/interruptions/run.py
 uv run python samples/project-upgrade/run.py
 uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
+uv run python samples/pack-dependencies/run.py
+uv run python samples/remote-registry/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -442,7 +504,11 @@ workspace directly from its Markdown records. The
 resumption, rejection, and cancellation.
 The [project upgrade sample](samples/project-upgrade/README.md) applies a backed-up protocol
 migration, while the [concurrent writers sample](samples/concurrent-writes/README.md) demonstrates
-local process contention and recovery.
+local process contention and recovery. The
+[pack dependency sample](samples/pack-dependencies/README.md) installs a Method Pack and resolves its
+compatible Tool Pack before copying either catalog selection. The
+[remote registry sample](samples/remote-registry/README.md) signs, verifies, installs, and validates a
+versioned registry snapshot without persisting a private key.
 
 ## Documentation
 
@@ -462,6 +528,12 @@ local process contention and recovery.
 - [Concurrent writers](docs/guides/concurrent-writers.md)
 - [Conventional Commits](docs/guides/conventional-commits.md)
 - [Pack registries](docs/guides/pack-registries.md)
+- [Pack dependencies](docs/guides/pack-dependencies.md)
+- [Pack updates](docs/guides/pack-updates.md)
+- [Pack composition locks](docs/guides/pack-locks.md)
+- [Remote registry releases](docs/guides/remote-registries.md)
+- [Registry trust stores](docs/guides/registry-trust.md)
+- [Registry updates](docs/guides/registry-updates.md)
 - [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
 - [ADR 0001](docs/decisions/0001-initial-architecture.md)
 - [Contributing](CONTRIBUTING.md)
@@ -470,10 +542,14 @@ local process contention and recovery.
 
 - Scrum and Kanban are starter Method Packs, not privileged core workflows or exhaustive methodology
   implementations.
-- Method and Tool Packs can be discovered through bundled, user, and project registry snapshots.
-  Remote indexes, signed releases, and dependency resolution are not implemented yet.
-- The Tool Pack kernel and Git reference pack are implemented; vendor packs for Jira, CI/CD,
-  Confluence, and cloud platforms are not bundled yet.
+- Method and Tool Packs can be discovered through bundled, user, project, and verified remote
+  registry snapshots. Local and project trust stores, rotation, and revocation are implemented;
+  explicit update checks, transactional application, and dependency-aware installation are
+  implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
+  Organization trust synchronization, transparency, automatic background pack updates, and
+  notifications are not.
+- The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD, and
+  knowledge-base packs are implemented; vendor distributions and cloud packs remain future work.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

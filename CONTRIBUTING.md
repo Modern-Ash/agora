@@ -29,6 +29,7 @@ uv run python samples/interruptions/run.py
 uv run python samples/project-upgrade/run.py
 uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
+uv run python samples/remote-registry/run.py
 ```
 
 ## Rules
@@ -47,6 +48,7 @@ uv run python samples/pack-registry/run.py
 - Update templates and documentation whenever the installed protocol changes.
 - Keep `scripts/verify_all.py` aligned with every executable sample and distribution check.
 - Never persist raw credentials; store only external authentication references.
+- Never persist registry private signing keys; trust records contain public keys only.
 - Treat humans, AI agents, services, automations, and swarms as compatible actor forms governed by
   role contracts.
 - Use Conventional Commits 1.0.0 for every commit. Use `feat` for features, `fix` for fixes, and `!`

@@ -30,8 +30,14 @@ Tool Packs and structured external operations. `src/agora/markdown.py` implement
 JSON-compatible front matter used by the protocol. `src/agora/upgrades.py` plans ordered project
 migrations, preserves customization boundaries, backs up changed files, and writes durable upgrade
 manifests.
-`src/agora/registries.py` validates local registry snapshots and discovers Method and Tool Packs
-without introducing a network package manager.
+`src/agora/packs.py` validates shared pack versions, dependency declarations, and compatibility
+ranges.
+`src/agora/registries.py` validates installed registry snapshots and discovers Method and Tool Packs.
+`src/agora/registry_distribution.py` resolves remote Markdown indexes, selects semantic releases,
+enforces transport and archive limits, verifies SHA-256 and optional Ed25519 signatures, and extracts
+snapshots into temporary directories before the local registry path accepts them.
+`src/agora/trust.py` validates Ed25519 public-key records and durable revocation state without
+handling private signing material.
 
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
@@ -65,6 +71,38 @@ Registries are immutable-by-review catalog snapshots under user or project scope
 every matching provenance visible; installation resolves project before user before bundled unless a
 registry id is selected explicitly. Pack installation still copies through the ordinary Method or
 Tool Pack validation path.
+
+A remote registry index is a distribution mechanism, not runtime state. Agora verifies its selected
+archive and persists a complete local snapshot plus `SOURCE.md`. Governed work never depends on the
+index remaining available.
+
+Registry trust uses the same scope rule: project keys precede user keys. Verification binds a key id
+to one registry id, and a matching revocation blocks both automatic resolution and an explicit PEM.
+
+Registry updates are read-only plans unless application is explicit. Update staging carries forward
+installer-owned history, adds the next transition record, validates the complete candidate, and only
+then replaces the installed snapshot. Registry updates never mutate separately installed packs.
+
+Method and Tool Pack manifests declare semantic versions and optional cross-kind dependencies.
+Catalog installation resolves the complete dependency graph using registry precedence, checks the
+prospective target-scope composition, and installs dependencies before their consumer. Direct source
+installation requires dependencies to be present already. Project validation repeats composition
+checks so manual filesystem edits cannot leave missing, incompatible, or cyclic dependencies hidden.
+
+Each catalog-installed pack carries installer-owned `SOURCE.md` provenance with its registry,
+published version, and deterministic tree checksum. Pack updates are preview-only until `--apply`,
+reject downgrades and mutable versions, re-resolve the complete composition, and stage clean atomic
+pack replacements. Local amendments remain valid but require explicit `--force` before replacement.
+
+`PACKS.lock.md` is the deterministic current-state inventory for user or project scope. Managed pack
+mutations regenerate it; validation compares it with installed trees, while `agora pack lock` accepts
+a reviewed manual composition. Catalog updates preserve and extend per-pack `updates/*/UPDATE.md`
+chains, then swap the dependency plan as one rollback-protected operation before refreshing the lock.
+
+Pack removal uses the same preview/apply boundary. It rejects installed reverse dependents and
+durable runtime references, optionally derives unused packs only from the requested pack's
+dependency closure, and stages removed trees until both `REMOVAL.md` and `PACKS.lock.md` are safely
+published. A failed multi-pack removal restores the previous trees and lock.
 
 ### Git and filesystem
 
@@ -108,8 +146,12 @@ optional approval role. Role policies determine which operations may be invoked.
 captured results remain in `.agora/tool-runs`; credentials are never copied into Git.
 
 The kernel does not use a shell or vendor SDK. It performs exact argument substitution and delegates
-authentication to the executable environment. The bundled Git pack is a reference implementation;
-vendor-specific packs remain independently installable Markdown.
+authentication to the executable environment. The bundled Git pack is a concrete implementation;
+the bundled work-management pack is a stable adapter interface whose `workctl` executable can wrap
+Jira, Linear, or an internal provider. The bundled CI/CD pack applies the same pattern through
+`cictl`, with separate read, run, cancel, and deployment capabilities. Vendor-specific packs remain
+independently installable Markdown. The bundled knowledge-base pack similarly separates reading and
+drafting from publication and archival through a stable `docsctl` adapter boundary.
 
 ## Recursive delegation
 

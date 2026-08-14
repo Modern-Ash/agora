@@ -35,6 +35,8 @@ participants.
 schema: "agora/method/v1"
 id: "release-flow"
 name: "Release Flow"
+version: "1.0.0"
+dependencies: [{"kind":"tool","id":"repository","version":">=1.0.0,<2.0.0"}]
 required-roles: ["owner", "maker", "validator"]
 work-states: ["proposed", "active", "review", "released"]
 terminal-state: "released"
@@ -51,6 +53,8 @@ Describe the lifecycle, its intent, and its completion expectations here.
 | `schema` | Must be `agora/method/v1` |
 | `id` | Lowercase slug matching `[a-z][a-z0-9-]*` |
 | `name` | Non-empty human-readable name |
+| `version` | Numeric `MAJOR.MINOR.PATCH`; omitted legacy versions resolve as `0.0.0` |
+| `dependencies` | Optional array of version-constrained Method or Tool Pack references |
 | `required-roles` | Non-empty array of role ids |
 | `work-states` | Non-empty array of unique state ids |
 | `terminal-state` | Must identify one of the declared states |
@@ -59,6 +63,10 @@ Describe the lifecycle, its intent, and its completion expectations here.
 Every declared state must be reachable from the first state. The terminal state cannot have outgoing
 transitions. For a legacy pack without `transitions/`, Agora derives edges between adjacent states;
 in that case the terminal state must remain the final item.
+
+Catalog installation resolves dependencies before copying the pack. Direct source installation
+requires them to exist already. See [Pack dependencies](../guides/pack-dependencies.md) for range,
+scope, cycle, and replacement rules.
 
 ## Transition graph
 
@@ -208,7 +216,7 @@ agora swarm create \
 
 The pack is copied to `.agora/methods/release-flow` and belongs to the project repository.
 
-Method Packs may also be discovered from a reviewed local catalog:
+Method Packs may also be discovered from a reviewed local or remotely verified catalog:
 
 ```bash
 agora pack search --kind method --query release
@@ -216,7 +224,10 @@ agora pack install --kind method --id release-flow \
   --registry team-catalog --scope project
 ```
 
-See [Pack registries](../guides/pack-registries.md) for registry authoring and precedence.
+See [Pack registries](../guides/pack-registries.md) for registry authoring and precedence, and
+[Remote registry releases](../guides/remote-registries.md) for versioned distribution and trust.
+Catalog-installed copies persist provenance and support explicit preview-first upgrades; see
+[Pack updates](../guides/pack-updates.md).
 
 Use `--force` to replace files for a pack with the same id. Review the Git diff because extra files
 from the previous version are not automatically deleted.

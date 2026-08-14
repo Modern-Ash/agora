@@ -1,7 +1,8 @@
 # Pack registries
 
 An Agora registry is a local, Markdown-first catalog of validated Method Packs and Tool Packs. It is
-a versionable directory snapshot, not a package server or remote source of truth.
+a versionable directory snapshot and remains the installed source of truth even when obtained from a
+remote release index.
 
 ## Registry layout
 
@@ -56,8 +57,8 @@ git add .agora/registries/team-catalog
 ```
 
 User registries live under `~/.agora/registries`; project registries live under
-`.agora/registries`. `--force` refreshes matching files but does not delete files removed from a newer
-source snapshot. Review the diff and remove intentionally retired entries explicitly.
+`.agora/registries`. `--force` stages and validates a complete replacement, then swaps it with
+rollback protection. Files removed from the source do not remain in the refreshed snapshot.
 
 ## Discover packs
 
@@ -81,6 +82,10 @@ project registry > user registry > bundled registry
 Search returns every matching source so the collision remains visible. Use `--registry` during
 installation when provenance must be explicit.
 
+Results also expose each pack's semantic version and direct dependencies. A catalog installation
+recursively selects compatible dependencies with the same precedence before copying any pack. See
+[Pack dependencies](pack-dependencies.md) for the complete resolution contract.
+
 ## Install a discovered pack
 
 ```bash
@@ -94,7 +99,8 @@ agora pack install --kind tool --id issue-tracker \
 Registry scope identifies where the catalog snapshot came from. Installation scope independently
 identifies where the selected pack is copied. Catalog installation delegates to the ordinary
 `method install` or `tool install` path, so it preserves the same validation, overwrite protection,
-and local customization behavior.
+and local customization behavior. It also adds an installer-owned `SOURCE.md` with the registry,
+pack version, checksum, and installation time. See [Pack updates](pack-updates.md).
 
 ## Validation and trust
 
@@ -107,7 +113,10 @@ credentials and must not put credentials in Tool Pack inputs.
 
 ## Current boundary
 
-This release accepts local filesystem sources. A remote index, signed releases, version constraints,
-checksums, dependency resolution, and network download are not implemented yet. Those features can
-later resolve to the same immutable registry snapshot contract without changing installed project
-state or making a hosted catalog authoritative.
+Agora also accepts versioned remote indexes with mandatory checksums and optional or required
+Ed25519 signatures. See [Remote registry releases](remote-registries.md). Dependency resolution is
+implemented for explicit pack installation; installed packs are never refreshed by a registry
+update. Organization trust synchronization, revocation feeds, and background notifications remain
+future work. Local and project trust stores are described in [Registry trust stores](registry-trust.md).
+Explicit release checks and transactional application are described in
+[Registry updates](registry-updates.md).

@@ -23,6 +23,8 @@ Both `TOOL.md` and at least one operation file are required.
 schema: "agora/tool/v1"
 id: "issue-tracker"
 name: "Team issue tracker"
+version: "1.0.0"
+dependencies: []
 category: "issue-tracker"
 executable: "tracker-cli"
 authentication-reference: "tracker-cli-profile"
@@ -38,12 +40,17 @@ Describe installation, environment, and governance expectations here.
 | `schema` | Must be `agora/tool/v1` |
 | `id` | Lowercase Agora slug |
 | `name` | Non-empty display name |
+| `version` | Numeric `MAJOR.MINOR.PATCH`; omitted legacy versions resolve as `0.0.0` |
+| `dependencies` | Optional array of version-constrained Method or Tool Pack references |
 | `category` | Provider-neutral lowercase slug such as `repository` or `ci` |
 | `executable` | One executable name or path; never a shell expression |
 | `authentication-reference` | Optional non-secret reference to external authentication |
 
 The executable is resolved by the environment when `--launch` is used. A prepared invocation does
 not require it to be installed.
+
+Dependencies use the same manifest and resolver contract as Method Packs. See
+[Pack dependencies](../guides/pack-dependencies.md).
 
 ## Operation manifest
 
@@ -136,6 +143,8 @@ agora pack install --kind tool --id issue-tracker \
 ```
 
 See [Pack registries](../guides/pack-registries.md) for source validation and collision precedence.
+Catalog-installed copies persist provenance and support explicit preview-first upgrades; see
+[Pack updates](../guides/pack-updates.md).
 
 ## Prepare an invocation
 
@@ -197,7 +206,7 @@ A team can point `executable` at a vendor CLI or at a reviewed internal wrapper 
 multiple vendors. The Method Pack continues to grant `issue.read` or `ci.run`, not vendor product
 names, so changing Jira, repository host, CI service, or cloud does not rewrite lifecycle policy.
 
-## Bundled repository pack
+## Bundled packs
 
 Agora includes a `repository` pack backed by Git. It demonstrates read and write operations without
 making Git special in the kernel:
@@ -217,3 +226,22 @@ agora tool invoke --id governed-commit --tool repository --operation commit \
 The commit operation acts only on already staged files and validates its message against Conventional
 Commits 1.0.0. Run the [governed tool sample](../../samples/tool-integration/README.md) for an
 executable example.
+
+Agora also includes `work-management`, a stable `workctl` interface for external issue trackers. Its
+search and view operations require `issue.read`; create and comment require `issue.write`; transition
+requires `issue.transition`. Configure a reviewed wrapper for Jira, Linear, or another provider
+without changing those Method Pack capabilities. See the
+[work-management integration guide](../guides/work-management-integrations.md) and its
+[executable sample](../../samples/work-management/README.md).
+
+The bundled `ci-cd` pack defines a stable `cictl` interface. Routine inspection uses `ci.read` and
+pipeline triggering uses `ci.run`; destructive cancellation uses `ci.cancel`, while deployment uses
+`deployment.create`. No bundled role receives the latter two capabilities. See the
+[CI/CD integration guide](../guides/ci-cd-integrations.md) and its
+[approval-focused sample](../../samples/ci-cd/README.md).
+
+The bundled `knowledge-base` pack exposes a stable `docsctl` interface for Confluence, Notion, and
+internal documentation services. Reads use `docs.read`, drafts use `docs.write`, publication uses
+`docs.publish`, and destructive archival uses `docs.archive`. The latter two are not granted by
+default. See the [knowledge-base integration guide](../guides/knowledge-base-integrations.md) and
+[publication sample](../../samples/knowledge-base/README.md).

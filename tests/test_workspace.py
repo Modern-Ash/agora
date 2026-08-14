@@ -670,6 +670,160 @@ def test_governs_and_persists_external_tool_invocations(
         )
 
 
+def test_governs_work_management_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="view-external-work",
+            tool_id="work-management",
+            operation_id="view",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"issue": "AGORA-42"},
+        )
+    )
+    assert viewed.status == "prepared"
+    assert viewed.command == ["workctl", "issue", "view", "AGORA-42", "--output", "json"]
+
+    transitioned = workspace.invoke_tool(
+        InvokeToolInput(
+            id="transition-external-work",
+            tool_id="work-management",
+            operation_id="transition",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={"issue": "AGORA-42", "state": "In Progress"},
+        )
+    )
+    assert transitioned.capability == "issue.transition"
+    assert transitioned.status == "prepared"
+
+    with pytest.raises(PermissionError, match="issue.transition"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="developer-transition",
+                tool_id="work-management",
+                operation_id="transition",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"issue": "AGORA-42", "state": "Done"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "developer-transition").exists()
+
+
+def test_governs_ci_cd_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    triggered = workspace.invoke_tool(
+        InvokeToolInput(
+            id="trigger-ci",
+            tool_id="ci-cd",
+            operation_id="trigger",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify", "ref": "main", "parameters": "suite=all"},
+        )
+    )
+    assert triggered.status == "prepared"
+    assert triggered.capability == "ci.run"
+    assert triggered.command == [
+        "cictl",
+        "pipeline",
+        "trigger",
+        "verify",
+        "--ref",
+        "main",
+        "--parameters",
+        "suite=all",
+        "--output",
+        "json",
+    ]
+
+    with pytest.raises(PermissionError, match="ci.cancel"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="cancel-ci",
+                tool_id="ci-cd",
+                operation_id="cancel-run",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"run": "run-42"},
+            )
+        )
+    with pytest.raises(PermissionError, match="deployment.create"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="deploy-ci",
+                tool_id="ci-cd",
+                operation_id="create-deployment",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"environment": "production", "artifact": "sha256:abc"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "cancel-ci").exists()
+    assert not (root / ".agora" / "tool-runs" / "deploy-ci").exists()
+
+
+def test_governs_knowledge_base_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="create-documentation",
+            tool_id="knowledge-base",
+            operation_id="create",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={
+                "space": "ENG",
+                "parent": "architecture",
+                "title": "Governed integration",
+                "body": "Document the reviewed behavior.",
+            },
+        )
+    )
+    assert created.status == "prepared"
+    assert created.capability == "docs.write"
+    assert created.command[:4] == ["docsctl", "page", "create", "--space"]
+
+    with pytest.raises(PermissionError, match="docs.publish"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="publish-documentation",
+                tool_id="knowledge-base",
+                operation_id="publish",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"document": "DOC-42"},
+            )
+        )
+    with pytest.raises(PermissionError, match="docs.archive"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="archive-documentation",
+                tool_id="knowledge-base",
+                operation_id="archive",
+                actor_id="owner",
+                swarm_id="delivery",
+                inputs={"document": "DOC-42"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "publish-documentation").exists()
+    assert not (root / ".agora" / "tool-runs" / "archive-documentation").exists()
+
+
 def test_hands_a_running_role_from_ai_to_human_and_swarm(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -1239,7 +1393,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.counts == {
         "actors": 3,
         "methods": 2,
-        "tools": 1,
+        "tools": 4,
         "swarms": 1,
         "work": 1,
         "delegations": 0,
@@ -1251,7 +1405,12 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.attention["active-work"] == ["delivery/observable-work"]
     assert status.attention["unfinished-sessions"] == ["observable-session"]
     assert [item.id for item in workspace.list_methods()] == ["kanban", "scrum"]
-    assert [item.id for item in workspace.list_tools()] == ["repository"]
+    assert [item.id for item in workspace.list_tools()] == [
+        "ci-cd",
+        "knowledge-base",
+        "repository",
+        "work-management",
+    ]
     assert [item.id for item in workspace.list_actors("project")] == [
         "developer",
         "facilitator",
