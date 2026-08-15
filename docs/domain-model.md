@@ -120,9 +120,9 @@ A **Lifecycle Action** is a prepared mutation intent stored independently from c
 Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
 SHA-256 precondition. Supported kinds cover planned actor key rotations, independently authorized
 revocation and recovery, actor runtime updates, work transitions, work interruptions, approvals,
-handoffs, work creation, same-swarm decomposition and material records, session preparation, and the
-complete delegation lifecycle. Existing-work
-mutations cover the work projection, artifacts, evidence, and approvals on which the mutation
+handoffs, work creation, same-swarm decomposition and material records, session preparation, the
+complete delegation lifecycle, and granular Gate Waivers. Existing-work mutations cover the work
+projection, artifacts, evidence, and approvals on which the mutation
 depends. Work creation instead covers the swarm projection and binds the complete initial work
 definition. Criterion, artifact, and evidence parameters bind their exact durable values.
 Interruption reasons are signed and successful actions link exactly to their `STATUS.md`. Approval
@@ -133,6 +133,15 @@ and reason.
 Signed work decomposition binds the parent work precondition and the complete initial child
 contract. Applying it rechecks `work.decompose` authority, parent mutability, and child path
 availability. The child links to its parent and the parent retains the inverse child reference.
+
+## Gate Waiver
+
+A **Gate Waiver** is an immutable, work-owned decision that names exact outstanding acceptance
+criteria, required artifact kinds, successful-evidence requirement, or approval roles from one
+Method Pack gate. It requires a reason, risk-evidence references, and a role granting `gate.waive`.
+The gate evaluator subtracts only those named obligations. Transition edges, transition roles, WIP,
+child closure, and operational mutability remain independent invariants. Authenticated decisions
+link the resulting `WAIVER.md` to an applied `gate.waive` Lifecycle Action.
 
 A signed delegation status decision binds its delegation id and reason to both `DELEGATION.md` and
 the parent work digest. Parent governance authorizes block, resume, and cancel; child authority

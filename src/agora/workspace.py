@@ -83,6 +83,7 @@ from agora.model import (
     DoctorCheck,
     EventRecord,
     GatePolicy,
+    GateWaiverRecord,
     HandoffActorInput,
     HandoffRecord,
     InitInput,
@@ -123,6 +124,7 @@ from agora.model import (
     PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
     PrepareEvidenceInput,
+    PrepareGateWaiverInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareSessionInput,
@@ -160,6 +162,7 @@ from agora.model import (
     UserConfiguration,
     ValidationIssue,
     ValidationReport,
+    WaiveGateInput,
     WorkActorInput,
     WorkOperationalStatus,
     WorkRecord,
@@ -2635,6 +2638,182 @@ class AgoraWorkspace:
         return result
 
     @_locked_mutation("project")
+    def waive_gate(self, data: WaiveGateInput) -> GateWaiverRecord:
+        root = self.project_root()
+        waiver, swarm, actor, work = self._validate_gate_waiver(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare gate.waive before applying it"
+            )
+        return self._apply_gate_waiver(waiver, swarm, actor, work)
+
+    @_locked_mutation("project")
+    def prepare_gate_waiver(self, data: PrepareGateWaiverInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        waiver, swarm, actor, work = self._validate_gate_waiver(root, data.waiver)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="gate.waive",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "waiver": waiver.id,
+                "gate": waiver.gate_id,
+                "criteria": json.dumps(waiver.criteria, separators=(",", ":")),
+                "artifacts": json.dumps(waiver.artifacts, separators=(",", ":")),
+                "successful-evidence": str(waiver.successful_evidence).lower(),
+                "approvals": json.dumps(waiver.approval_roles, separators=(",", ":")),
+                "reason": waiver.reason,
+                "evidence": json.dumps(waiver.evidence_refs, separators=(",", ":")),
+            },
+        )
+
+    def _validate_gate_waiver(
+        self, root: Path, data: WaiveGateInput
+    ) -> tuple[WaiveGateInput, SwarmRecord, ActorRecord, WorkRecord]:
+        assert_slug(data.id, "Gate Waiver id")
+        assert_slug(data.gate_id, "Gate id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, "gate.waive")
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        gate = contract.gates.get(data.gate_id)
+        if gate is None:
+            raise ValueError(f"Method Pack {swarm.method} has no gate {data.gate_id}")
+
+        criteria = list(dict.fromkeys(data.criteria))
+        artifacts = list(dict.fromkeys(data.artifacts))
+        approvals = list(dict.fromkeys(data.approval_roles))
+        evidence_refs = list(
+            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+        )
+        for criterion in criteria:
+            assert_slug(criterion, "Waived criterion id")
+        for role in approvals:
+            assert_slug(role, "Waived approval role")
+        if not data.reason.strip():
+            raise ValueError("Gate Waiver reason cannot be empty")
+        if not evidence_refs:
+            raise ValueError("Gate Waiver requires at least one risk evidence reference")
+        if not (criteria or artifacts or data.successful_evidence or approvals):
+            raise ValueError("Gate Waiver must name at least one gate obligation")
+
+        coverage = self._gate_waiver_coverage(work, data.gate_id)
+        outstanding_criteria = {
+            item
+            for item in work.acceptance_criteria
+            if gate.require_all_criteria
+            and item not in work.satisfied_criteria
+            and item not in coverage[0]
+        }
+        outstanding_artifacts = {
+            item
+            for item in work.required_artifacts
+            if gate.require_required_artifacts
+            and item not in work.artifact_kinds
+            and item not in coverage[1]
+        }
+        evidence_outstanding = (
+            gate.require_successful_evidence
+            and "success" not in work.evidence_results
+            and not coverage[2]
+        )
+        outstanding_approvals = {
+            role
+            for role in gate.required_approval_roles
+            if role not in work.approval_roles and role not in coverage[3]
+        }
+        invalid_criteria = sorted(set(criteria) - outstanding_criteria)
+        invalid_artifacts = sorted(set(artifacts) - outstanding_artifacts)
+        invalid_approvals = sorted(set(approvals) - outstanding_approvals)
+        if invalid_criteria:
+            raise ValueError(
+                "Gate Waiver criteria are not outstanding gate obligations: "
+                + ", ".join(invalid_criteria)
+            )
+        if invalid_artifacts:
+            raise ValueError(
+                "Gate Waiver artifacts are not outstanding gate obligations: "
+                + ", ".join(invalid_artifacts)
+            )
+        if data.successful_evidence and not evidence_outstanding:
+            raise ValueError("Successful evidence is not an outstanding gate obligation")
+        if invalid_approvals:
+            raise ValueError(
+                "Gate Waiver approvals are not outstanding gate obligations: "
+                + ", ".join(invalid_approvals)
+            )
+        path = Path(work.path) / "waivers" / data.id
+        if path.exists():
+            raise FileExistsError(f"Gate Waiver already exists: {data.id}")
+        return (
+            WaiveGateInput(
+                id=data.id,
+                swarm_id=swarm.id,
+                work_id=work.id,
+                gate_id=data.gate_id,
+                actor_id=actor.reference,
+                reason=data.reason.strip(),
+                evidence_refs=evidence_refs,
+                criteria=criteria,
+                artifacts=artifacts,
+                successful_evidence=data.successful_evidence,
+                approval_roles=approvals,
+            ),
+            swarm,
+            actor,
+            work,
+        )
+
+    def _apply_gate_waiver(
+        self,
+        data: WaiveGateInput,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        action_id: str | None = None,
+    ) -> GateWaiverRecord:
+        waiver_root = Path(work.path) / "waivers" / data.id
+        record = GateWaiverRecord(
+            id=data.id,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            gate_id=data.gate_id,
+            waived_criteria=data.criteria,
+            waived_artifacts=data.artifacts,
+            waive_successful_evidence=data.successful_evidence,
+            waived_approval_roles=data.approval_roles,
+            reason=data.reason,
+            evidence_refs=data.evidence_refs,
+            authorized_by=actor.reference,
+            created_at=self._timestamp(),
+            path=str(waiver_root / "WAIVER.md"),
+            action_id=action_id,
+        )
+        write_new(waiver_root / "WAIVER.md", self._render_gate_waiver(record))
+        self._append_work_event(
+            work,
+            "gate.waived",
+            f"waiver={record.id} gate={record.gate_id} actor={actor.reference}",
+        )
+        return record
+
+    def list_gate_waivers(
+        self, swarm_id: str, work_id: str, gate_id: str | None = None
+    ) -> list[GateWaiverRecord]:
+        swarm = self._load_swarm(self.project_root(), swarm_id)
+        work = self._load_work(swarm, work_id)
+        records = self._load_gate_waivers(work)
+        return [record for record in records if gate_id is None or record.gate_id == gate_id]
+
+    @_locked_mutation("project")
     def satisfy_criterion(self, data: WorkActorInput, criterion_id: str) -> WorkRecord:
         root = self.project_root()
         swarm, actor, work = self._validate_satisfy_criterion(root, data, criterion_id)
@@ -3099,6 +3278,9 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
+        gate_waiver_context: tuple[WaiveGateInput, SwarmRecord, ActorRecord, WorkRecord] | None = (
+            None
+        )
         criterion_context: (
             tuple[PrepareCriterionInput, SwarmRecord, ActorRecord, WorkRecord] | None
         ) = None
@@ -3265,6 +3447,10 @@ class AgoraWorkspace:
                     f"Lifecycle Action decomposition context is not canonical: {record.id}"
                 )
             work_decompose_context = (parent, child, context)
+        elif record.action == "gate.waive":
+            waiver = self._gate_waiver_input_from_action(record)
+            waiver, swarm, actor, work = self._validate_gate_waiver(root, waiver)
+            gate_waiver_context = (waiver, swarm, actor, work)
         elif record.action == "criterion.satisfy":
             if record.work_id is None:
                 raise ValueError(f"Lifecycle Action has no criterion work: {record.id}")
@@ -3518,6 +3704,10 @@ class AgoraWorkspace:
             assert work_decompose_context is not None
             parent, child, context = work_decompose_context
             self._apply_decompose_work(parent, child, context)
+        elif record.action == "gate.waive":
+            assert gate_waiver_context is not None
+            waiver, swarm, actor, work = gate_waiver_context
+            self._apply_gate_waiver(waiver, swarm, actor, work, record.id)
         elif record.action == "criterion.satisfy":
             assert criterion_context is not None
             criterion, swarm, actor, work = criterion_context
@@ -3715,6 +3905,24 @@ class AgoraWorkspace:
             acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
             required_artifacts=cls._string_list_parameter(record, "required-artifacts"),
             description=record.parameters["description"],
+        )
+
+    @classmethod
+    def _gate_waiver_input_from_action(cls, record: LifecycleActionRecord) -> WaiveGateInput:
+        if record.work_id is None:
+            raise ValueError(f"Lifecycle Action has no waiver work: {record.id}")
+        return WaiveGateInput(
+            id=record.parameters["waiver"],
+            swarm_id=record.swarm_id,
+            work_id=record.work_id,
+            gate_id=record.parameters["gate"],
+            actor_id=record.actor,
+            reason=record.parameters["reason"],
+            evidence_refs=cls._string_list_parameter(record, "evidence"),
+            criteria=cls._string_list_parameter(record, "criteria"),
+            artifacts=cls._string_list_parameter(record, "artifacts"),
+            successful_evidence=record.parameters["successful-evidence"] == "true",
+            approval_roles=cls._string_list_parameter(record, "approvals"),
         )
 
     @staticmethod
@@ -5570,6 +5778,7 @@ class AgoraWorkspace:
             "actor-keys": 0,
             "swarms": 0,
             "work": 0,
+            "gate-waivers": 0,
             "handoffs": 0,
             "delegations": 0,
             "status-changes": 0,
@@ -6148,6 +6357,7 @@ class AgoraWorkspace:
                 )
 
         work_records: dict[tuple[str, str], WorkRecord] = {}
+        gate_waiver_records: dict[tuple[str, str, str], GateWaiverRecord] = {}
         for swarm in swarms.values():
             contract = methods.get(swarm.method)
             state_counts: dict[str, int] = {}
@@ -6229,6 +6439,78 @@ class AgoraWorkspace:
                     )
                 if work.operational_status != "cancelled":
                     state_counts[work.state] = state_counts.get(work.state, 0) + 1
+                for waiver_directory in _child_directories(Path(work.path) / "waivers"):
+                    waiver_path = waiver_directory / "WAIVER.md"
+                    waiver = inspect(
+                        "gate-waivers",
+                        "gate-waiver.invalid",
+                        waiver_path,
+                        lambda waiver_path=waiver_path: self._load_gate_waiver(waiver_path),
+                    )
+                    if not isinstance(waiver, GateWaiverRecord):
+                        continue
+                    gate_waiver_records[(swarm.id, work.id, waiver.id)] = waiver
+                    if waiver.id != waiver_directory.name:
+                        issue(
+                            "gate-waiver.id-mismatch",
+                            waiver_path,
+                            "Gate Waiver id does not match its directory",
+                        )
+                    if waiver.swarm_id != swarm.id or waiver.work_id != work.id:
+                        issue(
+                            "gate-waiver.owner-mismatch",
+                            waiver_path,
+                            "Gate Waiver does not belong to its filesystem owner",
+                        )
+                    resolve_actor(waiver.authorized_by, waiver_path)
+                    gate = contract.gates.get(waiver.gate_id) if contract is not None else None
+                    if gate is None:
+                        issue(
+                            "gate-waiver.gate-missing",
+                            waiver_path,
+                            f"Gate Waiver references unknown gate: {waiver.gate_id}",
+                        )
+                        continue
+                    invalid_criteria = sorted(
+                        set(waiver.waived_criteria) - set(work.acceptance_criteria)
+                    )
+                    invalid_artifacts = sorted(
+                        set(waiver.waived_artifacts) - set(work.required_artifacts)
+                    )
+                    invalid_approvals = sorted(
+                        set(waiver.waived_approval_roles) - set(gate.required_approval_roles)
+                    )
+                    if waiver.waived_criteria and (
+                        not gate.require_all_criteria or invalid_criteria
+                    ):
+                        issue(
+                            "gate-waiver.criteria-invalid",
+                            waiver_path,
+                            "Waived criteria are not obligations of this gate: "
+                            + ", ".join(invalid_criteria or waiver.waived_criteria),
+                        )
+                    if waiver.waived_artifacts and (
+                        not gate.require_required_artifacts or invalid_artifacts
+                    ):
+                        issue(
+                            "gate-waiver.artifacts-invalid",
+                            waiver_path,
+                            "Waived artifacts are not obligations of this gate: "
+                            + ", ".join(invalid_artifacts or waiver.waived_artifacts),
+                        )
+                    if waiver.waive_successful_evidence and not gate.require_successful_evidence:
+                        issue(
+                            "gate-waiver.evidence-invalid",
+                            waiver_path,
+                            "Successful evidence is not required by this gate",
+                        )
+                    if invalid_approvals:
+                        issue(
+                            "gate-waiver.approvals-invalid",
+                            waiver_path,
+                            "Waived approvals are not obligations of this gate: "
+                            + ", ".join(invalid_approvals),
+                        )
             if contract is not None:
                 for state, limit in contract.wip_limits.items():
                     if state_counts.get(state, 0) > limit:
@@ -6820,6 +7102,55 @@ class AgoraWorkspace:
                                 "lifecycle-action.decomposition-mismatch",
                                 Path(child.path) / "WORK.md",
                                 "Child work differs from its applied Lifecycle Action",
+                            )
+            if action.action == "gate.waive" and action.work_id is not None:
+                try:
+                    waiver_input = self._gate_waiver_input_from_action(action)
+                except ValueError as error:
+                    issue("lifecycle-action.gate-waiver-invalid", path, str(error))
+                else:
+                    waiver_key = (action.swarm_id, action.work_id, waiver_input.id)
+                    waiver = gate_waiver_records.get(waiver_key)
+                    if action.status == "prepared" and waiver is not None:
+                        issue(
+                            "lifecycle-action.gate-waiver-conflict",
+                            path,
+                            f"Prepared action already has a Gate Waiver: {waiver_input.id}",
+                        )
+                    elif action.status == "applied" and waiver is None:
+                        issue(
+                            "lifecycle-action.gate-waiver-missing",
+                            path,
+                            f"Applied action has no Gate Waiver: {waiver_input.id}",
+                        )
+                    elif action.status == "applied" and waiver is not None:
+                        expected = (
+                            action.id,
+                            action.actor,
+                            waiver_input.gate_id,
+                            waiver_input.criteria,
+                            waiver_input.artifacts,
+                            waiver_input.successful_evidence,
+                            waiver_input.approval_roles,
+                            waiver_input.reason,
+                            waiver_input.evidence_refs,
+                        )
+                        actual = (
+                            waiver.action_id,
+                            waiver.authorized_by,
+                            waiver.gate_id,
+                            waiver.waived_criteria,
+                            waiver.waived_artifacts,
+                            waiver.waive_successful_evidence,
+                            waiver.waived_approval_roles,
+                            waiver.reason,
+                            waiver.evidence_refs,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.gate-waiver-mismatch",
+                                Path(waiver.path),
+                                "Gate Waiver differs from its applied Lifecycle Action",
                             )
             if action.action in {"actor.key.recover", "actor.key.rotate"}:
                 target_reference = action.parameters.get("target", action.actor)
@@ -8242,6 +8573,96 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _render_gate_waiver(record: GateWaiverRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/gate-waiver/v1",
+                    "id": record.id,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "gate": record.gate_id,
+                    "waived-criteria": record.waived_criteria,
+                    "waived-artifacts": record.waived_artifacts,
+                    "waive-successful-evidence": record.waive_successful_evidence,
+                    "waived-approval-roles": record.waived_approval_roles,
+                    "reason": record.reason,
+                    "evidence-refs": record.evidence_refs,
+                    "authorized-by": record.authorized_by,
+                    "created-at": record.created_at,
+                    "action": record.action_id,
+                },
+                body=(
+                    f"# Gate Waiver {record.id}\n\n"
+                    "This decision waives only the named obligations. The transition edge, "
+                    "role authority, WIP policy, and operational status remain enforced."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_gate_waiver(path: Path) -> GateWaiverRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/gate-waiver/v1", path)
+        record = GateWaiverRecord(
+            id=string_attribute(document.attributes, "id"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            gate_id=string_attribute(document.attributes, "gate"),
+            waived_criteria=strings_attribute(document.attributes, "waived-criteria"),
+            waived_artifacts=strings_attribute(document.attributes, "waived-artifacts"),
+            waive_successful_evidence=_boolean_attribute_default(
+                document.attributes, "waive-successful-evidence", False
+            ),
+            waived_approval_roles=strings_attribute(document.attributes, "waived-approval-roles"),
+            reason=string_attribute(document.attributes, "reason"),
+            evidence_refs=strings_attribute(document.attributes, "evidence-refs"),
+            authorized_by=string_attribute(document.attributes, "authorized-by"),
+            created_at=string_attribute(document.attributes, "created-at"),
+            path=str(path),
+            action_id=optional_string_attribute(document.attributes, "action"),
+        )
+        assert_slug(record.id, "Gate Waiver id")
+        assert_slug(record.gate_id, "Gate Waiver gate id")
+        if not record.reason.strip():
+            raise ValueError(f"Gate Waiver reason cannot be empty: {path}")
+        if not record.evidence_refs or any(not item.strip() for item in record.evidence_refs):
+            raise ValueError(f"Gate Waiver requires risk evidence references: {path}")
+        obligations = (
+            record.waived_criteria,
+            record.waived_artifacts,
+            record.waived_approval_roles,
+        )
+        if any(len(items) != len(set(items)) for items in obligations):
+            raise ValueError(f"Gate Waiver obligations must be unique: {path}")
+        if not any(obligations) and not record.waive_successful_evidence:
+            raise ValueError(f"Gate Waiver must name at least one obligation: {path}")
+        for label, items in (
+            ("criterion", record.waived_criteria),
+            ("approval role", record.waived_approval_roles),
+        ):
+            for item in items:
+                assert_slug(item, f"Gate Waiver {label}")
+        return record
+
+    def _load_gate_waivers(self, work: WorkRecord) -> list[GateWaiverRecord]:
+        return [
+            self._load_gate_waiver(path)
+            for path in sorted((Path(work.path) / "waivers").glob("*/WAIVER.md"))
+        ]
+
+    def _gate_waiver_coverage(
+        self, work: WorkRecord, gate_id: str
+    ) -> tuple[set[str], set[str], bool, set[str]]:
+        records = [record for record in self._load_gate_waivers(work) if record.gate_id == gate_id]
+        return (
+            {item for record in records for item in record.waived_criteria},
+            {item for record in records for item in record.waived_artifacts},
+            any(record.waive_successful_evidence for record in records),
+            {item for record in records for item in record.waived_approval_roles},
+        )
+
+    @staticmethod
     def _runtime_command(integration: Integration, runner: str | None) -> list[str]:
         if runner is not None:
             command = shlex.split(runner)
@@ -8266,6 +8687,12 @@ class AgoraWorkspace:
             digest.update(b"\0")
             digest.update(path.read_bytes())
             digest.update(b"\0")
+        for path in sorted((work_root / "waivers").glob("*/WAIVER.md")):
+            digest.update(b"waiver\0")
+            digest.update(path.parent.name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
         return digest.hexdigest()
 
     def _lifecycle_precondition_sha256(
@@ -8282,6 +8709,7 @@ class AgoraWorkspace:
             "artifact.add",
             "criterion.satisfy",
             "evidence.add",
+            "gate.waive",
             "work.block",
             "work.cancel",
             "work.decompose",
@@ -8490,6 +8918,7 @@ class AgoraWorkspace:
             "delegation.reject",
             "delegation.resume",
             "evidence.add",
+            "gate.waive",
             "handoff.create",
             "session.prepare",
             "swarm.assign",
@@ -8540,6 +8969,16 @@ class AgoraWorkspace:
             "delegation.reject": {"delegation", "reason"},
             "delegation.resume": {"delegation", "reason"},
             "evidence.add": {"type", "result", "artifacts"},
+            "gate.waive": {
+                "waiver",
+                "gate",
+                "criteria",
+                "artifacts",
+                "successful-evidence",
+                "approvals",
+                "reason",
+                "evidence",
+            },
             "handoff.create": {"role", "from", "to", "reason"},
             "session.prepare": {"session", "runner"},
             "swarm.assign": {"role", "target"},
@@ -8712,6 +9151,41 @@ class AgoraWorkspace:
                 not isinstance(value, str) for value in artifacts
             ):
                 raise ValueError(f"Lifecycle Action evidence artifacts must be strings: {path}")
+        if action == "gate.waive":
+            assert_slug(parameters["waiver"], "Lifecycle Action Gate Waiver id")
+            assert_slug(parameters["gate"], "Lifecycle Action gate id")
+            if parameters["successful-evidence"] not in {"true", "false"}:
+                raise ValueError(
+                    f"Lifecycle Action has invalid successful evidence waiver flag: {path}"
+                )
+            if not parameters["reason"].strip():
+                raise ValueError(f"Lifecycle Action Gate Waiver reason cannot be empty: {path}")
+            parsed_lists: dict[str, list[str]] = {}
+            for key in ("criteria", "artifacts", "approvals", "evidence"):
+                try:
+                    value = json.loads(parameters[key])
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        f"Lifecycle Action has invalid Gate Waiver {key}: {path}"
+                    ) from error
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    raise ValueError(
+                        f"Lifecycle Action Gate Waiver {key} must be a string list: {path}"
+                    )
+                parsed_lists[key] = value
+            if not parsed_lists["evidence"] or any(
+                not item.strip() for item in parsed_lists["evidence"]
+            ):
+                raise ValueError(
+                    f"Lifecycle Action Gate Waiver requires risk evidence references: {path}"
+                )
+            if (
+                not parsed_lists["criteria"]
+                and not parsed_lists["artifacts"]
+                and parameters["successful-evidence"] == "false"
+                and not parsed_lists["approvals"]
+            ):
+                raise ValueError(f"Lifecycle Action Gate Waiver must name an obligation: {path}")
         reason_actions = {
             "delegation.block",
             "delegation.cancel",
@@ -8967,6 +9441,7 @@ class AgoraWorkspace:
                     Path(work.path) / "artifacts.md",
                     Path(work.path) / "evidence.md",
                     Path(work.path) / "approvals.md",
+                    *sorted((Path(work.path) / "waivers").glob("*/WAIVER.md")),
                 ]
             )
         reading = "\n".join(
@@ -9272,22 +9747,36 @@ class AgoraWorkspace:
                 f"WIP limit reached for {target_state}: limit={limit}, active={active}"
             )
 
-    @staticmethod
-    def _assert_work_gate(work: WorkRecord, gate: GatePolicy, gate_id: str) -> None:
+    def _assert_work_gate(self, work: WorkRecord, gate: GatePolicy, gate_id: str) -> None:
+        waived_criteria, waived_artifacts, waived_evidence, waived_approvals = (
+            self._gate_waiver_coverage(work, gate_id)
+        )
         unsatisfied = (
-            [item for item in work.acceptance_criteria if item not in work.satisfied_criteria]
+            [
+                item
+                for item in work.acceptance_criteria
+                if item not in work.satisfied_criteria and item not in waived_criteria
+            ]
             if gate.require_all_criteria
             else []
         )
         missing_artifacts = (
-            [item for item in work.required_artifacts if item not in work.artifact_kinds]
+            [
+                item
+                for item in work.required_artifacts
+                if item not in work.artifact_kinds and item not in waived_artifacts
+            ]
             if gate.require_required_artifacts
             else []
         )
         has_success = "success" in work.evidence_results
-        evidence_missing = gate.require_successful_evidence and not has_success
+        evidence_missing = (
+            gate.require_successful_evidence and not has_success and not waived_evidence
+        )
         missing_approvals = [
-            role for role in gate.required_approval_roles if role not in work.approval_roles
+            role
+            for role in gate.required_approval_roles
+            if role not in work.approval_roles and role not in waived_approvals
         ]
         if unsatisfied or missing_artifacts or evidence_missing or missing_approvals:
             raise ValueError(

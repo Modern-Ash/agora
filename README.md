@@ -625,6 +625,7 @@ uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
 uv run python samples/pack-dependencies/run.py
 uv run python samples/remote-registry/run.py
+uv run python samples/gate-waivers/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -667,6 +668,7 @@ versioned registry snapshot without persisting a private key.
 - [Delegation budgets](docs/guides/delegation-budgets.md)
 - [Delegated artifact promotion](docs/guides/delegated-artifacts.md)
 - [Work decomposition](docs/guides/work-decomposition.md)
+- [Granular Gate Waivers](docs/guides/gate-waivers.md)
 - [Operations and validation](docs/guides/operations-and-validation.md)
 - [Complete verification](docs/guides/verification.md)
 - [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
@@ -703,14 +705,16 @@ versioned registry snapshot without persisting a private key.
   the selected human, agent, or swarm remains responsible for proposing useful child contracts and
   external runtimes remain responsible for usage metering. Opt-in typed child artifact promotion is
   implemented as a reference to the authoritative child record; Agora deliberately does not copy
-  opaque external bytes. Gate waivers, distributed leases, and remote concurrency remain future
-  work. Local cross-process writer locks, explicit child work acceptance, interruption,
-  cancellation, and reference-based result collection are implemented.
+  opaque external bytes. Granular, evidence-backed Gate Waivers are implemented. Distributed
+  leases and remote concurrency remain future work. Local cross-process writer locks, explicit
+  child work acceptance, interruption, cancellation, and reference-based result collection are
+  implemented.
 - Optional Ed25519 actor authentication protects key rotation, independently authorized revocation
   and recovery, actor runtime updates, vacant-role assignment, work creation and decomposition,
-  criteria, artifacts, evidence, transitions, interruptions, approvals, handoffs, the complete
-  delegation lifecycle, Tool Run launch, and agent-session preparation and launch while leaving private keys external. Public-key rotation and
-  revocation histories are implemented. Tool Packs declare portable direct-process timeouts and
+  criteria, artifacts, evidence, transitions, interruptions, approvals, Gate Waivers, handoffs, the
+  complete delegation lifecycle, Tool Run launch, and agent-session preparation and launch while
+  leaving private keys external. Public-key rotation and revocation histories are implemented. Tool
+  Packs declare portable direct-process timeouts and
   captured-output limits. Filesystem/network/syscall isolation, resource quotas, and process-tree
   containment are not yet covered by that policy.
 - Credentials belong to the environment or secret manager; Agora stores references only.

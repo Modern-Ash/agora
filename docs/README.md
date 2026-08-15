@@ -64,6 +64,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   kinds as typed parent references without copying opaque external content.
 - [Work decomposition](guides/work-decomposition.md): materialize same-swarm child contracts and
   enforce parent-child closure.
+- [Granular Gate Waivers](guides/gate-waivers.md): accept exact residual-risk exceptions without
+  bypassing transition, role, WIP, or work-status policy.
 - [Operations and validation](guides/operations-and-validation.md): query active state, inspect
   events, and audit every durable record.
 - [Complete verification](guides/verification.md): validate all command Markdown, generated agent
@@ -124,6 +126,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   result collection lifecycle with a signed inherited budget.
 - [Work decomposition](../samples/work-decomposition/README.md): create local child work and reject
   parent closure until every child is terminal or cancelled.
+- [Gate Waivers](../samples/gate-waivers/README.md): reject an incomplete Scrum gate, record an exact
+  risk-backed exception, and complete the governed transition.
 - [Operational queries](../samples/operational-query/README.md): summarize and validate a generated
   workspace without a database.
 - [Interruptions and cancellation](../samples/interruptions/README.md): exercise durable status
@@ -144,7 +148,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 ## MVP boundaries
 
 Agora currently validates transition graphs, role capabilities and actions, WIP limits, gates,
-required artifacts, acceptance criteria, successful evidence, approvals, handoffs, work and
+required artifacts, acceptance criteria, successful evidence, approvals, Gate Waivers, handoffs,
+work and
 delegation interruption histories, delegated work, Tool Pack operations, cross-record integrity,
 and event syntax. It can launch local LLM and tool CLIs with durable context, but does not call
 provider APIs directly, manage credentials, implement a remote scheduler or distributed lease

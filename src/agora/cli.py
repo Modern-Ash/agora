@@ -46,6 +46,7 @@ from agora.model import (
     PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
     PrepareEvidenceInput,
+    PrepareGateWaiverInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareSessionInput,
@@ -63,6 +64,7 @@ from agora.model import (
     UpdateRegistryInput,
     UpgradeInput,
     ValidationReport,
+    WaiveGateInput,
     WorkActorInput,
 )
 from agora.workspace import AgoraWorkspace
@@ -633,6 +635,32 @@ def _build_parser() -> argparse.ArgumentParser:
     work_list.add_argument("--swarm")
     work_list.add_argument("--state")
     work_list.add_argument("--operational-status", choices=("active", "blocked", "cancelled"))
+
+    gate = commands.add_parser("gate", help="Manage explicit gate exceptions").add_subparsers(
+        dest="gate_command", required=True
+    )
+    for command, help_text in (
+        ("waive", "Waive exact outstanding gate obligations"),
+        ("waive-prepare", "Prepare a signed Gate Waiver intent"),
+    ):
+        waiver = gate.add_parser(command, help=help_text)
+        if command == "waive-prepare":
+            waiver.add_argument("--action-id", required=True)
+        waiver.add_argument("--id", required=True, help="Gate Waiver id")
+        waiver.add_argument("--swarm", required=True)
+        waiver.add_argument("--work", required=True)
+        waiver.add_argument("--gate", required=True)
+        waiver.add_argument("--by", required=True)
+        waiver.add_argument("--criterion", action="append", default=[])
+        waiver.add_argument("--artifact", action="append", default=[])
+        waiver.add_argument("--successful-evidence", action="store_true")
+        waiver.add_argument("--approval", action="append", default=[])
+        waiver.add_argument("--reason", required=True)
+        waiver.add_argument("--evidence", action="append", required=True)
+    gate_list = gate.add_parser("list", help="List Gate Waivers for a work item")
+    gate_list.add_argument("--swarm", required=True)
+    gate_list.add_argument("--work", required=True)
+    gate_list.add_argument("--gate")
 
     for command, help_text in (
         ("block", "Temporarily block a work item"),
@@ -1343,6 +1371,27 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.show_work(args.swarm, args.work)
     if args.command == "work" and args.work_command == "list":
         return workspace.list_work(args.swarm, args.state, args.operational_status)
+    if args.command == "gate" and args.gate_command in {"waive", "waive-prepare"}:
+        waiver = WaiveGateInput(
+            id=args.id,
+            swarm_id=args.swarm,
+            work_id=args.work,
+            gate_id=args.gate,
+            actor_id=args.by,
+            reason=args.reason,
+            evidence_refs=args.evidence,
+            criteria=args.criterion,
+            artifacts=args.artifact,
+            successful_evidence=args.successful_evidence,
+            approval_roles=args.approval,
+        )
+        if args.gate_command == "waive-prepare":
+            return workspace.prepare_gate_waiver(
+                PrepareGateWaiverInput(action_id=args.action_id, waiver=waiver)
+            )
+        return workspace.waive_gate(waiver)
+    if args.command == "gate" and args.gate_command == "list":
+        return workspace.list_gate_waivers(args.swarm, args.work, args.gate)
     if args.command == "session" and args.session_command == "list":
         return workspace.list_sessions(args.status)
     if args.command == "session" and args.session_command == "prepare":

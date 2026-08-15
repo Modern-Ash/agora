@@ -670,3 +670,88 @@ def test_queries_status_and_returns_a_failure_code_for_invalid_state(
     assert '"ok": false' in invalid_output.getvalue()
     assert '"code": "document.invalid"' in invalid_output.getvalue()
     assert errors.getvalue() == ""
+
+
+def test_creates_and_lists_a_granular_gate_waiver_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    for actor_id, name, capabilities in (
+        ("owner", "Owner", ["backlog-management", "acceptance"]),
+        ("facilitator", "Facilitator", ["facilitation", "governance"]),
+        ("developer", "Developer", ["implementation"]),
+    ):
+        workspace.add_actor(
+            AddActorInput(
+                id=actor_id,
+                name=name,
+                kind="human",
+                capabilities=capabilities,
+                scope="project",
+            )
+        )
+    workspace.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Test Gate Waivers", create_branch=False)
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "developer"),
+    ):
+        workspace.assign_actor(
+            AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor_id)
+        )
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="release",
+            title="Release",
+            actor_id="owner",
+            acceptance_criteria=[("verified", "Verify the release")],
+        )
+    )
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert (
+        main(
+            [
+                "gate",
+                "waive",
+                "--id",
+                "accepted-risk",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--gate",
+                "completion",
+                "--by",
+                "owner",
+                "--criterion",
+                "verified",
+                "--reason",
+                "Risk accepted",
+                "--evidence",
+                "repo://risk/release.md",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            ["gate", "list", "--swarm", "delivery", "--work", "release"],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
+    assert errors.getvalue() == ""
+    assert '"id": "accepted-risk"' in output.getvalue()

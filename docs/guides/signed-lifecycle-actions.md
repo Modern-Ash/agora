@@ -3,9 +3,9 @@
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
 current work projection. The supported mutations are `actor.key.rotate`, `actor.runtime.update`,
 `work.transition`, `work.block`, `work.resume`, `work.cancel`, `work.create`, `work.decompose`,
-`criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`, `swarm.assign`,
-`handoff.create`, session preparation, and the complete delegation lifecycle. Their durable intents live at
-`.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
+`criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`, `gate.waive`, `swarm.assign`,
+`handoff.create`, session preparation, and the complete delegation lifecycle. Their durable intents
+live at `.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
 work state. It does not replace Method Pack permissions, transition edges, WIP limits, gates, Git
@@ -55,6 +55,11 @@ These actions bind the criterion id, artifact kind and URI, or evidence type, re
 references. Their precondition covers `WORK.md`, `approvals.md`, `artifacts.md`, and `evidence.md`.
 Apply rechecks Method Pack authority and work mutability before updating the same Markdown records
 used by unauthenticated actors.
+
+Authenticated exception authorities use `gate waive-prepare`. The action binds the waiver id, gate,
+exact criteria, artifact kinds, successful-evidence flag, approval roles, reason, and risk evidence
+references. Apply rechecks every obligation before writing the linked `WAIVER.md`; see
+[Granular Gate Waivers](gate-waivers.md).
 
 ## Prepare an agent session context
 

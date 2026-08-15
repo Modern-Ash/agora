@@ -28,6 +28,7 @@ from agora.model import (
     StartSessionInput,
     ToolRuntimeProbe,
     TransitionWorkInput,
+    WaiveGateInput,
     WorkActorInput,
 )
 from agora.workspace import AgoraWorkspace
@@ -481,6 +482,96 @@ def test_applies_a_method_defined_gate_policy(
     )
 
     assert completed.state == "completed"
+
+
+def test_waives_only_named_outstanding_gate_obligations(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="exceptional-release",
+            title="Release with accepted residual risk",
+            actor_id="owner",
+            acceptance_criteria=[("load-test", "Complete the load test")],
+            required_artifacts=["performance-report"],
+        )
+    )
+    for state, actor in (
+        ("planned", "developer"),
+        ("implementing", "developer"),
+        ("reviewing", "developer"),
+        ("verifying", "facilitator"),
+    ):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="exceptional-release",
+                actor_id=actor,
+                target_state=state,
+            )
+        )
+
+    with pytest.raises(PermissionError, match="not allowed to perform gate.waive"):
+        workspace.waive_gate(
+            WaiveGateInput(
+                id="developer-exception",
+                swarm_id="delivery",
+                work_id="exceptional-release",
+                gate_id="completion",
+                actor_id="developer",
+                reason="Unauthorized",
+                evidence_refs=["repo://risk/unauthorized.md"],
+                criteria=["load-test"],
+            )
+        )
+    with pytest.raises(ValueError, match="not outstanding gate obligations"):
+        workspace.waive_gate(
+            WaiveGateInput(
+                id="invalid-exception",
+                swarm_id="delivery",
+                work_id="exceptional-release",
+                gate_id="completion",
+                actor_id="owner",
+                reason="Invalid scope",
+                evidence_refs=["repo://risk/invalid.md"],
+                criteria=["undeclared"],
+            )
+        )
+
+    waiver = workspace.waive_gate(
+        WaiveGateInput(
+            id="accepted-release-risk",
+            swarm_id="delivery",
+            work_id="exceptional-release",
+            gate_id="completion",
+            actor_id="owner",
+            reason="Customer deadline accepted by product governance",
+            evidence_refs=["repo://risk/accepted-release-risk.md"],
+            criteria=["load-test"],
+            artifacts=["performance-report"],
+            successful_evidence=True,
+            approval_roles=["product-owner"],
+        )
+    )
+    completed = workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery",
+            work_id="exceptional-release",
+            actor_id="owner",
+            target_state="completed",
+        )
+    )
+
+    assert completed.state == "completed"
+    assert workspace.list_gate_waivers("delivery", "exceptional-release") == [waiver]
+    assert workspace.validate().checked["gate-waivers"] == 1
+    waiver_path = Path(waiver.path)
+    waiver_path.write_text(waiver_path.read_text().replace('gate: "completion"', 'gate: "unknown"'))
+    report = workspace.validate()
+    assert any(issue.code == "gate-waiver.gate-missing" for issue in report.issues)
 
 
 def test_prepares_and_launches_a_session_with_actor_runtime_override(

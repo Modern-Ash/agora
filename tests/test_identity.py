@@ -39,6 +39,7 @@ from agora.model import (
     PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
     PrepareEvidenceInput,
+    PrepareGateWaiverInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareSessionInput,
@@ -49,6 +50,7 @@ from agora.model import (
     SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
+    WaiveGateInput,
     WorkActorInput,
 )
 from agora.workspace import AgoraWorkspace
@@ -214,6 +216,94 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     report = workspace.validate()
     assert not report.ok
     assert any(issue.code == "lifecycle-action.invalid" for issue in report.issues)
+
+
+def test_applies_a_signed_granular_gate_waiver(tmp_path: Path, monkeypatch) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    _create_authenticated_work(
+        workspace,
+        private_key,
+        tmp_path,
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="waived-work",
+            title="Authorize a narrow exception",
+            actor_id="owner",
+            acceptance_criteria=[("external-check", "Receive external confirmation")],
+            required_artifacts=["external-report"],
+        ),
+        action_id="create-waived-work",
+    )
+    waiver = WaiveGateInput(
+        id="accepted-external-risk",
+        swarm_id="delivery",
+        work_id="waived-work",
+        gate_id="completion",
+        actor_id="owner",
+        reason="External service is unavailable and product governance accepted the risk",
+        evidence_refs=["repo://risk/external-service.md"],
+        criteria=["external-check"],
+        artifacts=["external-report"],
+        successful_evidence=True,
+        approval_roles=["product-owner"],
+    )
+    with pytest.raises(PermissionError, match="requires a signed lifecycle action"):
+        workspace.waive_gate(waiver)
+
+    stale_transition = workspace.prepare_work_transition(
+        PrepareWorkTransitionInput(
+            id="plan-before-waiver",
+            swarm_id="delivery",
+            work_id="waived-work",
+            actor_id="developer",
+            target_state="planned",
+        )
+    )
+
+    prepared = workspace.prepare_gate_waiver(
+        PrepareGateWaiverInput(action_id="waive-external-risk", waiver=waiver)
+    )
+    payload_path = tmp_path / "gate-waiver.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared.id,
+            output=str(payload_path),
+        )
+    )
+    payload = json.loads(payload_path.read_text(encoding="ascii"))
+    assert payload["kind"] == "gate.waive"
+    assert payload["parameters"]["waiver"] == "accepted-external-risk"
+    signature_path = tmp_path / "gate-waiver.sig"
+    signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
+
+    applied = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=prepared.id, signature=str(signature_path))
+    )
+    persisted = workspace.list_gate_waivers("delivery", "waived-work")
+
+    assert applied.status == "applied"
+    assert persisted[0].action_id == prepared.id
+    assert persisted[0].authorized_by == "project:owner"
+    waiver_path = (
+        root
+        / ".agora"
+        / "swarms"
+        / "delivery"
+        / "work"
+        / "waived-work"
+        / "waivers"
+        / "accepted-external-risk"
+        / "WAIVER.md"
+    )
+    assert waiver_path.is_file()
+    assert workspace.validate().ok
+    with pytest.raises(ValueError, match="precondition digest mismatch"):
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=stale_transition.id,
+                output=str(tmp_path / "stale-transition.json"),
+            )
+        )
 
 
 def test_applies_a_signed_work_decomposition(tmp_path: Path, monkeypatch) -> None:

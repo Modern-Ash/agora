@@ -200,6 +200,24 @@ class WorkRecord:
 
 
 @dataclass(frozen=True)
+class GateWaiverRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    gate_id: str
+    waived_criteria: list[str]
+    waived_artifacts: list[str]
+    waive_successful_evidence: bool
+    waived_approval_roles: list[str]
+    reason: str
+    evidence_refs: list[str]
+    authorized_by: str
+    created_at: str
+    path: str
+    action_id: str | None = None
+
+
+@dataclass(frozen=True)
 class SessionRecord:
     id: str
     actor: str
@@ -970,6 +988,27 @@ class DecomposeWorkInput:
 class PrepareDecomposeWorkInput:
     action_id: str
     decomposition: DecomposeWorkInput
+
+
+@dataclass(frozen=True)
+class WaiveGateInput:
+    id: str
+    swarm_id: str
+    work_id: str
+    gate_id: str
+    actor_id: str
+    reason: str
+    evidence_refs: list[str]
+    criteria: list[str] = field(default_factory=list)
+    artifacts: list[str] = field(default_factory=list)
+    successful_evidence: bool = False
+    approval_roles: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PrepareGateWaiverInput:
+    action_id: str
+    waiver: WaiveGateInput
 
 
 @dataclass(frozen=True)

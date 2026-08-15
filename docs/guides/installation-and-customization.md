@@ -282,6 +282,9 @@ actions according to parent and child authority. See
 Grant `work.decompose` only to roles allowed to materialize same-swarm child contracts. Parent
 closure then remains blocked until every child is terminal or cancelled; see
 [Work decomposition](work-decomposition.md).
+Grant `gate.waive` only to roles allowed to accept residual delivery risk. Waivers remain granular,
+evidence-backed records and do not relax transition, WIP, assignment, child closure, or work-status
+rules; see [Granular Gate Waivers](gate-waivers.md).
 
 ## Customize developer tool integrations
 

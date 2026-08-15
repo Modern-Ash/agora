@@ -139,6 +139,7 @@ Actions currently issued by the CLI are:
 | `artifact.add` | Register a durable output or reference |
 | `evidence.add` | Register a successful or failed result |
 | `approval.add` | Record approval for a named role |
+| `gate.waive` | Waive exact outstanding gate obligations with reason and risk evidence |
 | `handoff.create` | Transfer the role held by the acting actor |
 | `handoff.manage` | Transfer another role under governance authority |
 | `work.delegate` | Propose work through the linked child actor holding the role |
@@ -151,6 +152,8 @@ Actions currently issued by the CLI are:
 | `delegation.cancel` | Close a delegation under parent authority |
 
 A role may combine actions, but projects should grant only the authority required by that role.
+`gate.waive` does not bypass transition edges, role restrictions, WIP limits, child closure, or
+operational status; see the [Gate Waivers guide](../guides/gate-waivers.md).
 Delegation actions require a linked swarm graph in addition to role authority. See the
 [delegated work guide](../guides/delegated-work.md) for the state and attribution rules.
 See [interruptions and cancellation](../guides/interruptions-and-cancellation.md) for operational
