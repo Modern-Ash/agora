@@ -381,8 +381,9 @@ role must grant `actor.runtime.update`; the bundled Scrum and Kanban roles grant
 self-service authority.
 
 Add `--public-key <pem> --require-authentication` when governed operations must be signed by an
-external Ed25519 identity. Planned active-key rotation uses `actor key rotate-prepare`; emergency
-revocation and post-revocation recovery retain separate administrative commands. Public history is
+external Ed25519 identity. Planned active-key rotation uses `actor key rotate-prepare`; independent
+governance actors use `revoke-prepare` and `recover-prepare` for emergency handling. The relevant
+actors must share a swarm and the governance role must grant those actions. Public history is
 inspected through `agora actor key list`; private keys never enter Agora. See
 [Actor authentication](actor-authentication.md).
 

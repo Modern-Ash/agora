@@ -811,6 +811,25 @@ class PrepareActorKeyRotationInput:
 
 
 @dataclass(frozen=True)
+class PrepareActorKeyRevocationInput:
+    action_id: str
+    swarm_id: str
+    target_actor_id: str
+    authorized_by: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepareActorKeyRecoveryInput:
+    action_id: str
+    swarm_id: str
+    target_actor_id: str
+    authorized_by: str
+    public_key: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class RevokeActorKeyInput:
     actor_id: str
     reason: str

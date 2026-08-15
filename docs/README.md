@@ -14,8 +14,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
 - [Actor authentication](guides/actor-authentication.md): bind governed operations to external
-  Ed25519 identities, sign planned key rotation plus agent-session preparation and launch, and
-  preserve public-key rotation and revocation history without storing private keys.
+  Ed25519 identities, sign key rotation, independent revocation and recovery, plus agent-session
+  preparation and launch without storing private keys.
 - [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
   and audit actor administration, work creation, material records, transitions, governance, and
   delegation lifecycles.

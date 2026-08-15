@@ -26,6 +26,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
     PrepareApprovalInput,
@@ -1380,12 +1381,126 @@ def test_rotates_actor_keys_and_rejects_the_previous_signer(tmp_path: Path, monk
 
 
 def test_revokes_and_recovers_an_actor_key(tmp_path: Path, monkeypatch) -> None:
-    _, workspace, _, calls = _authenticated_project(tmp_path, monkeypatch)
-    revoked = workspace.revoke_actor_key(
-        RevokeActorKeyInput(actor_id="developer", reason="Credential exposure")
+    _, workspace, developer_private_key, calls = _authenticated_project(tmp_path, monkeypatch)
+    security_private_key = Ed25519PrivateKey.generate()
+    workspace.add_actor(
+        AddActorInput(
+            id="security",
+            name="Security Governor",
+            kind="human",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+            public_key=str(_write_public_key(security_private_key, tmp_path / "security.pem")),
+            require_authentication=True,
+        )
+    )
+    with pytest.raises(PermissionError, match="distinct cryptographic identity"):
+        workspace.prepare_actor_key_revocation(
+            PrepareActorKeyRevocationInput(
+                action_id="reject-shared-key-authorizer",
+                swarm_id="delivery",
+                target_actor_id="developer",
+                authorized_by="facilitator",
+                reason="A shared key is not independent authority",
+            )
+        )
+    handoff = workspace.prepare_handoff(
+        HandoffActorInput(
+            id="handoff-security-governance",
+            swarm_id="delivery",
+            role_id="scrum-master",
+            from_actor_id="facilitator",
+            to_actor_id="security",
+            authorized_by="facilitator",
+            reason="Assign independent key recovery authority",
+        )
+    )
+    handoff_payload = tmp_path / "security-handoff.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(action_id=handoff.id, output=str(handoff_payload))
+    )
+    handoff_signature = tmp_path / "security-handoff.sig"
+    handoff_signature.write_bytes(developer_private_key.sign(handoff_payload.read_bytes()))
+    workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=handoff.id, signature=str(handoff_signature))
+    )
+
+    with pytest.raises(PermissionError, match="distinct governance actor"):
+        workspace.revoke_actor_key(
+            RevokeActorKeyInput(actor_id="developer", reason="Credential exposure")
+        )
+    with pytest.raises(PermissionError, match="cannot administer its own key"):
+        workspace.prepare_actor_key_revocation(
+            PrepareActorKeyRevocationInput(
+                action_id="reject-self-revocation",
+                swarm_id="delivery",
+                target_actor_id="owner",
+                authorized_by="owner",
+                reason="Self revocation is not independent",
+            )
+        )
+
+    revocation_output = StringIO()
+    assert (
+        cli_main(
+            [
+                "actor",
+                "key",
+                "revoke-prepare",
+                "--id",
+                "revoke-developer-key",
+                "--actor",
+                "developer",
+                "--swarm",
+                "delivery",
+                "--by",
+                "security",
+                "--reason",
+                "Credential exposure",
+            ],
+            cwd=workspace.cwd,
+            stdout=revocation_output,
+        )
+        == 0
+    )
+    revocation = next(
+        action
+        for action in workspace.list_lifecycle_actions("prepared")
+        if action.id == "revoke-developer-key"
+    )
+    governance_role = workspace.cwd / ".agora" / "methods" / "scrum" / "roles" / "scrum-master.md"
+    governance_contents = governance_role.read_text(encoding="utf-8")
+    governance_role.write_text(
+        governance_contents.replace('"actor.key.revoke", ', ""),
+        encoding="utf-8",
+    )
+    with pytest.raises(PermissionError, match="not allowed to perform actor.key.revoke"):
+        workspace.apply_lifecycle_action(ApplyLifecycleActionInput(action_id=revocation.id))
+    governance_role.write_text(governance_contents, encoding="utf-8")
+    revocation_payload = tmp_path / "revocation.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=revocation.id,
+            output=str(revocation_payload),
+        )
+    )
+    revocation_signature = tmp_path / "revocation.sig"
+    revocation_signature.write_bytes(security_private_key.sign(revocation_payload.read_bytes()))
+    applied_revocation = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=revocation.id,
+            signature=str(revocation_signature),
+        )
+    )
+    revoked = next(
+        record
+        for record in workspace.list_actor_keys("developer")
+        if record.fingerprint == revocation.parameters["fingerprint"]
     )
 
     assert revoked.status == "revoked"
+    assert applied_revocation.actor == "project:security"
+    assert revocation.parameters["target"] == "project:developer"
     with pytest.raises(PermissionError, match="authentication key is revoked"):
         workspace.invoke_tool(
             InvokeToolInput(
@@ -1400,12 +1515,64 @@ def test_revokes_and_recovers_an_actor_key(tmp_path: Path, monkeypatch) -> None:
     assert workspace.validate().ok
 
     recovery_private_key = Ed25519PrivateKey.generate()
-    recovered = workspace.rotate_actor_key(
-        RotateActorKeyInput(
-            actor_id="developer",
-            public_key=str(_write_public_key(recovery_private_key, tmp_path / "recovery.pem")),
-            reason="Replace the revoked credential",
+    recovery_path = _write_public_key(recovery_private_key, tmp_path / "recovery.pem")
+    with pytest.raises(PermissionError, match="prepare actor.key.recover"):
+        workspace.rotate_actor_key(
+            RotateActorKeyInput(
+                actor_id="developer",
+                public_key=str(recovery_path),
+                reason="Replace the revoked credential",
+            )
         )
+    recovery_output = StringIO()
+    assert (
+        cli_main(
+            [
+                "actor",
+                "key",
+                "recover-prepare",
+                "--id",
+                "recover-developer-key",
+                "--actor",
+                "developer",
+                "--swarm",
+                "delivery",
+                "--by",
+                "security",
+                "--public-key",
+                str(recovery_path),
+                "--reason",
+                "Replace the revoked credential",
+            ],
+            cwd=workspace.cwd,
+            stdout=recovery_output,
+        )
+        == 0
+    )
+    recovery = next(
+        action
+        for action in workspace.list_lifecycle_actions("prepared")
+        if action.id == "recover-developer-key"
+    )
+    recovery_payload = tmp_path / "recovery.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=recovery.id,
+            output=str(recovery_payload),
+        )
+    )
+    recovery_signature = tmp_path / "recovery.sig"
+    recovery_signature.write_bytes(security_private_key.sign(recovery_payload.read_bytes()))
+    workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=recovery.id,
+            signature=str(recovery_signature),
+        )
+    )
+    recovered = next(
+        record
+        for record in workspace.list_actor_keys("developer")
+        if record.fingerprint == recovery.parameters["fingerprint"]
     )
     actor = next(record for record in workspace.list_actors("project") if record.id == "developer")
     keys = {record.fingerprint: record for record in workspace.list_actor_keys("developer")}

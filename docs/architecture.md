@@ -165,8 +165,9 @@ signature over a prepared lifecycle action, Tool Run, or agent session before ex
 stores only the public key and durable proof, revalidates that proof during workspace validation,
 and never signs on the actor's behalf. Lifecycle actions additionally bind authorization to a digest
 of the work policy files and reapply Method Pack rules before mutation. Planned rotation is itself a
-signed lifecycle action authorized by the current key. Public key rotation and revocation histories
-live beside the actor record; a revoked current key blocks new signed
+signed lifecycle action authorized by the current key; revocation and recovery require another
+authenticated actor with explicit Method Pack authority and a distinct fingerprint. Public key
+histories live beside the actor record; a revoked current key blocks new signed
 operations while historical evidence remains independently verifiable. External CLIs still
 authenticate independently to GitHub, Jira, cloud, or another provider.
 
@@ -221,8 +222,8 @@ bound the direct process by elapsed time and captured output; those values are p
 Run and covered by signed actor authorization. The built-in runner terminates timeout and output
 violations, but does not isolate filesystems, networks, syscalls, resources, credentials, or detached
 descendants. Signed actor authorization currently covers work creation, criteria, artifacts,
-evidence, transitions, interruptions, approvals, handoffs, planned actor key rotations, actor runtime updates, the complete
-delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not yet implement an
-operating-system sandbox, emergency key revocation or recovery authorization by a second identity, or distributed
-leases across separate hosts. Those rules must be added without turning chat history or a
-proprietary service into the source of truth.
+evidence, transitions, interruptions, approvals, handoffs, actor key rotation, independently
+authorized revocation and recovery, actor runtime updates, the complete delegation lifecycle, Tool
+Run launch, and agent-session preparation and launch. Agora does not yet implement an
+operating-system sandbox or distributed leases across separate hosts. Those rules must be added
+without turning chat history or a proprietary service into the source of truth.

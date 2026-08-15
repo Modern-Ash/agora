@@ -97,9 +97,13 @@ agora actor key rotate-prepare --id rotate-payment-developer \
 `actor.key.rotate` binds the current fingerprint, canonical replacement public key, replacement
 fingerprint, and reason. Its precondition covers the actor record, `SWARM.md`, and complete public
 key history. Apply rechecks assignment and Method Pack authority, verifies the signature with the
-old active key, and only then links and activates the replacement. Revocation and recovery are not
-aliases for planned rotation: a revoked key cannot sign a lifecycle action, so those emergency
-operations retain their separate administrative boundary.
+old active key, and only then links and activates the replacement.
+
+Revocation and recovery use `actor.key.revoke` and `actor.key.recover`. Their Lifecycle Action actor
+is a separately assigned governance identity; parameters bind the target actor, affected key,
+reason, and recovery key when present. Preparation rejects self-administration, shared fingerprints,
+unassigned targets, unauthenticated authorizers, and roles without explicit authority. Apply
+rechecks all of those rules before mutation. A revoked target key never authorizes its successor.
 
 ## Prepare a transition
 
@@ -313,7 +317,7 @@ The stale intent remains on disk for audit and cannot be applied.
 ## Extensibility boundary
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
-parameter map. The current kernel accepts planned actor key rotation, actor runtime updates, work
-transitions and interruptions, approvals, handoffs, work creation and material records, session
-preparation, and every delegation lifecycle mutation. Emergency revocation, recovery, and future
+parameter map. The current kernel accepts planned actor key rotation, independent revocation and
+recovery, actor runtime updates, work transitions and interruptions, approvals, handoffs, work
+creation and material records, session preparation, and every delegation lifecycle mutation. Future
 administrative action kinds must keep their domain validation as the source of authority when added.

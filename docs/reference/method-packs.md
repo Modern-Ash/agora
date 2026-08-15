@@ -124,6 +124,8 @@ Actions currently issued by the CLI are:
 
 | Action | CLI operation |
 | --- | --- |
+| `actor.key.recover` | Authorize another assigned actor's replacement after revocation |
+| `actor.key.revoke` | Revoke another assigned actor's active public key |
 | `actor.key.rotate` | Authorize the acting actor's next active public key |
 | `actor.runtime.update` | Change the acting actor's runtime selection |
 | `work.create` | Create a governed work item |

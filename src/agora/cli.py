@@ -32,6 +32,8 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorKeyRecoveryInput,
+    PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
     PrepareApprovalInput,
@@ -448,6 +450,23 @@ def _build_parser() -> argparse.ArgumentParser:
     actor_key_revoke = actor_key.add_parser("revoke", help="Revoke an actor public key")
     actor_key_revoke.add_argument("--actor", required=True)
     actor_key_revoke.add_argument("--reason", required=True)
+    actor_key_revoke_prepare = actor_key.add_parser(
+        "revoke-prepare", help="Prepare governance-authorized actor key revocation"
+    )
+    actor_key_revoke_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
+    actor_key_revoke_prepare.add_argument("--actor", required=True, help="Target actor")
+    actor_key_revoke_prepare.add_argument("--swarm", required=True)
+    actor_key_revoke_prepare.add_argument("--by", required=True, help="Governance authorizer")
+    actor_key_revoke_prepare.add_argument("--reason", required=True)
+    actor_key_recover_prepare = actor_key.add_parser(
+        "recover-prepare", help="Prepare governance-authorized actor key recovery"
+    )
+    actor_key_recover_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
+    actor_key_recover_prepare.add_argument("--actor", required=True, help="Target actor")
+    actor_key_recover_prepare.add_argument("--swarm", required=True)
+    actor_key_recover_prepare.add_argument("--by", required=True, help="Governance authorizer")
+    actor_key_recover_prepare.add_argument("--public-key", required=True)
+    actor_key_recover_prepare.add_argument("--reason", required=True)
     actor_key_list = actor_key.add_parser("list", help="List an actor's public key history")
     actor_key_list.add_argument("--actor", required=True)
 
@@ -1056,6 +1075,27 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         if args.actor_key_command == "revoke":
             return workspace.revoke_actor_key(
                 RevokeActorKeyInput(actor_id=args.actor, reason=args.reason)
+            )
+        if args.actor_key_command == "revoke-prepare":
+            return workspace.prepare_actor_key_revocation(
+                PrepareActorKeyRevocationInput(
+                    action_id=args.id,
+                    swarm_id=args.swarm,
+                    target_actor_id=args.actor,
+                    authorized_by=args.by,
+                    reason=args.reason,
+                )
+            )
+        if args.actor_key_command == "recover-prepare":
+            return workspace.prepare_actor_key_recovery(
+                PrepareActorKeyRecoveryInput(
+                    action_id=args.id,
+                    swarm_id=args.swarm,
+                    target_actor_id=args.actor,
+                    authorized_by=args.by,
+                    public_key=args.public_key,
+                    reason=args.reason,
+                )
             )
         if args.actor_key_command == "list":
             return workspace.list_actor_keys(args.actor)

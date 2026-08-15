@@ -247,8 +247,8 @@ agora action apply --action update-authenticated-runtime \
   --signature /tmp/update-authenticated-runtime.sig
 ```
 
-Authorize a planned rotation with the active key, or revoke and inspect public actor keys without
-replacing historical evidence:
+Authorize planned rotation with the active key. A different authenticated governance actor handles
+revocation and recovery without replacing historical evidence:
 
 ```bash
 agora actor key rotate-prepare --id rotate-authenticated-developer \
@@ -258,12 +258,22 @@ agora action authorization --action rotate-authenticated-developer \
   --output /tmp/rotate-authenticated-developer.json
 agora action apply --action rotate-authenticated-developer \
   --signature /tmp/rotate-authenticated-developer.sig
-agora actor key revoke --actor authenticated-developer --reason "Credential exposure"
+agora actor key revoke-prepare --id revoke-authenticated-developer \
+  --actor authenticated-developer --swarm payments --by security-governor \
+  --reason "Credential exposure"
+agora action authorization --action revoke-authenticated-developer \
+  --output /tmp/revoke-authenticated-developer.json
+agora action apply --action revoke-authenticated-developer \
+  --signature /tmp/revoke-authenticated-developer.sig
+agora actor key recover-prepare --id recover-authenticated-developer \
+  --actor authenticated-developer --swarm payments --by security-governor \
+  --public-key developer-recovery-public.pem --reason "Credential replacement"
 agora actor key list --actor authenticated-developer
 ```
 
-After revocation, `actor key rotate` is the explicit local recovery operation because the revoked
-key cannot authorize a successor.
+The governance authorizer must hold explicit Method Pack authority, be assigned with the target, and
+use a different public-key fingerprint. Recovery follows the same `action authorization` and
+`action apply` steps; the revoked key never authorizes its successor.
 
 In a Git repository, `swarm create` creates `agora/<swarm-id>` by default. Use `--no-branch` to retain
 the current branch. The global `--project <path>` option lets IDEs, runners, and cloud environments
@@ -667,14 +677,13 @@ versioned registry snapshot without persisting a private key.
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
   are implemented.
-- Optional Ed25519 actor authentication protects planned key rotation, actor runtime updates, work
-  creation, criteria, artifacts, evidence, transitions, interruptions, approvals, handoffs, the
-  complete delegation lifecycle, Tool Run launch, and agent-session preparation and launch while
-  leaving private keys external. Public-key rotation and revocation histories are implemented. Tool Packs
-  declare portable direct-process timeouts and captured-output limits. Administrative key-change
-  authorization, filesystem/network/syscall isolation,
-  emergency revocation/recovery authorization, resource quotas, and process-tree containment are
-  not yet covered by that policy.
+- Optional Ed25519 actor authentication protects key rotation, independently authorized revocation
+  and recovery, actor runtime updates, work creation, criteria, artifacts, evidence, transitions,
+  interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and
+  agent-session preparation and launch while leaving private keys external. Public-key rotation and
+  revocation histories are implemented. Tool Packs declare portable direct-process timeouts and
+  captured-output limits. Filesystem/network/syscall isolation, resource quotas, and process-tree
+  containment are not yet covered by that policy.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.
 

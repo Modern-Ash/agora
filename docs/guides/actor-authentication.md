@@ -178,19 +178,42 @@ Reusing any historical fingerprint is rejected.
 
 ## Revoke and recover
 
-Revoke a key when its signer or private material may no longer be trusted:
+Revocation and recovery are authorized by a different authenticated actor. Both actors must be
+assigned to the same swarm, the authorizer's role must grant the corresponding action, and their
+public-key fingerprints must differ. The bundled Scrum Product Owner and Scrum Master roles, plus
+the Kanban Service Request Manager and Flow Manager roles, carry this authority.
+
+Prepare revocation when a signer or its private material may no longer be trusted:
 
 ```bash
-agora actor key revoke \
-  --actor developer \
+agora actor key revoke-prepare --id revoke-developer-key \
+  --actor developer --swarm delivery --by security-governor \
   --reason "Credential exposure under investigation"
+agora action authorization --action revoke-developer-key \
+  --output /tmp/revoke-developer-key.json
+# The governance actor signs these bytes with its own private key.
+agora action apply --action revoke-developer-key \
+  --signature /tmp/revoke-developer-key.sig
 ```
 
 Revocation blocks new Tool Run preparation, lifecycle authorization export, and session launch for
 that actor. It does not invalidate completed operations because each contains its own public
-verification evidence. Recovery is an explicit administrative `actor key rotate` to a new public
-key; the revoked record then links to its replacement without changing its revoked status. Recovery
-cannot use `rotate-prepare` because a revoked key is deliberately unable to authorize its successor.
+verification evidence. Recover through the same independent authorizer:
+
+```bash
+agora actor key recover-prepare --id recover-developer-key \
+  --actor developer --swarm delivery --by security-governor \
+  --public-key developer-recovery-public.pem \
+  --reason "Replace the compromised credential"
+agora action authorization --action recover-developer-key \
+  --output /tmp/recover-developer-key.json
+agora action apply --action recover-developer-key \
+  --signature /tmp/recover-developer-key.sig
+```
+
+The revoked record keeps its revocation reason and links to the recovery fingerprint. The recovery
+reason remains in the signed `ACTION.md`. A revoked key never signs its successor, and an authorizer
+cannot target itself or install its own key as the recovered identity.
 
 Inspect the complete public history with:
 
@@ -204,9 +227,8 @@ current actor state, and replacement references.
 
 ## Current boundary
 
-This authentication policy protects planned active-key rotation, actor runtime updates, work creation, criteria, artifacts,
-evidence, transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool
-Run launch, and agent-session preparation and launch. It does not authenticate the operating-system account running
-Agora. External CLIs still perform their own provider authentication. Emergency revocation and
-post-revocation recovery remain local administrative mutations recorded in Markdown and Git; they
-are not yet authorized by a second actor or remote identity authority.
+This authentication policy protects planned rotation, independent revocation and recovery, actor
+runtime updates, work creation, criteria, artifacts, evidence, transitions, interruptions,
+approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and agent-session
+preparation and launch. It does not authenticate the operating-system account running Agora.
+External CLIs and any higher-order organizational identity authority remain independent.

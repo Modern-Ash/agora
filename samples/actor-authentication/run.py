@@ -19,6 +19,8 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorKeyRecoveryInput,
+    PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
     PrepareApprovalInput,
@@ -28,7 +30,6 @@ from agora.model import (
     PrepareSessionInput,
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
-    RevokeActorKeyInput,
     RotateActorKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -59,6 +60,14 @@ def main() -> None:
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     )
+    facilitator_private_key = Ed25519PrivateKey.generate()
+    facilitator_public_key = runtime / "facilitator-public.pem"
+    facilitator_public_key.write_bytes(
+        facilitator_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
 
     def run_tool(
         command: list[str], cwd: Path, environment: dict[str, str]
@@ -83,6 +92,8 @@ def main() -> None:
             kind="ai-agent",
             capabilities=["facilitation", "governance"],
             scope="project",
+            public_key=str(facilitator_public_key),
+            require_authentication=True,
         ),
         AddActorInput(
             id="developer",
@@ -349,6 +360,75 @@ def main() -> None:
         for key in agora.list_actor_keys("developer")
         if key.fingerprint == key_rotation.parameters["fingerprint"]
     )
+
+    revocation = agora.prepare_actor_key_revocation(
+        PrepareActorKeyRevocationInput(
+            action_id="revoke-developer-key",
+            swarm_id="delivery",
+            target_actor_id="developer",
+            authorized_by="facilitator",
+            reason="Demonstrate independent emergency revocation",
+        )
+    )
+    revocation_payload = runtime / "key-revocation-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=revocation.id,
+            output=str(revocation_payload),
+        )
+    )
+    revocation_signature = runtime / "key-revocation-authorization.sig"
+    revocation_signature.write_bytes(facilitator_private_key.sign(revocation_payload.read_bytes()))
+    applied_revocation = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=revocation.id,
+            signature=str(revocation_signature),
+        )
+    )
+
+    recovery_private_key = Ed25519PrivateKey.generate()
+    recovery_public_key = runtime / "developer-recovery-public.pem"
+    recovery_public_key.write_bytes(
+        recovery_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    recovery = agora.prepare_actor_key_recovery(
+        PrepareActorKeyRecoveryInput(
+            action_id="recover-developer-key",
+            swarm_id="delivery",
+            target_actor_id="developer",
+            authorized_by="facilitator",
+            public_key=str(recovery_public_key),
+            reason="Restore the developer with a separately generated key",
+        )
+    )
+    recovery_payload = runtime / "key-recovery-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=recovery.id,
+            output=str(recovery_payload),
+        )
+    )
+    recovery_signature = runtime / "key-recovery-authorization.sig"
+    recovery_signature.write_bytes(facilitator_private_key.sign(recovery_payload.read_bytes()))
+    applied_recovery = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=recovery.id,
+            signature=str(recovery_signature),
+        )
+    )
+    recovered = next(
+        key
+        for key in agora.list_actor_keys("developer")
+        if key.fingerprint == recovery.parameters["fingerprint"]
+    )
+    revoked = next(
+        key
+        for key in agora.list_actor_keys("developer")
+        if key.fingerprint == replacement.fingerprint
+    )
     prepared_handoff = agora.prepare_handoff(
         HandoffActorInput(
             id="handoff-to-human",
@@ -369,16 +449,12 @@ def main() -> None:
         )
     )
     handoff_signature = runtime / "handoff-authorization.sig"
-    handoff_signature.write_bytes(replacement_private_key.sign(handoff_payload.read_bytes()))
+    handoff_signature.write_bytes(recovery_private_key.sign(handoff_payload.read_bytes()))
     applied_handoff = agora.apply_lifecycle_action(
         ApplyLifecycleActionInput(
             action_id=prepared_handoff.id,
             signature=str(handoff_signature),
         )
-    )
-
-    revoked = agora.revoke_actor_key(
-        RevokeActorKeyInput(actor_id="developer", reason="Demonstrate emergency revocation")
     )
 
     assert completed.authentication_verified
@@ -388,16 +464,20 @@ def main() -> None:
     assert applied_approval.authentication_verified
     assert applied_runtime.authentication_verified
     assert applied_key_rotation.authentication_verified
+    assert applied_revocation.authentication_verified
+    assert applied_recovery.authentication_verified
     assert applied_handoff.authentication_verified
-    assert replacement.fingerprint == revoked.fingerprint
+    assert revoked.status == "revoked"
+    assert revoked.replaced_by == recovered.fingerprint
+    assert recovered.status == "active"
     assert agora.validate().ok
     print(f"Project: {project}")
     print(f"Actor fingerprint: {authorization.fingerprint}")
     print(f"Authorization SHA-256: {authorization.payload_sha256}")
     print(f"Run status: {completed.status}")
     print(f"Session status: {completed_session.status}")
-    print(f"Replacement status: {replacement.status}")
-    print(f"Current status: {revoked.status}")
+    print(f"Revoked fingerprint: {revoked.fingerprint}")
+    print(f"Current status: {recovered.status}")
     print(f"Key records: {len(agora.list_actor_keys('developer'))}")
 
 

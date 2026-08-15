@@ -98,9 +98,10 @@ To act, an actor must:
 
 A **Lifecycle Action** is a prepared mutation intent stored independently from current work state.
 Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
-SHA-256 precondition. Supported kinds cover planned actor key rotations, actor runtime updates, work transitions, work
-interruptions, approvals, handoffs, work creation and material records, session preparation, and the
-complete delegation lifecycle. Existing-work
+SHA-256 precondition. Supported kinds cover planned actor key rotations, independently authorized
+revocation and recovery, actor runtime updates, work transitions, work interruptions, approvals,
+handoffs, work creation and material records, session preparation, and the complete delegation
+lifecycle. Existing-work
 mutations cover the work projection, artifacts, evidence, and approvals on which the mutation
 depends. Work creation instead covers the swarm projection and binds the complete initial work
 definition. Criterion, artifact, and evidence parameters bind their exact durable values.
@@ -131,7 +132,9 @@ Pack authority before updating the actor's optional integration, provider, and m
 A signed actor key rotation binds the old and replacement fingerprints, canonical replacement
 public key, and reason. Its precondition includes the actor, swarm, and complete public key history.
 The old key verifies the action before the replacement becomes active. Revocation and recovery stay
-separate because a revoked key cannot provide continuity evidence.
+separate because a revoked key cannot provide continuity evidence. A different authenticated actor
+must hold explicit Method Pack authority, share the target's swarm, and use a distinct fingerprint.
+The signed action binds the target, current key, reason, and recovery key when present.
 
 Applying the action rechecks the precondition, current actor assignment, Method Pack transition,
 role authority, WIP limit, gate, and active public key before changing `WORK.md`. Authenticated

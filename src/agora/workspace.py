@@ -108,6 +108,8 @@ from agora.model import (
     PackUpdateHistoryRecord,
     PackUpdateResult,
     PackUpdateStep,
+    PrepareActorKeyRecoveryInput,
+    PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
     PrepareApprovalInput,
@@ -1779,10 +1781,15 @@ class AgoraWorkspace:
         actor = self._find_actor(root, data.actor_id)
         if actor.authentication_fingerprint is None:
             raise ValueError(f"Actor {actor.reference} has no authentication key to rotate")
-        if actor.authentication_required and actor.authentication_revoked_at is None:
+        if actor.authentication_required:
+            action = (
+                "actor.key.recover"
+                if actor.authentication_revoked_at is not None
+                else "actor.key.rotate"
+            )
             raise PermissionError(
                 f"Actor {actor.reference} requires a signed lifecycle action; "
-                "prepare actor.key.rotate before replacing its active key"
+                f"prepare {action} before replacing its key"
             )
         current = self._ensure_current_actor_key(actor)
         created_at = self._timestamp()
@@ -1830,6 +1837,113 @@ class AgoraWorkspace:
                 "reason": data.rotation.reason.strip(),
             },
         )
+
+    @_locked_mutation("project")
+    def prepare_actor_key_revocation(
+        self, data: PrepareActorKeyRevocationInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if not data.reason.strip():
+            raise ValueError("Actor key revocation reason cannot be empty")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        authorizer, target, current = self._validate_actor_key_administrator(
+            root,
+            swarm,
+            target_actor_id=data.target_actor_id,
+            authorized_by=data.authorized_by,
+            action="actor.key.revoke",
+            target_must_be_revoked=False,
+        )
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="actor.key.revoke",
+            actor=authorizer,
+            swarm=swarm,
+            work=None,
+            parameters={
+                "target": target.reference,
+                "fingerprint": current.fingerprint,
+                "reason": data.reason.strip(),
+            },
+        )
+
+    @_locked_mutation("project")
+    def prepare_actor_key_recovery(
+        self, data: PrepareActorKeyRecoveryInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if not data.reason.strip():
+            raise ValueError("Actor key recovery reason cannot be empty")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        authorizer, target, current = self._validate_actor_key_administrator(
+            root,
+            swarm,
+            target_actor_id=data.target_actor_id,
+            authorized_by=data.authorized_by,
+            action="actor.key.recover",
+            target_must_be_revoked=True,
+        )
+        replacement = actor_key_from_pem(
+            target.reference,
+            Path(data.public_key).expanduser().resolve(),
+            self._actor_key_root(target),
+            self._timestamp(),
+        )
+        self._validate_actor_key_replacement(current, replacement)
+        if replacement.fingerprint == authorizer.authentication_fingerprint:
+            raise ValueError("Recovery key must differ from the governance authorizer key")
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="actor.key.recover",
+            actor=authorizer,
+            swarm=swarm,
+            work=None,
+            parameters={
+                "target": target.reference,
+                "from": current.fingerprint,
+                "public-key": replacement.public_key,
+                "fingerprint": replacement.fingerprint,
+                "reason": data.reason.strip(),
+            },
+        )
+
+    def _validate_actor_key_administrator(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        *,
+        target_actor_id: str,
+        authorized_by: str,
+        action: str,
+        target_must_be_revoked: bool,
+    ) -> tuple[ActorRecord, ActorRecord, ActorKeyRecord]:
+        authorizer = self._require_actor_for_action(root, swarm, authorized_by, action)
+        if not authorizer.authentication_required:
+            raise PermissionError(
+                f"Actor key administrator {authorizer.reference} must require authentication"
+            )
+        assert_actor_identity_available(authorizer)
+        self._assert_current_actor_key(authorizer)
+        target = self._find_actor(root, target_actor_id)
+        if target.reference not in swarm.assignments.values():
+            raise ValueError(f"Actor {target.reference} is not assigned to swarm {swarm.id}")
+        if target.reference == authorizer.reference:
+            raise PermissionError("An actor cannot administer its own key revocation or recovery")
+        if target.authentication_fingerprint is None:
+            raise ValueError(f"Actor {target.reference} has no authentication key")
+        if target.authentication_fingerprint == authorizer.authentication_fingerprint:
+            raise PermissionError(
+                "Actor key administrator must use a distinct cryptographic identity"
+            )
+        is_revoked = target.authentication_revoked_at is not None
+        if is_revoked != target_must_be_revoked:
+            expected = "revoked" if target_must_be_revoked else "active"
+            raise ValueError(f"Actor authentication key must be {expected}: {target.reference}")
+        return authorizer, target, self._ensure_current_actor_key(target)
 
     @staticmethod
     def _validate_actor_key_replacement(
@@ -1891,21 +2005,35 @@ class AgoraWorkspace:
         actor = self._find_actor(root, data.actor_id)
         if actor.authentication_fingerprint is None:
             raise ValueError(f"Actor {actor.reference} has no authentication key to revoke")
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare actor.key.revoke through a distinct governance actor"
+            )
         if actor.authentication_revoked_at is not None:
             raise ValueError(f"Actor authentication key is already revoked: {actor.reference}")
         current = self._ensure_current_actor_key(actor)
+        return self._apply_actor_key_revocation(root, actor, current, data.reason)
+
+    def _apply_actor_key_revocation(
+        self,
+        root: Path,
+        actor: ActorRecord,
+        current: ActorKeyRecord,
+        reason: str,
+    ) -> ActorKeyRecord:
         revoked_at = self._timestamp()
         revoked = end_actor_key(
             current,
             status="revoked",
             ended_at=revoked_at,
-            reason=data.reason,
+            reason=reason,
         )
         atomic_write(Path(revoked.path), render_actor_key(revoked))
         actor_path = Path(actor.path)
         document = read_markdown(actor_path)
         document.attributes["authentication-revoked-at"] = revoked_at
-        document.attributes["authentication-revoked-reason"] = data.reason.strip()
+        document.attributes["authentication-revoked-reason"] = reason.strip()
         atomic_write(actor_path, render_markdown(document))
         self._append_actor_event(
             root,
@@ -2828,6 +2956,10 @@ class AgoraWorkspace:
         actor_key_rotation_context: (
             tuple[ActorRecord, ActorKeyRecord, ActorKeyRecord, str] | None
         ) = None
+        actor_key_revocation_context: tuple[ActorRecord, ActorKeyRecord, str] | None = None
+        actor_key_recovery_context: (
+            tuple[ActorRecord, ActorKeyRecord, ActorKeyRecord, str] | None
+        ) = None
         actor_runtime_context: tuple[SetActorRuntimeInput, ActorRecord] | None = None
         session_preparation_context: (
             tuple[
@@ -2850,7 +2982,47 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
-        if record.action == "actor.key.rotate":
+        if record.action in {"actor.key.recover", "actor.key.revoke"}:
+            swarm = self._load_swarm(root, record.swarm_id)
+            actor, target, current = self._validate_actor_key_administrator(
+                root,
+                swarm,
+                target_actor_id=record.parameters["target"],
+                authorized_by=record.actor,
+                action=record.action,
+                target_must_be_revoked=record.action == "actor.key.recover",
+            )
+            expected_fingerprint = record.parameters.get(
+                "from", record.parameters.get("fingerprint")
+            )
+            if current.fingerprint != expected_fingerprint:
+                raise ValueError(f"Lifecycle Action target actor key is not canonical: {record.id}")
+            work = None
+            if record.action == "actor.key.revoke":
+                actor_key_revocation_context = (
+                    target,
+                    current,
+                    record.parameters["reason"],
+                )
+            else:
+                replacement = actor_key_from_public_key(
+                    target.reference,
+                    record.parameters["public-key"],
+                    self._actor_key_root(target),
+                    self._timestamp(),
+                )
+                if replacement.fingerprint != record.parameters["fingerprint"]:
+                    raise ValueError(f"Lifecycle Action recovery key is not canonical: {record.id}")
+                self._validate_actor_key_replacement(current, replacement)
+                if replacement.fingerprint == actor.authentication_fingerprint:
+                    raise ValueError("Recovery key must differ from the governance authorizer key")
+                actor_key_recovery_context = (
+                    target,
+                    current,
+                    replacement,
+                    record.parameters["reason"],
+                )
+        elif record.action == "actor.key.rotate":
             swarm = self._load_swarm(root, record.swarm_id)
             actor = self._require_actor_for_action(root, swarm, record.actor, "actor.key.rotate")
             assert_actor_identity_available(actor)
@@ -3138,7 +3310,15 @@ class AgoraWorkspace:
                 actor, record, Path(data.signature).expanduser().resolve()
             )
 
-        if record.action == "actor.key.rotate":
+        if record.action == "actor.key.revoke":
+            assert actor_key_revocation_context is not None
+            target, current, reason = actor_key_revocation_context
+            self._apply_actor_key_revocation(root, target, current, reason)
+        elif record.action == "actor.key.recover":
+            assert actor_key_recovery_context is not None
+            target, current, replacement, reason = actor_key_recovery_context
+            self._apply_actor_key_rotation(root, target, current, replacement, reason)
+        elif record.action == "actor.key.rotate":
             assert actor_key_rotation_context is not None
             actor, current, replacement, reason = actor_key_rotation_context
             self._apply_actor_key_rotation(root, actor, current, replacement, reason)
@@ -6104,8 +6284,12 @@ class AgoraWorkspace:
                                 Path(work.path) / "WORK.md",
                                 "Work record differs from its applied Lifecycle Action",
                             )
-            if action.action == "actor.key.rotate" and action_actor is not None:
-                key_root = self._actor_key_root(action_actor)
+            if action.action in {"actor.key.recover", "actor.key.rotate"}:
+                target_reference = action.parameters.get("target", action.actor)
+                target_actor = resolve_actor(target_reference, path)
+                if target_actor is None:
+                    continue
+                key_root = self._actor_key_root(target_actor)
                 replacement_path = key_root / f"{action.parameters['fingerprint']}.md"
                 previous_path = key_root / f"{action.parameters['from']}.md"
                 if action.status == "prepared" and replacement_path.exists():
@@ -6122,15 +6306,41 @@ class AgoraWorkspace:
                         issue("lifecycle-action.actor-key-invalid", path, str(error))
                     else:
                         if (
-                            replacement.actor != action.actor
+                            replacement.actor != target_reference
                             or replacement.public_key != action.parameters["public-key"]
                             or replacement.fingerprint != action.parameters["fingerprint"]
                             or previous.replaced_by != replacement.fingerprint
-                            or previous.reason != action.parameters["reason"]
+                            or (
+                                action.action == "actor.key.rotate"
+                                and previous.reason != action.parameters["reason"]
+                            )
                         ):
                             issue(
                                 "lifecycle-action.actor-key-mismatch",
                                 replacement_path,
+                                "Actor key history differs from its applied Lifecycle Action",
+                            )
+            if action.action == "actor.key.revoke":
+                target_actor = resolve_actor(action.parameters["target"], path)
+                if target_actor is None:
+                    continue
+                key_path = (
+                    self._actor_key_root(target_actor) / f"{action.parameters['fingerprint']}.md"
+                )
+                if action.status == "applied":
+                    try:
+                        revoked = load_actor_key(key_path)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.actor-key-invalid", path, str(error))
+                    else:
+                        if (
+                            revoked.actor != action.parameters["target"]
+                            or revoked.status != "revoked"
+                            or revoked.reason != action.parameters["reason"]
+                        ):
+                            issue(
+                                "lifecycle-action.actor-key-mismatch",
+                                key_path,
                                 "Actor key history differs from its applied Lifecycle Action",
                             )
             if action.action == "session.prepare":
@@ -6632,10 +6842,14 @@ class AgoraWorkspace:
             action_id = getattr(data, "action_id", None)
             action = self._load_lifecycle_action(root / ".agora" / "actions" / str(action_id))
             if action.action in {
+                "actor.key.recover",
+                "actor.key.revoke",
                 "actor.key.rotate",
                 "actor.runtime.update",
-            } and action.actor.startswith("user:"):
-                return (root, agora_home())
+            }:
+                target = action.parameters.get("target", action.actor)
+                if target.startswith("user:"):
+                    return (root, agora_home())
             return (root,)
         if scope in {"registry-update", "pack-update"}:
             requested_scope = getattr(data, "scope", None)
@@ -7528,19 +7742,32 @@ class AgoraWorkspace:
             digest.update(swarm_path.read_bytes())
             digest.update(b"\0")
             return digest.hexdigest()
-        if action in {"actor.key.rotate", "actor.runtime.update"}:
+        if action in {
+            "actor.key.recover",
+            "actor.key.revoke",
+            "actor.key.rotate",
+            "actor.runtime.update",
+        }:
+            target = (
+                self._find_actor(root, parameters["target"])
+                if action in {"actor.key.recover", "actor.key.revoke"}
+                else actor
+            )
             digest = hashlib.sha256()
-            for label, path in (
-                ("actor", Path(actor.path)),
+            policy_paths = [
+                ("authorizer", Path(actor.path)),
                 ("swarm", Path(swarm.path) / "SWARM.md"),
-            ):
+            ]
+            if target.reference != actor.reference:
+                policy_paths.append(("target", Path(target.path)))
+            for label, path in policy_paths:
                 if not path.is_file():
                     raise FileNotFoundError(f"Actor policy document is missing: {path}")
                 digest.update(f"{label}\0".encode("ascii"))
                 digest.update(path.read_bytes())
                 digest.update(b"\0")
-            if action == "actor.key.rotate":
-                for path in sorted(self._actor_key_root(actor).glob("*.md")):
+            if action != "actor.runtime.update":
+                for path in sorted(self._actor_key_root(target).glob("*.md")):
                     digest.update(b"actor-key\0")
                     digest.update(path.name.encode("ascii"))
                     digest.update(b"\0")
@@ -7676,6 +7903,8 @@ class AgoraWorkspace:
         _assert_schema(document, "agora/lifecycle-action/v1", path / "ACTION.md")
         action = string_attribute(document.attributes, "action")
         if action not in {
+            "actor.key.recover",
+            "actor.key.revoke",
             "actor.key.rotate",
             "actor.runtime.update",
             "approval.add",
@@ -7705,6 +7934,14 @@ class AgoraWorkspace:
         if any(not isinstance(value, str) for value in parameters.values()):
             raise ValueError(f"Lifecycle Action parameters must contain string values: {path}")
         expected_parameters = {
+            "actor.key.recover": {
+                "target",
+                "from",
+                "public-key",
+                "fingerprint",
+                "reason",
+            },
+            "actor.key.revoke": {"target", "fingerprint", "reason"},
             "actor.key.rotate": {"from", "public-key", "fingerprint", "reason"},
             "actor.runtime.update": {"integration", "provider", "model", "clear"},
             "approval.add": {"role", "note"},
@@ -7742,20 +7979,29 @@ class AgoraWorkspace:
         }[action]
         if set(parameters) != expected_parameters:
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
-        if action == "actor.key.rotate":
-            for key in ("from", "fingerprint"):
+        if action in {"actor.key.recover", "actor.key.revoke", "actor.key.rotate"}:
+            fingerprint_keys = (
+                ("fingerprint",) if action == "actor.key.revoke" else ("from", "fingerprint")
+            )
+            for key in fingerprint_keys:
                 if re.fullmatch(r"[0-9a-f]{64}", parameters[key]) is None:
                     raise ValueError(f"Lifecycle Action has invalid actor key fingerprint: {path}")
-            replacement = actor_key_from_public_key(
-                "project:validation",
-                parameters["public-key"],
-                Path("."),
-                "validation",
-            )
-            if replacement.fingerprint != parameters["fingerprint"]:
-                raise ValueError(f"Lifecycle Action actor key fingerprint mismatch: {path}")
+            if action != "actor.key.revoke":
+                replacement = actor_key_from_public_key(
+                    "project:validation",
+                    parameters["public-key"],
+                    Path("."),
+                    "validation",
+                )
+                if replacement.fingerprint != parameters["fingerprint"]:
+                    raise ValueError(f"Lifecycle Action actor key fingerprint mismatch: {path}")
             if not parameters["reason"].strip():
                 raise ValueError(f"Lifecycle Action actor key reason cannot be empty: {path}")
+            if (
+                action in {"actor.key.recover", "actor.key.revoke"}
+                and ":" not in parameters["target"]
+            ):
+                raise ValueError(f"Lifecycle Action target actor must be scoped: {path}")
         if action == "actor.runtime.update":
             if parameters["integration"] and parameters["integration"] not in INTEGRATIONS:
                 raise ValueError(f"Lifecycle Action has invalid runtime integration: {path}")
@@ -7902,6 +8148,8 @@ class AgoraWorkspace:
         if (
             action
             not in {
+                "actor.key.recover",
+                "actor.key.revoke",
                 "actor.key.rotate",
                 "actor.runtime.update",
                 "handoff.create",
