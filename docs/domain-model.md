@@ -21,6 +21,11 @@ An **Actor** has an identity, kind, and capabilities. Kinds include human, AI ag
 and automation. A **Role** declares required capabilities, allowed actor kinds, and allowed actions.
 An **Assignment** temporarily links an actor to a role within a swarm.
 
+Direct assignment bootstraps a forming swarm and can only fill a vacant role. Once a governance
+actor is present, `swarm.assign` offers a signed path for remaining vacancies and binds authorizer,
+target, role, and current swarm projection. Occupied roles can only change through a handoff, which
+preserves both identities and the reason.
+
 An actor may also declare an Ed25519 public identity and require authentication for supported
 lifecycle actions, Tool Run launch, and agent-session preparation and launch. Canonical
 authorizations bind the actor to one exact prepared operation. The external signer holds the private key; applied records

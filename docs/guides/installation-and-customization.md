@@ -387,6 +387,10 @@ actors must share a swarm and the governance role must grant those actions. Publ
 inspected through `agora actor key list`; private keys never enter Agora. See
 [Actor authentication](actor-authentication.md).
 
+Use direct `swarm assign` only to fill bootstrap vacancies. After assigning a governance actor, use
+`swarm assign-prepare` for auditable additions authorized by `swarm.assign`. Neither command replaces
+an occupied role; use a governed handoff for every responsibility change.
+
 Responsibility can move from a human to an AI agent or swarm by registering the receiver and using a
 governed handoff:
 

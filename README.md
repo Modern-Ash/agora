@@ -206,6 +206,20 @@ agora swarm assign --swarm payments --role scrum-master --actor facilitator
 agora swarm assign --swarm payments --role developer --actor delivery-swarm
 ```
 
+Direct assignment bootstraps vacant roles. Once a governance actor is assigned, remaining roles can
+be authorized through a durable Lifecycle Action:
+
+```bash
+agora swarm assign-prepare --id assign-payments-developer \
+  --swarm payments --role developer --actor delivery-swarm --by user:owner
+agora action authorization --action assign-payments-developer \
+  --output /tmp/assign-payments-developer.json
+agora action apply --action assign-payments-developer \
+  --signature /tmp/assign-payments-developer.sig
+```
+
+Assignments never overwrite an occupied role; use a governed handoff for replacement.
+
 An actor may bind its identity to an external Ed25519 key and require signed authorization before
 applying supported lifecycle mutations or launching a Tool Run:
 
@@ -678,8 +692,8 @@ versioned registry snapshot without persisting a private key.
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
   are implemented.
 - Optional Ed25519 actor authentication protects key rotation, independently authorized revocation
-  and recovery, actor runtime updates, work creation, criteria, artifacts, evidence, transitions,
-  interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and
+  and recovery, actor runtime updates, vacant-role assignment, work creation, criteria, artifacts,
+  evidence, transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and
   agent-session preparation and launch while leaving private keys external. Public-key rotation and
   revocation histories are implemented. Tool Packs declare portable direct-process timeouts and
   captured-output limits. Filesystem/network/syscall isolation, resource quotas, and process-tree

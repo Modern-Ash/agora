@@ -19,6 +19,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorAssignmentInput,
     PrepareActorKeyRecoveryInput,
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
@@ -116,12 +117,45 @@ def main() -> None:
     agora.create_swarm(
         CreateSwarmInput(id="delivery", objective="Execute signed work", create_branch=False)
     )
-    for role, actor_id in (
-        ("product-owner", "owner"),
-        ("scrum-master", "facilitator"),
-        ("developer", "developer"),
+    agora.assign_actor(
+        AssignActorInput(
+            swarm_id="delivery",
+            role_id="scrum-master",
+            actor_id="facilitator",
+        )
+    )
+    for action_id, role, actor_id in (
+        ("assign-product-owner", "product-owner", "owner"),
+        ("assign-developer", "developer", "developer"),
     ):
-        agora.assign_actor(AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor_id))
+        assignment = agora.prepare_actor_assignment(
+            PrepareActorAssignmentInput(
+                action_id=action_id,
+                assignment=AssignActorInput(
+                    swarm_id="delivery",
+                    role_id=role,
+                    actor_id=actor_id,
+                ),
+                authorized_by="facilitator",
+            )
+        )
+        assignment_payload = runtime / f"{action_id}.json"
+        agora.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=assignment.id,
+                output=str(assignment_payload),
+            )
+        )
+        assignment_signature = runtime / f"{action_id}.sig"
+        assignment_signature.write_bytes(
+            facilitator_private_key.sign(assignment_payload.read_bytes())
+        )
+        agora.apply_lifecycle_action(
+            ApplyLifecycleActionInput(
+                action_id=assignment.id,
+                signature=str(assignment_signature),
+            )
+        )
 
     prepared_work = agora.prepare_create_work(
         PrepareCreateWorkInput(

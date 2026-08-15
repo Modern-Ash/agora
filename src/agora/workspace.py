@@ -108,6 +108,7 @@ from agora.model import (
     PackUpdateHistoryRecord,
     PackUpdateResult,
     PackUpdateStep,
+    PrepareActorAssignmentInput,
     PrepareActorKeyRecoveryInput,
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
@@ -2179,15 +2180,58 @@ class AgoraWorkspace:
 
     @_locked_mutation("project")
     def assign_actor(self, data: AssignActorInput) -> SwarmRecord:
-        assert_slug(data.role_id, "Role id")
         root = self.project_root()
+        swarm, actor = self._validate_actor_assignment(root, data)
+        return self._apply_actor_assignment(root, swarm, actor, data.role_id)
+
+    @_locked_mutation("project")
+    def prepare_actor_assignment(self, data: PrepareActorAssignmentInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor = self._validate_actor_assignment(root, data.assignment)
+        authorizer = self._require_actor_for_action(root, swarm, data.authorized_by, "swarm.assign")
+        assert_actor_identity_available(authorizer)
+        self._assert_current_actor_key(authorizer)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="swarm.assign",
+            actor=authorizer,
+            swarm=swarm,
+            work=None,
+            parameters={
+                "role": data.assignment.role_id,
+                "target": actor.reference,
+            },
+        )
+
+    def _validate_actor_assignment(
+        self, root: Path, data: AssignActorInput
+    ) -> tuple[SwarmRecord, ActorRecord]:
+        assert_slug(data.role_id, "Role id")
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"forming", "ready"}:
             raise ValueError(f"Cannot change assignments while swarm {swarm.id} is {swarm.status}")
+        if data.role_id not in swarm.required_roles:
+            raise ValueError(f"Role {data.role_id} is not required by swarm {swarm.id}")
+        if data.role_id in swarm.assignments:
+            raise ValueError(
+                f"Role {data.role_id} is already assigned in swarm {swarm.id}; use a handoff"
+            )
         actor = self._find_actor(root, data.actor_id)
         self._assert_actor_role_compatibility(root, swarm.method, data.role_id, actor)
         self._assert_swarm_actor_delegation(root, swarm, data.role_id, actor)
-        swarm.assignments[data.role_id] = actor.reference
+        return swarm, actor
+
+    def _apply_actor_assignment(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        role_id: str,
+        action_id: str | None = None,
+    ) -> SwarmRecord:
+        swarm.assignments[role_id] = actor.reference
         swarm.status = (
             "ready"
             if all(role_id in swarm.assignments for role_id in swarm.required_roles)
@@ -2198,7 +2242,8 @@ class AgoraWorkspace:
             root,
             swarm.id,
             "swarm.actor-assigned",
-            f"role={data.role_id} actor={actor.reference}",
+            f"role={role_id} actor={actor.reference}"
+            + (f" action={action_id}" if action_id is not None else ""),
         )
         return swarm
 
@@ -2961,6 +3006,7 @@ class AgoraWorkspace:
             tuple[ActorRecord, ActorKeyRecord, ActorKeyRecord, str] | None
         ) = None
         actor_runtime_context: tuple[SetActorRuntimeInput, ActorRecord] | None = None
+        actor_assignment_context: tuple[SwarmRecord, ActorRecord, str] | None = None
         session_preparation_context: (
             tuple[
                 StartSessionInput,
@@ -2982,7 +3028,17 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
-        if record.action in {"actor.key.recover", "actor.key.revoke"}:
+        if record.action == "swarm.assign":
+            assignment = AssignActorInput(
+                swarm_id=record.swarm_id,
+                role_id=record.parameters["role"],
+                actor_id=record.parameters["target"],
+            )
+            swarm, target = self._validate_actor_assignment(root, assignment)
+            actor = self._require_actor_for_action(root, swarm, record.actor, "swarm.assign")
+            work = None
+            actor_assignment_context = (swarm, target, assignment.role_id)
+        elif record.action in {"actor.key.recover", "actor.key.revoke"}:
             swarm = self._load_swarm(root, record.swarm_id)
             actor, target, current = self._validate_actor_key_administrator(
                 root,
@@ -3310,7 +3366,11 @@ class AgoraWorkspace:
                 actor, record, Path(data.signature).expanduser().resolve()
             )
 
-        if record.action == "actor.key.revoke":
+        if record.action == "swarm.assign":
+            assert actor_assignment_context is not None
+            swarm, target, role_id = actor_assignment_context
+            self._apply_actor_assignment(root, swarm, target, role_id, record.id)
+        elif record.action == "actor.key.revoke":
             assert actor_key_revocation_context is not None
             target, current, reason = actor_key_revocation_context
             self._apply_actor_key_revocation(root, target, current, reason)
@@ -7742,6 +7802,20 @@ class AgoraWorkspace:
             digest.update(swarm_path.read_bytes())
             digest.update(b"\0")
             return digest.hexdigest()
+        if action == "swarm.assign":
+            target = self._find_actor(root, parameters["target"])
+            digest = hashlib.sha256()
+            for label, path in (
+                ("authorizer", Path(actor.path)),
+                ("target", Path(target.path)),
+                ("swarm", Path(swarm.path) / "SWARM.md"),
+            ):
+                if not path.is_file():
+                    raise FileNotFoundError(f"Assignment policy document is missing: {path}")
+                digest.update(f"{label}\0".encode("ascii"))
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+            return digest.hexdigest()
         if action in {
             "actor.key.recover",
             "actor.key.revoke",
@@ -7920,6 +7994,7 @@ class AgoraWorkspace:
             "evidence.add",
             "handoff.create",
             "session.prepare",
+            "swarm.assign",
             "work.block",
             "work.cancel",
             "work.resume",
@@ -7966,6 +8041,7 @@ class AgoraWorkspace:
             "evidence.add": {"type", "result", "artifacts"},
             "handoff.create": {"role", "from", "to", "reason"},
             "session.prepare": {"session", "runner"},
+            "swarm.assign": {"role", "target"},
             "work.block": {"reason"},
             "work.cancel": {"reason"},
             "work.resume": {"reason"},
@@ -8021,6 +8097,10 @@ class AgoraWorkspace:
                 )
         if action == "session.prepare":
             assert_slug(parameters["session"], "Lifecycle Action session id")
+        if action == "swarm.assign":
+            assert_slug(parameters["role"], "Lifecycle Action assignment role")
+            if ":" not in parameters["target"]:
+                raise ValueError(f"Lifecycle Action target actor must be scoped: {path}")
         if action.startswith("delegation."):
             assert_slug(parameters["delegation"], "Lifecycle Action delegation id")
         if action == "delegation.create":
@@ -8154,6 +8234,7 @@ class AgoraWorkspace:
                 "actor.runtime.update",
                 "handoff.create",
                 "session.prepare",
+                "swarm.assign",
             }
             and work_id is None
         ):

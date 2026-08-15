@@ -228,7 +228,7 @@ current actor state, and replacement references.
 ## Current boundary
 
 This authentication policy protects planned rotation, independent revocation and recovery, actor
-runtime updates, work creation, criteria, artifacts, evidence, transitions, interruptions,
-approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and agent-session
+runtime updates, vacant-role assignment, work creation, criteria, artifacts, evidence, transitions,
+interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and agent-session
 preparation and launch. It does not authenticate the operating-system account running Agora.
 External CLIs and any higher-order organizational identity authority remain independent.

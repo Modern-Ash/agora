@@ -26,6 +26,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorAssignmentInput,
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
@@ -269,6 +270,82 @@ def test_authenticated_actor_signs_its_runtime_change(tmp_path: Path, monkeypatc
     assert "actor.runtime-updated | actor=project:developer" in (
         root / ".agora" / "events.md"
     ).read_text(encoding="utf-8")
+
+
+def test_governance_actor_signs_a_vacant_swarm_assignment(tmp_path: Path, monkeypatch) -> None:
+    _, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    workspace.create_swarm(
+        CreateSwarmInput(id="staffing", objective="Authorize role composition", create_branch=False)
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="staffing", role_id="scrum-master", actor_id="facilitator")
+    )
+
+    with pytest.raises(ValueError, match="already assigned.*use a handoff"):
+        workspace.assign_actor(
+            AssignActorInput(
+                swarm_id="staffing",
+                role_id="scrum-master",
+                actor_id="facilitator",
+            )
+        )
+
+    prepared = workspace.prepare_actor_assignment(
+        PrepareActorAssignmentInput(
+            action_id="assign-staffing-owner",
+            assignment=AssignActorInput(
+                swarm_id="staffing",
+                role_id="product-owner",
+                actor_id="owner",
+            ),
+            authorized_by="facilitator",
+        )
+    )
+    assert prepared.action == "swarm.assign"
+    assert prepared.parameters == {
+        "role": "product-owner",
+        "target": "project:owner",
+    }
+    payload = tmp_path / "assignment.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(action_id=prepared.id, output=str(payload))
+    )
+    signature = tmp_path / "assignment.sig"
+    signature.write_bytes(private_key.sign(payload.read_bytes()))
+    applied = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=prepared.id, signature=str(signature))
+    )
+
+    swarm = workspace.show_swarm("staffing")
+    assert applied.authentication_verified is True
+    assert swarm.assignments["product-owner"] == "project:owner"
+    assert "action=assign-staffing-owner" in (Path(swarm.path) / "events.md").read_text(
+        encoding="utf-8"
+    )
+    output = StringIO()
+    assert (
+        cli_main(
+            [
+                "swarm",
+                "assign-prepare",
+                "--id",
+                "assign-staffing-developer",
+                "--swarm",
+                "staffing",
+                "--role",
+                "developer",
+                "--actor",
+                "developer",
+                "--by",
+                "facilitator",
+            ],
+            cwd=workspace.cwd,
+            stdout=output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue())["action"] == "swarm.assign"
+    assert workspace.validate().ok
 
 
 def test_signed_actor_runtime_change_rechecks_actor_and_method_policy(

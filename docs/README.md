@@ -17,8 +17,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   Ed25519 identities, sign key rotation, independent revocation and recovery, plus agent-session
   preparation and launch without storing private keys.
 - [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
-  and audit actor administration, work creation, material records, transitions, governance, and
-  delegation lifecycles.
+  and audit actor administration, swarm composition, work creation, material records, transitions,
+  governance, and delegation lifecycles.
 - [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct
   process timeouts and captured-output limits without claiming operating-system isolation.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native

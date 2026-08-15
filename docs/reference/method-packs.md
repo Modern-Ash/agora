@@ -128,6 +128,7 @@ Actions currently issued by the CLI are:
 | `actor.key.revoke` | Revoke another assigned actor's active public key |
 | `actor.key.rotate` | Authorize the acting actor's next active public key |
 | `actor.runtime.update` | Change the acting actor's runtime selection |
+| `swarm.assign` | Assign a compatible actor to a vacant swarm role |
 | `work.create` | Create a governed work item |
 | `work.transition` | Traverse an allowed transition edge |
 | `work.block` | Suspend mutations without changing method state |

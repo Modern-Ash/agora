@@ -3,8 +3,8 @@
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
 current work projection. The supported mutations are `actor.key.rotate`, `actor.runtime.update`, `work.transition`,
 `work.block`, `work.resume`, `work.cancel`, `work.create`, `criterion.satisfy`, `artifact.add`,
-`evidence.add`, `approval.add`, `handoff.create`, session preparation, and the complete delegation
-lifecycle. Their durable intents live at
+`evidence.add`, `approval.add`, `swarm.assign`, `handoff.create`, session preparation, and the
+complete delegation lifecycle. Their durable intents live at
 `.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
@@ -168,6 +168,23 @@ reason. Its precondition covers `SWARM.md`, where assignments live, plus the wor
 `--work` is present. Agora rechecks actor compatibility, represented-swarm constraints, current
 assignment, and either `handoff.create` or `handoff.manage` authority before changing the role.
 
+## Prepare a vacant role assignment
+
+Direct `swarm assign` is the explicit bootstrap operation for a forming swarm. Once a governance
+actor is assigned, it can authorize the remaining vacant roles:
+
+```bash
+agora swarm assign-prepare --id assign-payment-developer \
+  --swarm payments --role developer --actor authenticated-developer \
+  --by authenticated-owner
+```
+
+`swarm.assign` binds the vacant role and canonical target actor. Its precondition covers the
+authorizer, target, and `SWARM.md`; apply rechecks role compatibility, represented-swarm constraints,
+current vacancy, and Method Pack authority. Neither direct nor signed assignment may overwrite an
+occupied role. Responsibility changes use a handoff so outgoing and incoming identities remain in
+history.
+
 ## Prepare a work interruption
 
 Blocking, resuming, and cancelling work use action-specific prepare commands:
@@ -318,6 +335,7 @@ The stale intent remains on disk for audit and cannot be applied.
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
 parameter map. The current kernel accepts planned actor key rotation, independent revocation and
-recovery, actor runtime updates, work transitions and interruptions, approvals, handoffs, work
+recovery, actor runtime updates, governed vacant-role assignment, work transitions and
+interruptions, approvals, handoffs, work
 creation and material records, session preparation, and every delegation lifecycle mutation. Future
 administrative action kinds must keep their domain validation as the source of authority when added.

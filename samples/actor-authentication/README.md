@@ -4,9 +4,10 @@ This sample registers actors with Ed25519 public keys and requires signed author
 may apply covered lifecycle mutations or launch a prepared Tool Run. Temporary private keys are used
 only by the sample's external signers and are never stored in `.agora`.
 
-The flow signs and applies work creation, block/resume interruptions, a transition, Product Owner
-approval, an actor runtime update, and a developer handoff, then signs and launches both a
-repository Tool Run and an agent session. Lifecycle authorization binds the requested mutation to
+The flow bootstraps one governance role, signs the remaining role assignments, and then signs and
+applies work creation, block/resume interruptions, a transition, Product Owner approval, an actor
+runtime update, and a developer handoff. It also signs and launches both a repository Tool Run and
+an agent session. Lifecycle authorization binds the requested mutation to
 current durable state; the runtime update is constrained by the actor's current role and assignment.
 Session preparation uses the prospective `CONTEXT.md` digest. The separate launch authorization
 binds the exact runtime command and SHA-256 of its materialized `CONTEXT.md`. The resulting

@@ -881,6 +881,13 @@ class AssignActorInput:
 
 
 @dataclass(frozen=True)
+class PrepareActorAssignmentInput:
+    action_id: str
+    assignment: AssignActorInput
+    authorized_by: str
+
+
+@dataclass(frozen=True)
 class HandoffActorInput:
     swarm_id: str
     role_id: str

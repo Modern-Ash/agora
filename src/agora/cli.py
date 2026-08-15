@@ -32,6 +32,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorAssignmentInput,
     PrepareActorKeyRecoveryInput,
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
@@ -487,6 +488,15 @@ def _build_parser() -> argparse.ArgumentParser:
     swarm_assign.add_argument("--swarm", required=True)
     swarm_assign.add_argument("--role", required=True)
     swarm_assign.add_argument("--actor", required=True)
+
+    swarm_assign_prepare = swarm.add_parser(
+        "assign-prepare", help="Prepare a governance-authorized role assignment"
+    )
+    swarm_assign_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
+    swarm_assign_prepare.add_argument("--swarm", required=True)
+    swarm_assign_prepare.add_argument("--role", required=True)
+    swarm_assign_prepare.add_argument("--actor", required=True, help="Target actor")
+    swarm_assign_prepare.add_argument("--by", required=True, help="Governance authorizer")
 
     swarm_handoff = swarm.add_parser("handoff", help="Transfer a role between compatible actors")
     swarm_handoff.add_argument("--id")
@@ -1114,6 +1124,18 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
     if args.command == "swarm" and args.swarm_command == "assign":
         return workspace.assign_actor(
             AssignActorInput(swarm_id=args.swarm, role_id=args.role, actor_id=args.actor)
+        )
+    if args.command == "swarm" and args.swarm_command == "assign-prepare":
+        return workspace.prepare_actor_assignment(
+            PrepareActorAssignmentInput(
+                action_id=args.id,
+                assignment=AssignActorInput(
+                    swarm_id=args.swarm,
+                    role_id=args.role,
+                    actor_id=args.actor,
+                ),
+                authorized_by=args.by,
+            )
         )
     if args.command == "swarm" and args.swarm_command == "handoff":
         return workspace.handoff_actor(
