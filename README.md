@@ -160,6 +160,7 @@ agora registry install --source https://catalog.example.com/INDEX.md \
   --version 1.0.0 --require-signature --scope user
 agora registry update --id team-catalog
 agora registry update --id team-catalog --apply
+agora registry audit --scope project --record
 agora registry list
 agora pack search --kind method --query release
 agora pack install --kind method --id release-flow \
@@ -188,6 +189,8 @@ sequence-bound updates with a durable local history.
 Registry updates are preview-only unless `--apply` is passed, preserve provenance and history, and
 never update installed packs implicitly. See the
 [registry update guide](docs/guides/registry-updates.md).
+Aggregate registry audits can persist authenticated Markdown notifications for an external
+scheduler without applying any update.
 
 ## Actors and swarms
 
@@ -728,8 +731,8 @@ mutation in a structured external lease while retaining the local operating-syst
   explicit update checks, transactional application, and dependency-aware installation are
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Signed organization trust synchronization and a locally verified feed history are implemented.
-  Root rotation, threshold signatures, third-party transparency proofs, automatic background pack
-  updates, and notifications are not.
+  Root rotation, threshold signatures, third-party transparency proofs, and automatic background
+  pack updates are not. Aggregate update notifications are available for external schedulers.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,

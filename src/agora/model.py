@@ -506,6 +506,25 @@ class RegistryUpdateResult:
 
 
 @dataclass(frozen=True)
+class RegistryUpdateAuditEntry:
+    registry: str
+    scope: Literal["user", "project"]
+    from_version: str
+    to_version: str
+    update_available: bool
+    signature_verified: bool
+
+
+@dataclass(frozen=True)
+class RegistryUpdateAuditRecord:
+    id: str
+    scope: Literal["user", "project"]
+    checked_at: str
+    entries: list[RegistryUpdateAuditEntry]
+    path: str | None = None
+
+
+@dataclass(frozen=True)
 class CatalogPackRecord:
     kind: PackKind
     id: str
@@ -875,6 +894,13 @@ class UpdateRegistryInput:
     apply: bool = False
     public_key: str | None = None
     require_signature: bool = False
+    allow_insecure_http: bool = False
+
+
+@dataclass(frozen=True)
+class AuditRegistryUpdatesInput:
+    scope: Literal["user", "project"]
+    record: bool = False
     allow_insecure_http: bool = False
 
 

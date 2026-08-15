@@ -95,8 +95,43 @@ When the selected release matches the installed version and checksum, the result
 
 `--apply` remains a no-op in that state and does not create a history record.
 
+## Aggregate audits and notifications
+
+Check every remotely installed registry in one scope without applying anything:
+
+```bash
+agora registry audit --scope project
+```
+
+The command reuses each registry's persisted source and signature policy. It fails on an
+authentication, immutability, transport, or availability error instead of turning that failure into
+a successful notification. Local directory registries are omitted because they have no release
+index.
+
+Persist the authenticated result as Markdown when a human, agent, CI job, or scheduler needs a
+durable notification:
+
+```bash
+agora registry audit --scope project --record
+```
+
+Reports live under:
+
+```text
+.agora/notifications/registry-updates/<audit-id>/AUDIT.md
+```
+
+Each entry records the registry, scope, installed and available versions, update flag, and signature
+status. `agora validate` checks the report schema, id, version direction, and flags. Recording a
+report does not update a registry or any installed pack.
+
+Agora does not run a resident poller. Use the environment's ordinary scheduler and invoke the CLI
+non-interactively, keeping credentials in the provider's external credential mechanism. A CI job
+can inspect the JSON output or commit a reviewed `AUDIT.md`; applying an update remains a separate
+explicit command.
+
 ## Current boundary
 
-Agora does not poll in the background, send update notifications, resolve pack dependencies, or
-apply updates on a schedule. Checks are explicit CLI operations suitable for a human, agent, CI job,
-or future ecosystem adapter.
+Agora provides aggregate, recordable update notifications but does not run a background service or
+apply registry or installed-pack updates on a schedule. Scheduling and message delivery remain
+external integrations. Mutation remains preview-first and explicit.

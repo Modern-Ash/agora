@@ -13,6 +13,8 @@ from agora.model import (
     CatalogPackRecord,
     RegistryRecord,
     RegistrySourceRecord,
+    RegistryUpdateAuditEntry,
+    RegistryUpdateAuditRecord,
     RegistryUpdateRecord,
 )
 from agora.registry_distribution import (
@@ -200,6 +202,98 @@ def render_registry_update(record: RegistryUpdateRecord) -> str:
                 f"# Registry update {record.id}\n\n"
                 f"Agora updated `{record.registry}` from {record.from_version} to "
                 f"{record.to_version} after release verification."
+            ),
+        )
+    )
+
+
+def read_registry_update_audit(path: Path) -> RegistryUpdateAuditRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/registry-update-audit/v1":
+        raise ValueError(f"Expected schema agora/registry-update-audit/v1: {path}")
+    id_ = string_attribute(attributes, "id")
+    assert_slug(id_, "Registry update audit id")
+    scope = string_attribute(attributes, "scope")
+    if scope not in {"user", "project"}:
+        raise ValueError(f"Unsupported registry update audit scope: {path}")
+    raw_entries = attributes.get("entries")
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Registry update audit entries must be an array: {path}")
+    entries: list[RegistryUpdateAuditEntry] = []
+    for index, item in enumerate(raw_entries):
+        if not isinstance(item, dict) or set(item) != {
+            "registry",
+            "scope",
+            "from-version",
+            "to-version",
+            "update-available",
+            "signature-verified",
+        }:
+            raise ValueError(f"Registry update audit entry {index} is invalid: {path}")
+        registry = item.get("registry")
+        entry_scope = item.get("scope")
+        from_version = item.get("from-version")
+        to_version = item.get("to-version")
+        update_available = item.get("update-available")
+        signature_verified = item.get("signature-verified")
+        if not isinstance(registry, str):
+            raise ValueError(f"Registry update audit entry {index} registry is invalid: {path}")
+        assert_slug(registry, "Registry update audit registry")
+        if entry_scope != scope:
+            raise ValueError(f"Registry update audit entry {index} scope is invalid: {path}")
+        if not isinstance(from_version, str) or not isinstance(to_version, str):
+            raise ValueError(f"Registry update audit entry {index} versions are invalid: {path}")
+        validate_registry_version(from_version)
+        validate_registry_version(to_version)
+        if not isinstance(update_available, bool) or not isinstance(signature_verified, bool):
+            raise ValueError(f"Registry update audit entry {index} flags are invalid: {path}")
+        relation = compare_registry_versions(to_version, from_version)
+        if (relation > 0) != update_available or relation < 0:
+            raise ValueError(f"Registry update audit entry {index} relation is invalid: {path}")
+        entries.append(
+            RegistryUpdateAuditEntry(
+                registry=registry,
+                scope=scope,  # type: ignore[arg-type]
+                from_version=from_version,
+                to_version=to_version,
+                update_available=update_available,
+                signature_verified=signature_verified,
+            )
+        )
+    return RegistryUpdateAuditRecord(
+        id=id_,
+        scope=scope,  # type: ignore[arg-type]
+        checked_at=string_attribute(attributes, "checked-at"),
+        entries=entries,
+        path=str(path),
+    )
+
+
+def render_registry_update_audit(record: RegistryUpdateAuditRecord) -> str:
+    updates = sum(item.update_available for item in record.entries)
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/registry-update-audit/v1",
+                "id": record.id,
+                "scope": record.scope,
+                "checked-at": record.checked_at,
+                "entries": [
+                    {
+                        "registry": item.registry,
+                        "scope": item.scope,
+                        "from-version": item.from_version,
+                        "to-version": item.to_version,
+                        "update-available": item.update_available,
+                        "signature-verified": item.signature_verified,
+                    }
+                    for item in record.entries
+                ],
+            },
+            body=(
+                f"# Registry update audit {record.id}\n\n"
+                f"Checked {len(record.entries)} remote registries and found {updates} updates."
             ),
         )
     )

@@ -13,12 +13,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from agora.cli import main
 from agora.model import (
     AddRegistryTrustKeyInput,
+    AuditRegistryUpdatesInput,
     InitInput,
     InstallRegistryInput,
     RegistryReleaseRecord,
     UpdateRegistryInput,
 )
-from agora.registries import read_registry_update
+from agora.registries import read_registry_update, read_registry_update_audit
 from agora.registry_distribution import release_signature_payload
 from agora.workspace import AgoraWorkspace
 
@@ -165,6 +166,58 @@ def test_previews_and_applies_signed_registry_updates_with_history(
     assert workspace.validate().ok is True
 
 
+def test_audits_all_remote_registries_and_records_a_markdown_notification(
+    tmp_path: Path, monkeypatch
+) -> None:
+    private_key = Ed25519PrivateKey.generate()
+    releases = [_release(tmp_path, version, private_key) for version in ("1.0.0", "1.1.0")]
+    workspace, _ = _workspace_with_release(tmp_path, monkeypatch, releases, private_key)
+
+    preview = workspace.audit_registry_updates(AuditRegistryUpdatesInput(scope="project"))
+
+    assert preview.path is None
+    assert len(preview.entries) == 1
+    assert preview.entries[0].registry == "team-catalog"
+    assert preview.entries[0].from_version == "1.0.0"
+    assert preview.entries[0].to_version == "1.1.0"
+    assert preview.entries[0].update_available is True
+    assert workspace.list_registries()[0].version == "1.0.0"
+
+    recorded = workspace.audit_registry_updates(
+        AuditRegistryUpdatesInput(scope="project", record=True)
+    )
+
+    assert recorded.path is not None
+    persisted = read_registry_update_audit(Path(recorded.path))
+    assert persisted.entries == recorded.entries
+    assert workspace.validate().ok is True
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    assert (
+        main(
+            ["registry", "audit", "--scope", "project"],
+            cwd=workspace.cwd,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert errors.getvalue() == ""
+    assert '"update_available": true' in output.getvalue()
+
+    audit_path = Path(recorded.path)
+    audit_path.write_text(
+        audit_path.read_text(encoding="utf-8").replace(
+            '"update-available":true', '"update-available":false'
+        ),
+        encoding="utf-8",
+    )
+    invalid = workspace.validate()
+    assert invalid.ok is False
+    assert any(issue.code == "registry-update-audit.invalid" for issue in invalid.issues)
+
+
 def test_preview_authenticates_without_downloading_the_archive(tmp_path: Path, monkeypatch) -> None:
     private_key = Ed25519PrivateKey.generate()
     releases = [_release(tmp_path, version, private_key) for version in ("1.0.0", "2.0.0")]
@@ -218,6 +271,9 @@ def test_signed_registry_cannot_update_to_an_unsigned_release(tmp_path: Path, mo
 
     with pytest.raises(ValueError, match="release is unsigned"):
         workspace.update_registry(UpdateRegistryInput(id="team-catalog"))
+    with pytest.raises(ValueError, match="release is unsigned"):
+        workspace.audit_registry_updates(AuditRegistryUpdatesInput(scope="project", record=True))
+    assert not (workspace.cwd / ".agora" / "notifications").exists()
 
 
 def test_cli_previews_and_applies_a_registry_update(tmp_path: Path, monkeypatch) -> None:

@@ -49,8 +49,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   checksum-pinned and Ed25519-signed registry snapshots.
 - [Registry trust stores](guides/registry-trust.md): approve, rotate, revoke, and synchronize signed
   organization registry trust through local Markdown and Git.
-- [Registry updates](guides/registry-updates.md): preview and transactionally apply authenticated
-  releases while preserving provenance and update history.
+- [Registry updates](guides/registry-updates.md): audit, notify, preview, and transactionally apply
+  authenticated releases while preserving provenance and update history.
 - [Getting started](getting-started.md): install Agora, initialize a project, form a swarm, and
   complete governed work.
 - [LLM environments](guides/llm-environments.md): configure project and actor runtimes, prepare

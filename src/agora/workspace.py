@@ -80,6 +80,7 @@ from agora.model import (
     ApplyLifecycleActionInput,
     ApprovalDelegationRecord,
     AssignActorInput,
+    AuditRegistryUpdatesInput,
     CatalogPackRecord,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
@@ -153,6 +154,8 @@ from agora.model import (
     RegistryRecord,
     RegistrySourceRecord,
     RegistryTrustKeyRecord,
+    RegistryUpdateAuditEntry,
+    RegistryUpdateAuditRecord,
     RegistryUpdateRecord,
     RegistryUpdateResult,
     RemovePackInput,
@@ -215,8 +218,10 @@ from agora.registries import (
     bundled_registry,
     discover_registry_packs,
     load_registry,
+    read_registry_update_audit,
     render_registry_source,
     render_registry_update,
+    render_registry_update_audit,
 )
 from agora.registry_distribution import (
     compare_registry_versions,
@@ -937,6 +942,58 @@ class AgoraWorkspace:
             signature_verified=applied_signature,
             record_path=str(record_path),
         )
+
+    def audit_registry_updates(self, data: AuditRegistryUpdatesInput) -> RegistryUpdateAuditRecord:
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported registry update audit scope: {data.scope}")
+        candidates = [
+            item
+            for item in self.list_registries()
+            if item.scope == data.scope and item.source is not None
+        ]
+        entries: list[RegistryUpdateAuditEntry] = []
+        for registry in candidates:
+            result = self.update_registry(
+                UpdateRegistryInput(
+                    id=registry.id,
+                    scope=data.scope,
+                    allow_insecure_http=data.allow_insecure_http,
+                )
+            )
+            entries.append(
+                RegistryUpdateAuditEntry(
+                    registry=result.registry,
+                    scope=result.scope,
+                    from_version=result.from_version,
+                    to_version=result.to_version,
+                    update_available=result.update_available,
+                    signature_verified=result.signature_verified,
+                )
+            )
+        audit_id = self._now().astimezone(UTC).strftime("audit-%Y%m%dt%H%M%S%fz")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        path = root / "notifications" / "registry-updates" / audit_id / "AUDIT.md"
+        record = RegistryUpdateAuditRecord(
+            id=audit_id,
+            scope=data.scope,
+            checked_at=self._timestamp(),
+            entries=entries,
+            path=str(path) if data.record else None,
+        )
+        if not data.record:
+            return record
+        return self._record_registry_update_audit(data, record)
+
+    @_locked_mutation("scoped")
+    def _record_registry_update_audit(
+        self, data: AuditRegistryUpdatesInput, record: RegistryUpdateAuditRecord
+    ) -> RegistryUpdateAuditRecord:
+        assert record.path is not None
+        path = Path(record.path)
+        if path.exists():
+            raise FileExistsError(f"Registry update audit already exists: {path}")
+        atomic_write(path, render_registry_update_audit(record))
+        return read_registry_update_audit(path)
 
     @_locked_mutation("scoped")
     def add_registry_trust_key(self, data: AddRegistryTrustKeyInput) -> RegistryTrustKeyRecord:
@@ -6524,6 +6581,7 @@ class AgoraWorkspace:
             "event-files": 0,
             "upgrades": 0,
             "registries": 0,
+            "registry-update-audits": 0,
             "trust-keys": 0,
             "organization-trust-roots": 0,
             "organization-trust-bundles": 0,
@@ -6609,6 +6667,21 @@ class AgoraWorkspace:
                     "registry.id-mismatch",
                     path,
                     f"Registry id {registry.id} does not match directory {directory.name}",
+                )
+        for directory in _child_directories(root / ".agora" / "notifications" / "registry-updates"):
+            path = directory / "AUDIT.md"
+            audit = inspect(
+                "registry-update-audits",
+                "registry-update-audit.invalid",
+                path,
+                lambda path=path: read_registry_update_audit(path),
+            )
+            if isinstance(audit, RegistryUpdateAuditRecord) and audit.id != directory.name:
+                issue(
+                    "registry-update-audit.id-mismatch",
+                    path,
+                    f"Registry update audit id {audit.id} does not match directory "
+                    f"{directory.name}",
                 )
         trust_keys: dict[str, RegistryTrustKeyRecord] = {}
         for path in sorted((root / ".agora" / "trust" / "keys").glob("*.md")):

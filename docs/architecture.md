@@ -90,6 +90,8 @@ the ordinary scoped trust store. Private root keys remain external.
 Registry updates are read-only plans unless application is explicit. Update staging carries forward
 installer-owned history, adds the next transition record, validates the complete candidate, and only
 then replaces the installed snapshot. Registry updates never mutate separately installed packs.
+Aggregate audits apply the same authenticated read path to every remote registry in one scope and
+may persist a Markdown notification for an external scheduler. They never apply releases or packs.
 
 Method and Tool Pack manifests declare semantic versions and optional cross-kind dependencies.
 Catalog installation resolves the complete dependency graph using registry precedence, checks the

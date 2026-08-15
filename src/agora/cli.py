@@ -17,6 +17,7 @@ from agora.model import (
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
+    AuditRegistryUpdatesInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
     ConfigureCoordinationInput,
@@ -209,6 +210,12 @@ def _build_parser() -> argparse.ArgumentParser:
     registry_update.add_argument("--require-signature", action="store_true")
     registry_update.add_argument("--allow-insecure-http", action="store_true")
     registry_update.add_argument("--apply", action="store_true")
+    registry_audit = registry.add_parser(
+        "audit", help="Check every remote registry and optionally record a notification"
+    )
+    registry_audit.add_argument("--scope", choices=("user", "project"), default="project")
+    registry_audit.add_argument("--record", action="store_true")
+    registry_audit.add_argument("--allow-insecure-http", action="store_true")
     registry.add_parser("list", help="List bundled and installed registries")
 
     trust = commands.add_parser(
@@ -971,6 +978,14 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 apply=args.apply,
                 public_key=args.public_key,
                 require_signature=args.require_signature,
+                allow_insecure_http=args.allow_insecure_http,
+            )
+        )
+    if args.command == "registry" and args.registry_command == "audit":
+        return workspace.audit_registry_updates(
+            AuditRegistryUpdatesInput(
+                scope=args.scope,
+                record=args.record,
                 allow_insecure_http=args.allow_insecure_http,
             )
         )
