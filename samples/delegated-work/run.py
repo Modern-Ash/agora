@@ -7,7 +7,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agora.model import (
     AddActorInput,
-    AddApprovalInput,
     AddArtifactInput,
     AddEvidenceInput,
     ApplyLifecycleActionInput,
@@ -16,8 +15,10 @@ from agora.model import (
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
-    DelegationActorInput,
     InitInput,
+    PrepareApprovalInput,
+    PrepareCreateDelegationInput,
+    PrepareDelegationActionInput,
     PrepareLifecycleAuthorizationInput,
     PrepareWorkTransitionInput,
     TransitionWorkInput,
@@ -31,22 +32,28 @@ def main() -> None:
     os.environ["AGORA_HOME"] = tempfile.mkdtemp(prefix="agora-delegated-work-home-")
     agora = AgoraWorkspace(cwd=project)
     agora.initialize(InitInput(integration="generic", default_method="scrum"))
-    facilitator_private_key = Ed25519PrivateKey.generate()
-    facilitator_public_key = project / "facilitator-public.pem"
-    facilitator_public_key.write_bytes(
-        facilitator_private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-    )
 
-    def sign_and_apply(action_id: str) -> None:
+    private_keys: dict[str, Ed25519PrivateKey] = {}
+    public_keys: dict[str, Path] = {}
+    for actor_id in ("owner", "facilitator", "specialist-swarm"):
+        private_key = Ed25519PrivateKey.generate()
+        public_key = project / f"{actor_id}-public.pem"
+        public_key.write_bytes(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        private_keys[actor_id] = private_key
+        public_keys[actor_id] = public_key
+
+    def sign_and_apply(action_id: str, actor_id: str) -> None:
         payload = project / f"{action_id}.json"
         agora.prepare_lifecycle_authorization(
             PrepareLifecycleAuthorizationInput(action_id=action_id, output=str(payload))
         )
         signature = project / f"{action_id}.sig"
-        signature.write_bytes(facilitator_private_key.sign(payload.read_bytes()))
+        signature.write_bytes(private_keys[actor_id].sign(payload.read_bytes()))
         agora.apply_lifecycle_action(
             ApplyLifecycleActionInput(action_id=action_id, signature=str(signature))
         )
@@ -58,6 +65,8 @@ def main() -> None:
             kind="human",
             capabilities=["backlog-management", "acceptance"],
             scope="project",
+            public_key=str(public_keys["owner"]),
+            require_authentication=True,
         ),
         AddActorInput(
             id="facilitator",
@@ -65,7 +74,7 @@ def main() -> None:
             kind="ai-agent",
             capabilities=["facilitation", "governance"],
             scope="project",
-            public_key=str(facilitator_public_key),
+            public_key=str(public_keys["facilitator"]),
             require_authentication=True,
         ),
         AddActorInput(
@@ -96,6 +105,8 @@ def main() -> None:
             capabilities=["implementation"],
             scope="project",
             represented_swarm="specialists",
+            public_key=str(public_keys["specialist-swarm"]),
+            require_authentication=True,
         )
     )
     form_swarm(
@@ -113,21 +124,27 @@ def main() -> None:
         )
     )
 
-    proposed = agora.create_delegation(
-        CreateDelegationInput(
-            id="specialist-task",
-            parent_swarm_id="delivery",
-            parent_work_id="parent-slice",
-            child_actor_id="specialist-swarm",
-            child_work_id="child-slice",
-            actor_id="specialist-swarm",
-            title="Produce the specialist result",
-            description="Return a result that the parent can integrate.",
-            acceptance_criteria=[("usable", "The result can be integrated")],
-            required_artifacts=["child-result"],
-            result_kind="delegated-result",
+    proposal = CreateDelegationInput(
+        id="specialist-task",
+        parent_swarm_id="delivery",
+        parent_work_id="parent-slice",
+        child_actor_id="specialist-swarm",
+        child_work_id="child-slice",
+        actor_id="specialist-swarm",
+        title="Produce the specialist result",
+        description="Return a result that the parent can integrate.",
+        acceptance_criteria=[("usable", "The result can be integrated")],
+        required_artifacts=["child-result"],
+        result_kind="delegated-result",
+    )
+    created = agora.prepare_create_delegation(
+        PrepareCreateDelegationInput(
+            action_id="propose-specialist-task",
+            delegation=proposal,
         )
     )
+    sign_and_apply(created.id, "specialist-swarm")
+    proposed = agora.show_delegation("specialist-task")
     for action_id, reason, prepare in (
         (
             "pause-specialist-task",
@@ -148,10 +165,16 @@ def main() -> None:
                 reason=reason,
             )
         )
-        sign_and_apply(prepared.id)
-    accepted = agora.accept_delegation(
-        DelegationActorInput(delegation_id=proposed.id, actor_id="owner")
+        sign_and_apply(prepared.id, "facilitator")
+    acceptance = agora.prepare_accept_delegation(
+        PrepareDelegationActionInput(
+            id="accept-specialist-task",
+            delegation_id=proposed.id,
+            actor_id="owner",
+        )
     )
+    sign_and_apply(acceptance.id, "owner")
+    accepted = agora.show_delegation(proposed.id)
 
     for state in ("planned", "implementing", "reviewing"):
         agora.transition_work(
@@ -171,7 +194,7 @@ def main() -> None:
             target_state="verifying",
         )
     )
-    sign_and_apply(verify_action.id)
+    sign_and_apply(verify_action.id, "facilitator")
     agora.satisfy_criterion(
         WorkActorInput(swarm_id="specialists", work_id="child-slice", actor_id="owner"),
         "usable",
@@ -195,25 +218,35 @@ def main() -> None:
             artifact_refs=["repo://specialists/result.md"],
         )
     )
-    agora.add_approval(
-        AddApprovalInput(
+    approval = agora.prepare_approval(
+        PrepareApprovalInput(
+            id="approve-child-slice",
             swarm_id="specialists",
             work_id="child-slice",
             actor_id="owner",
             role_id="product-owner",
         )
     )
-    agora.transition_work(
-        TransitionWorkInput(
+    sign_and_apply(approval.id, "owner")
+    completion = agora.prepare_work_transition(
+        PrepareWorkTransitionInput(
+            id="complete-child-slice",
             swarm_id="specialists",
             work_id="child-slice",
             actor_id="owner",
             target_state="completed",
         )
     )
-    collected = agora.collect_delegation(
-        DelegationActorInput(delegation_id=proposed.id, actor_id="specialist-swarm")
+    sign_and_apply(completion.id, "owner")
+    collection = agora.prepare_collect_delegation(
+        PrepareDelegationActionInput(
+            id="collect-specialist-task",
+            delegation_id=proposed.id,
+            actor_id="specialist-swarm",
+        )
     )
+    sign_and_apply(collection.id, "specialist-swarm")
+    collected = agora.show_delegation(proposed.id)
 
     parent_work = agora.show_work("delivery", "parent-slice")
     print(f"Project: {project}")

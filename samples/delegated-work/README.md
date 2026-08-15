@@ -1,8 +1,8 @@
 # Delegated work sample
 
-This sample creates a parent Scrum swarm and a linked specialist swarm, proposes a bounded child
-work item, signs a governance block and resumption externally, accepts it inside the child, completes
-it under the child's own lifecycle, and collects the result into the parent work item.
+This sample creates a parent Scrum swarm and a linked specialist swarm, signs proposal, governance
+interruption, acceptance, and collection externally, completes the work under the child's own
+lifecycle, and collects the result into the parent work item.
 
 Run it from the repository root:
 

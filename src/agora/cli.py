@@ -33,6 +33,8 @@ from agora.model import (
     LaunchSessionInput,
     LaunchToolRunInput,
     PrepareApprovalInput,
+    PrepareCreateDelegationInput,
+    PrepareDelegationActionInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareToolAuthorizationInput,
@@ -298,17 +300,45 @@ def _build_parser() -> argparse.ArgumentParser:
     delegation_create.add_argument("--required-artifact", action="append", default=[])
     delegation_create.add_argument("--result-kind", default="delegated-result")
 
+    delegation_create_prepare = delegation.add_parser(
+        "create-prepare", help="Prepare a signed delegation proposal intent"
+    )
+    delegation_create_prepare.add_argument("--action-id", required=True)
+    delegation_create_prepare.add_argument("--id", required=True)
+    delegation_create_prepare.add_argument("--swarm", required=True)
+    delegation_create_prepare.add_argument("--work", required=True)
+    delegation_create_prepare.add_argument("--to-actor", required=True)
+    delegation_create_prepare.add_argument("--child-work", required=True)
+    delegation_create_prepare.add_argument("--title", required=True)
+    delegation_create_prepare.add_argument("--by", required=True)
+    delegation_create_prepare.add_argument("--description", default="")
+    delegation_create_prepare.add_argument("--criterion", action="append", default=[])
+    delegation_create_prepare.add_argument("--required-artifact", action="append", default=[])
+    delegation_create_prepare.add_argument("--result-kind", default="delegated-result")
+
     delegation_accept = delegation.add_parser(
         "accept", help="Accept a proposal and create child work"
     )
     delegation_accept.add_argument("--delegation", required=True)
     delegation_accept.add_argument("--by", required=True)
+    delegation_accept_prepare = delegation.add_parser(
+        "accept-prepare", help="Prepare a signed delegation acceptance intent"
+    )
+    delegation_accept_prepare.add_argument("--id", required=True)
+    delegation_accept_prepare.add_argument("--delegation", required=True)
+    delegation_accept_prepare.add_argument("--by", required=True)
 
     delegation_collect = delegation.add_parser(
         "collect", help="Collect a completed child result into parent work"
     )
     delegation_collect.add_argument("--delegation", required=True)
     delegation_collect.add_argument("--by", required=True)
+    delegation_collect_prepare = delegation.add_parser(
+        "collect-prepare", help="Prepare a signed delegation collection intent"
+    )
+    delegation_collect_prepare.add_argument("--id", required=True)
+    delegation_collect_prepare.add_argument("--delegation", required=True)
+    delegation_collect_prepare.add_argument("--by", required=True)
 
     delegation_show = delegation.add_parser("show", help="Show a delegation")
     delegation_show.add_argument("--delegation", required=True)
@@ -802,6 +832,25 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 result_kind=args.result_kind,
             )
         )
+    if args.command == "delegation" and args.delegation_command == "create-prepare":
+        return workspace.prepare_create_delegation(
+            PrepareCreateDelegationInput(
+                action_id=args.action_id,
+                delegation=CreateDelegationInput(
+                    id=args.id,
+                    parent_swarm_id=args.swarm,
+                    parent_work_id=args.work,
+                    child_actor_id=args.to_actor,
+                    child_work_id=args.child_work,
+                    actor_id=args.by,
+                    title=args.title,
+                    description=args.description,
+                    acceptance_criteria=[_parse_criterion(item) for item in args.criterion],
+                    required_artifacts=args.required_artifact,
+                    result_kind=args.result_kind,
+                ),
+            )
+        )
     if args.command == "delegation" and args.delegation_command == "accept":
         return workspace.accept_delegation(
             DelegationActorInput(
@@ -809,9 +858,25 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 actor_id=args.by,
             )
         )
+    if args.command == "delegation" and args.delegation_command == "accept-prepare":
+        return workspace.prepare_accept_delegation(
+            PrepareDelegationActionInput(
+                id=args.id,
+                delegation_id=args.delegation,
+                actor_id=args.by,
+            )
+        )
     if args.command == "delegation" and args.delegation_command == "collect":
         return workspace.collect_delegation(
             DelegationActorInput(
+                delegation_id=args.delegation,
+                actor_id=args.by,
+            )
+        )
+    if args.command == "delegation" and args.delegation_command == "collect-prepare":
+        return workspace.prepare_collect_delegation(
+            PrepareDelegationActionInput(
+                id=args.id,
                 delegation_id=args.delegation,
                 actor_id=args.by,
             )

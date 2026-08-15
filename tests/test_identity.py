@@ -11,6 +11,8 @@ from agora.cli import main as cli_main
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
+    AddArtifactInput,
+    AddEvidenceInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
@@ -18,12 +20,15 @@ from agora.model import (
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DelegationActorInput,
     HandoffActorInput,
     InitInput,
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
     PrepareApprovalInput,
+    PrepareCreateDelegationInput,
+    PrepareDelegationActionInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareToolAuthorizationInput,
@@ -32,6 +37,7 @@ from agora.model import (
     RotateActorKeyInput,
     StartSessionInput,
     TransitionWorkInput,
+    WorkActorInput,
 )
 from agora.workspace import AgoraWorkspace
 
@@ -607,6 +613,242 @@ def test_applies_signed_delegation_status_decisions_across_parent_and_child(
         status_path.read_text(encoding="utf-8").replace(
             "The parent no longer needs the result",
             "Unrecorded delegation reason",
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert not report.ok
+    assert any(issue.code == "lifecycle-action.status-change-mismatch" for issue in report.issues)
+
+
+def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, monkeypatch) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    for actor in (
+        AddActorInput(
+            id="child-facilitator",
+            name="Child Facilitator",
+            kind="ai-agent",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="child-developer",
+            name="Child Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        ),
+    ):
+        workspace.add_actor(actor)
+    workspace.create_swarm(
+        CreateSwarmInput(
+            id="signed-specialists",
+            objective="Produce a signed delegated result",
+            create_branch=False,
+        )
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "child-facilitator"),
+        ("developer", "child-developer"),
+    ):
+        workspace.assign_actor(
+            AssignActorInput(swarm_id="signed-specialists", role_id=role, actor_id=actor_id)
+        )
+    workspace.add_actor(
+        AddActorInput(
+            id="signed-specialist-swarm",
+            name="Signed Specialist Swarm",
+            kind="swarm",
+            capabilities=["implementation"],
+            scope="project",
+            represented_swarm="signed-specialists",
+            public_key=str(tmp_path / "developer.pem"),
+            require_authentication=True,
+        )
+    )
+    workspace.create_swarm(
+        CreateSwarmInput(
+            id="signed-parent",
+            objective="Integrate a signed delegated result",
+            create_branch=False,
+        )
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "signed-specialist-swarm"),
+    ):
+        workspace.assign_actor(
+            AssignActorInput(swarm_id="signed-parent", role_id=role, actor_id=actor_id)
+        )
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="signed-parent",
+            id="parent-contract",
+            title="Integrate the signed result",
+            actor_id="owner",
+            required_artifacts=["delegated-result"],
+        )
+    )
+
+    def export_and_sign(action_id: str) -> tuple[Path, Path]:
+        payload = tmp_path / f"{action_id}.json"
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(action_id=action_id, output=str(payload))
+        )
+        signature = tmp_path / f"{action_id}.sig"
+        signature.write_bytes(private_key.sign(payload.read_bytes()))
+        return payload, signature
+
+    def sign_and_apply(action_id: str) -> dict[str, object]:
+        payload, signature = export_and_sign(action_id)
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action_id, signature=str(signature))
+        )
+        return json.loads(payload.read_text(encoding="ascii"))
+
+    proposal = CreateDelegationInput(
+        id="signed-contract",
+        parent_swarm_id="signed-parent",
+        parent_work_id="parent-contract",
+        child_actor_id="signed-specialist-swarm",
+        child_work_id="signed-child-work",
+        actor_id="signed-specialist-swarm",
+        title="Produce the signed result",
+        description="Return a result bound to the delegation contract.",
+        acceptance_criteria=[("usable", "The result can be integrated")],
+        required_artifacts=["child-result"],
+        result_kind="delegated-result",
+    )
+    with pytest.raises(PermissionError, match="prepare delegation.create"):
+        workspace.create_delegation(proposal)
+    workspace.prepare_create_delegation(
+        PrepareCreateDelegationInput(action_id="propose-signed-contract", delegation=proposal)
+    )
+    create_payload = sign_and_apply("propose-signed-contract")
+    assert create_payload["parameters"]["delegation"] == "signed-contract"
+    assert workspace.show_delegation("signed-contract").status == "proposed"
+
+    acceptance = DelegationActorInput(delegation_id="signed-contract", actor_id="owner")
+    with pytest.raises(PermissionError, match="prepare delegation.accept"):
+        workspace.accept_delegation(acceptance)
+    workspace.prepare_accept_delegation(
+        PrepareDelegationActionInput(
+            id="accept-signed-contract",
+            delegation_id=acceptance.delegation_id,
+            actor_id=acceptance.actor_id,
+        )
+    )
+    sign_and_apply("accept-signed-contract")
+
+    for state in ("planned", "implementing", "reviewing", "verifying"):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="signed-specialists",
+                work_id="signed-child-work",
+                actor_id=("child-facilitator" if state == "verifying" else "child-developer"),
+                target_state=state,
+            )
+        )
+    workspace.satisfy_criterion(
+        WorkActorInput(
+            swarm_id="signed-specialists", work_id="signed-child-work", actor_id="owner"
+        ),
+        "usable",
+    )
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="signed-specialists",
+            work_id="signed-child-work",
+            actor_id="child-developer",
+            kind="child-result",
+            uri="repo://signed-specialists/result.md",
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="signed-specialists",
+            work_id="signed-child-work",
+            actor_id="child-facilitator",
+            type="review",
+            result="success",
+            artifact_refs=["repo://signed-specialists/result.md"],
+        )
+    )
+    workspace.prepare_approval(
+        PrepareApprovalInput(
+            id="approve-signed-child",
+            swarm_id="signed-specialists",
+            work_id="signed-child-work",
+            actor_id="owner",
+            role_id="product-owner",
+        )
+    )
+    sign_and_apply("approve-signed-child")
+    workspace.prepare_work_transition(
+        PrepareWorkTransitionInput(
+            id="complete-signed-child",
+            swarm_id="signed-specialists",
+            work_id="signed-child-work",
+            actor_id="owner",
+            target_state="completed",
+        )
+    )
+    sign_and_apply("complete-signed-child")
+
+    collection = DelegationActorInput(
+        delegation_id="signed-contract", actor_id="signed-specialist-swarm"
+    )
+    with pytest.raises(PermissionError, match="prepare delegation.collect"):
+        workspace.collect_delegation(collection)
+    stale = workspace.prepare_collect_delegation(
+        PrepareDelegationActionInput(
+            id="collect-stale-contract",
+            delegation_id=collection.delegation_id,
+            actor_id=collection.actor_id,
+        )
+    )
+    _, stale_signature = export_and_sign(stale.id)
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="signed-parent",
+            work_id="parent-contract",
+            actor_id="facilitator",
+            type="review",
+            result="success",
+        )
+    )
+    with pytest.raises(ValueError, match="precondition digest mismatch"):
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=stale.id, signature=str(stale_signature))
+        )
+
+    workspace.prepare_collect_delegation(
+        PrepareDelegationActionInput(
+            id="collect-signed-contract",
+            delegation_id=collection.delegation_id,
+            actor_id=collection.actor_id,
+        )
+    )
+    sign_and_apply("collect-signed-contract")
+    assert workspace.show_delegation("signed-contract").status == "collected"
+    report = workspace.validate()
+    assert {issue.code for issue in report.issues} == {"lifecycle-action.precondition-stale"}
+
+    status_path = (
+        root
+        / ".agora"
+        / "delegations"
+        / "signed-contract"
+        / "status-changes"
+        / "collect-signed-contract"
+        / "STATUS.md"
+    )
+    status_path.write_text(
+        status_path.read_text(encoding="utf-8").replace(
+            "Completed child result collected into parent work",
+            "Unrecorded collection reason",
         ),
         encoding="utf-8",
     )

@@ -2,8 +2,8 @@
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
 current work projection. The supported mutations are `work.transition`, `work.block`, `work.resume`,
-`work.cancel`, `approval.add`, `handoff.create`, and delegation status decisions. Their durable intents live
-at `.agora/actions/<id>/ACTION.md`, separate from the resulting `WORK.md` state.
+`work.cancel`, `approval.add`, `handoff.create`, and the complete delegation lifecycle. Their durable
+intents live at `.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
 work state. It does not replace Method Pack permissions, transition edges, WIP limits, gates, Git
@@ -122,6 +122,45 @@ authorizes rejection. Its precondition covers both `DELEGATION.md` and the paren
 Apply rechecks current contract state and the appropriate parent or child authority, then links the
 applied action to the exact delegation `STATUS.md`.
 
+## Prepare delegation creation, acceptance, and collection
+
+An authenticated linked swarm actor signs the complete proposed contract:
+
+```bash
+agora delegation create-prepare \
+  --action-id propose-specialist-task \
+  --id specialist-task \
+  --swarm delivery \
+  --work parent-slice \
+  --to-actor authenticated-specialist-swarm \
+  --child-work child-slice \
+  --title "Produce the specialist result" \
+  --criterion usable:"The result can be integrated" \
+  --required-artifact child-result \
+  --result-kind delegated-result \
+  --by authenticated-specialist-swarm
+```
+
+The parameter map binds the delegation id, child actor and work, title, description, criteria,
+required artifacts, and result kind. Its precondition covers the parent work, both swarm manifests,
+and linked actor record. Applying it rechecks delegation depth, assignments, child readiness, role
+authority, and identifier availability before writing `DELEGATION.md`.
+
+An authenticated child participant then signs acceptance, and the authenticated linked swarm actor
+signs collection after the child work reaches its terminal state:
+
+```bash
+agora delegation accept-prepare --id accept-specialist-task \
+  --delegation specialist-task --by authenticated-child-owner
+
+agora delegation collect-prepare --id collect-specialist-task \
+  --delegation specialist-task --by authenticated-specialist-swarm
+```
+
+Acceptance binds the current delegation, parent work, and child swarm before creating linked child
+work. Collection additionally binds the terminal child work policy files before adding the result
+artifact and evidence to the parent. Their action ids become the corresponding `STATUS.md` ids.
+
 ## Export and sign the authorization
 
 Export the canonical JSON bytes:
@@ -183,6 +222,5 @@ The stale intent remains on disk for audit and cannot be applied.
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
 parameter map. The current kernel accepts work transitions and interruptions, approvals, handoffs,
-and delegation status decisions. Delegation creation, acceptance, collection, and administrative
-mutations remain future action kinds. They must keep
-their existing domain validation as the source of authority when added.
+and every delegation lifecycle mutation. Administrative mutations remain future action kinds and
+must keep their existing domain validation as the source of authority when added.

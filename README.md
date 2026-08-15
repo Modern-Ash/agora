@@ -647,11 +647,10 @@ versioned registry snapshot without persisting a private key.
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
   are implemented.
 - Optional Ed25519 actor authentication protects work transitions, interruptions, approvals,
-  handoffs, delegation status decisions, Tool Run launch, and
-  agent-session launch while leaving
+  handoffs, the complete delegation lifecycle, Tool Run launch, and agent-session launch while leaving
   private keys external. Public-key rotation and revocation histories are implemented. Tool Packs
-  declare portable direct-process timeouts and captured-output limits. Other lifecycle mutations,
-  session preparation, administrative key-change authorization, filesystem/network/syscall isolation,
+  declare portable direct-process timeouts and captured-output limits. Session preparation,
+  administrative key-change authorization, filesystem/network/syscall isolation,
   resource quotas, and process-tree containment are not yet covered by that policy.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.

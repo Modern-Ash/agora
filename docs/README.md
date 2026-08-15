@@ -17,7 +17,7 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   external Ed25519 identities, sign agent-session launches, and preserve public-key rotation and
   revocation history without storing private keys.
 - [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
-  and audit work transitions, interruptions, approvals, handoffs, and delegation decisions.
+  and audit work transitions, interruptions, approvals, handoffs, and delegation lifecycles.
 - [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct
   process timeouts and captured-output limits without claiming operating-system isolation.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native

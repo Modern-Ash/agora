@@ -88,6 +88,10 @@ A different parent participant needs `delegation.manage`. The request persists t
 child identities, criteria, required child artifacts, and the artifact kind expected by the parent.
 The child work id must not already exist.
 
+When the requester requires authentication, use `create-prepare` with a distinct `--action-id`,
+export its authorization, sign it outside Agora, and apply it. The signature binds every field shown
+above plus the parent work, both swarm manifests, and linked actor record.
+
 ## Accept inside the child
 
 An assigned child participant needs both `delegation.accept` and `work.create`. In the bundled Scrum
@@ -96,6 +100,10 @@ pack, the Product Owner has those actions:
 ```bash
 agora delegation accept --delegation specialist-task --by owner
 ```
+
+Use `accept-prepare --id accept-specialist-task` for an authenticated child participant. Applying
+the signed action creates the same linked child work and uses the action id for its durable status
+change.
 
 Agora creates `specialists/work/child-slice` in the child's initial lifecycle state. Its `WORK.md`
 links back to both the delegation and `delivery/parent-slice`. From that point the child executes its
@@ -112,6 +120,10 @@ agora delegation collect \
   --delegation specialist-task \
   --by specialist-swarm
 ```
+
+Use `collect-prepare --id collect-specialist-task` when the linked swarm actor requires
+authentication. The signature is bound to the terminal child work and current parent work, so a
+change to either side invalidates the prepared collection.
 
 Collection adds two records to the parent work:
 

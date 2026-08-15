@@ -193,6 +193,8 @@ class WorkRecord:
     status_reason: str | None = None
     status_by: str | None = None
     status_at: str | None = None
+    delegation_id: str | None = None
+    parent_work_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -875,6 +877,17 @@ class CreateDelegationInput:
 class DelegationActorInput:
     delegation_id: str
     actor_id: str
+
+
+@dataclass(frozen=True)
+class PrepareCreateDelegationInput:
+    action_id: str
+    delegation: CreateDelegationInput
+
+
+@dataclass(frozen=True)
+class PrepareDelegationActionInput(DelegationActorInput):
+    id: str = ""
 
 
 @dataclass(frozen=True)
