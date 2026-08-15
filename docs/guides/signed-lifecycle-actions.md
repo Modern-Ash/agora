@@ -2,7 +2,7 @@
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
 current work projection. The supported mutations are `work.transition`, `work.block`, `work.resume`,
-`work.cancel`, `approval.add`, and `handoff.create`. Their durable intents live
+`work.cancel`, `approval.add`, `handoff.create`, and delegation status decisions. Their durable intents live
 at `.agora/actions/<id>/ACTION.md`, separate from the resulting `WORK.md` state.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
@@ -95,6 +95,33 @@ Applying it rechecks the current operational state, role authority, terminal Met
 delegations. A successful action writes the ordinary `STATUS.md`, updates `WORK.md`, and appends the
 work event. The action id is also the Status Change id, enabling exact offline cross-validation.
 
+## Prepare a delegation decision
+
+Delegation blocking, resumption, rejection, and cancellation use the same signed status pattern:
+
+```bash
+agora delegation block-prepare --id pause-specialist-task \
+  --delegation specialist-task --by authenticated-facilitator \
+  --reason "Clarify the delegated boundary"
+
+agora delegation resume-prepare --id resume-specialist-task \
+  --delegation specialist-task --by authenticated-facilitator \
+  --reason "The delegated boundary is explicit"
+
+agora delegation reject-prepare --id reject-specialist-task \
+  --delegation specialist-task --by authenticated-child-owner \
+  --reason "The child cannot meet the contract"
+
+agora delegation cancel-prepare --id cancel-specialist-task \
+  --delegation specialist-task --by authenticated-parent-owner \
+  --reason "The parent no longer needs the result"
+```
+
+The canonical action uses the delegation's parent swarm/work as durable context, even when the child
+authorizes rejection. Its precondition covers both `DELEGATION.md` and the parent work policy files.
+Apply rechecks current contract state and the appropriate parent or child authority, then links the
+applied action to the exact delegation `STATUS.md`.
+
 ## Export and sign the authorization
 
 Export the canonical JSON bytes:
@@ -155,6 +182,7 @@ The stale intent remains on disk for audit and cannot be applied.
 ## Extensibility boundary
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
-parameter map. The current kernel accepts work transitions and interruptions, approvals, and
-handoffs. Delegation changes and administrative mutations remain future action kinds. They must keep
+parameter map. The current kernel accepts work transitions and interruptions, approvals, handoffs,
+and delegation status decisions. Delegation creation, acceptance, collection, and administrative
+mutations remain future action kinds. They must keep
 their existing domain validation as the source of authority when added.

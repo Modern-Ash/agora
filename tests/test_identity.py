@@ -13,7 +13,9 @@ from agora.model import (
     AddApprovalInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
+    ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
+    CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
     HandoffActorInput,
@@ -81,6 +83,8 @@ def _authenticated_project(
             kind="ai-agent",
             capabilities=["facilitation", "governance"],
             scope="project",
+            public_key=str(tmp_path / "developer.pem"),
+            require_authentication=True,
         ),
         AddActorInput(
             id="developer",
@@ -438,6 +442,171 @@ def test_applies_signed_work_interruptions_with_durable_status_changes(
         status_path.read_text(encoding="utf-8").replace(
             "Outcome is no longer required",
             "Unrecorded cancellation reason",
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert not report.ok
+    assert any(issue.code == "lifecycle-action.status-change-mismatch" for issue in report.issues)
+
+
+def test_applies_signed_delegation_status_decisions_across_parent_and_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    workspace.add_actor(
+        AddActorInput(
+            id="specialist",
+            name="Specialist Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    workspace.create_swarm(
+        CreateSwarmInput(
+            id="specialists",
+            objective="Produce delegated results",
+            create_branch=False,
+        )
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "specialist"),
+    ):
+        workspace.assign_actor(
+            AssignActorInput(swarm_id="specialists", role_id=role, actor_id=actor_id)
+        )
+    workspace.add_actor(
+        AddActorInput(
+            id="specialist-swarm",
+            name="Specialist Swarm",
+            kind="swarm",
+            capabilities=["implementation"],
+            scope="project",
+            represented_swarm="specialists",
+        )
+    )
+    workspace.create_swarm(
+        CreateSwarmInput(
+            id="parent",
+            objective="Delegate signed work",
+            create_branch=False,
+        )
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "specialist-swarm"),
+    ):
+        workspace.assign_actor(AssignActorInput(swarm_id="parent", role_id=role, actor_id=actor_id))
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="parent",
+            id="parent-work",
+            title="Integrate delegated output",
+            actor_id="owner",
+        )
+    )
+
+    def create_delegation(delegation_id: str) -> None:
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id=delegation_id,
+                parent_swarm_id="parent",
+                parent_work_id="parent-work",
+                child_actor_id="specialist-swarm",
+                child_work_id=f"{delegation_id}-work",
+                actor_id="specialist-swarm",
+                title=f"Delegated contract {delegation_id}",
+            )
+        )
+
+    def sign_and_apply(action_id: str) -> dict[str, object]:
+        payload_path = tmp_path / f"{action_id}.json"
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=action_id,
+                output=str(payload_path),
+            )
+        )
+        signature_path = tmp_path / f"{action_id}.sig"
+        signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(
+                action_id=action_id,
+                signature=str(signature_path),
+            )
+        )
+        return json.loads(payload_path.read_text(encoding="ascii"))
+
+    create_delegation("review-contract")
+    blocked = ChangeDelegationStatusInput(
+        id="block-review-contract",
+        delegation_id="review-contract",
+        actor_id="facilitator",
+        reason="Clarify the requested boundary",
+    )
+    with pytest.raises(PermissionError, match="prepare delegation.block"):
+        workspace.block_delegation(blocked)
+    workspace.prepare_block_delegation(blocked)
+    block_payload = sign_and_apply(blocked.id or "")
+    assert block_payload["swarm"] == "parent"
+    assert block_payload["work"] == "parent-work"
+    assert block_payload["parameters"] == {
+        "delegation": "review-contract",
+        "reason": "Clarify the requested boundary",
+    }
+
+    resumed = ChangeDelegationStatusInput(
+        id="resume-review-contract",
+        delegation_id="review-contract",
+        actor_id="facilitator",
+        reason="The boundary is explicit",
+    )
+    workspace.prepare_resume_delegation(resumed)
+    sign_and_apply(resumed.id or "")
+
+    rejected = ChangeDelegationStatusInput(
+        id="reject-review-contract",
+        delegation_id="review-contract",
+        actor_id="owner",
+        reason="The child cannot meet the contract",
+    )
+    with pytest.raises(PermissionError, match="prepare delegation.reject"):
+        workspace.reject_delegation(rejected)
+    workspace.prepare_reject_delegation(rejected)
+    sign_and_apply(rejected.id or "")
+    assert workspace.show_delegation("review-contract").status == "rejected"
+
+    create_delegation("cancel-contract")
+    cancelled = ChangeDelegationStatusInput(
+        id="cancel-delegated-contract",
+        delegation_id="cancel-contract",
+        actor_id="owner",
+        reason="The parent no longer needs the result",
+    )
+    with pytest.raises(PermissionError, match="prepare delegation.cancel"):
+        workspace.cancel_delegation(cancelled)
+    workspace.prepare_cancel_delegation(cancelled)
+    sign_and_apply(cancelled.id or "")
+    assert workspace.show_delegation("cancel-contract").status == "cancelled"
+    assert workspace.validate().ok
+
+    status_path = (
+        root
+        / ".agora"
+        / "delegations"
+        / "cancel-contract"
+        / "status-changes"
+        / "cancel-delegated-contract"
+        / "STATUS.md"
+    )
+    status_path.write_text(
+        status_path.read_text(encoding="utf-8").replace(
+            "The parent no longer needs the result",
+            "Unrecorded delegation reason",
         ),
         encoding="utf-8",
     )

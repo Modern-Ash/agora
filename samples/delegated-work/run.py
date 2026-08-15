@@ -2,17 +2,24 @@ import os
 import tempfile
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
     AddEvidenceInput,
+    ApplyLifecycleActionInput,
     AssignActorInput,
+    ChangeDelegationStatusInput,
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
     DelegationActorInput,
     InitInput,
+    PrepareLifecycleAuthorizationInput,
+    PrepareWorkTransitionInput,
     TransitionWorkInput,
     WorkActorInput,
 )
@@ -24,6 +31,25 @@ def main() -> None:
     os.environ["AGORA_HOME"] = tempfile.mkdtemp(prefix="agora-delegated-work-home-")
     agora = AgoraWorkspace(cwd=project)
     agora.initialize(InitInput(integration="generic", default_method="scrum"))
+    facilitator_private_key = Ed25519PrivateKey.generate()
+    facilitator_public_key = project / "facilitator-public.pem"
+    facilitator_public_key.write_bytes(
+        facilitator_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
+    def sign_and_apply(action_id: str) -> None:
+        payload = project / f"{action_id}.json"
+        agora.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(action_id=action_id, output=str(payload))
+        )
+        signature = project / f"{action_id}.sig"
+        signature.write_bytes(facilitator_private_key.sign(payload.read_bytes()))
+        agora.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action_id, signature=str(signature))
+        )
 
     for actor in (
         AddActorInput(
@@ -39,6 +65,8 @@ def main() -> None:
             kind="ai-agent",
             capabilities=["facilitation", "governance"],
             scope="project",
+            public_key=str(facilitator_public_key),
+            require_authentication=True,
         ),
         AddActorInput(
             id="specialist",
@@ -100,6 +128,27 @@ def main() -> None:
             result_kind="delegated-result",
         )
     )
+    for action_id, reason, prepare in (
+        (
+            "pause-specialist-task",
+            "Clarify the delegated boundary",
+            agora.prepare_block_delegation,
+        ),
+        (
+            "resume-specialist-task",
+            "The delegated boundary is explicit",
+            agora.prepare_resume_delegation,
+        ),
+    ):
+        prepared = prepare(
+            ChangeDelegationStatusInput(
+                id=action_id,
+                delegation_id=proposed.id,
+                actor_id="facilitator",
+                reason=reason,
+            )
+        )
+        sign_and_apply(prepared.id)
     accepted = agora.accept_delegation(
         DelegationActorInput(delegation_id=proposed.id, actor_id="owner")
     )
@@ -113,14 +162,16 @@ def main() -> None:
                 target_state=state,
             )
         )
-    agora.transition_work(
-        TransitionWorkInput(
+    verify_action = agora.prepare_work_transition(
+        PrepareWorkTransitionInput(
+            id="verify-child-slice",
             swarm_id="specialists",
             work_id="child-slice",
             actor_id="facilitator",
             target_state="verifying",
         )
     )
+    sign_and_apply(verify_action.id)
     agora.satisfy_criterion(
         WorkActorInput(swarm_id="specialists", work_id="child-slice", actor_id="owner"),
         "usable",

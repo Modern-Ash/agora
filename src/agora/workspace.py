@@ -2398,7 +2398,9 @@ class AgoraWorkspace:
             swarm_id=swarm.id,
             work_id=work.id if work is not None else None,
             parameters=parameters,
-            precondition_sha256=self._lifecycle_precondition_sha256(action, swarm, work),
+            precondition_sha256=self._lifecycle_precondition_sha256(
+                root, action, swarm, work, parameters
+            ),
             status="prepared",
             path=str(action_root),
             created_at=self._timestamp(),
@@ -2473,6 +2475,22 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
+        delegation_status_context: (
+            tuple[
+                ChangeDelegationStatusInput,
+                str,
+                str | None,
+                tuple[
+                    DelegationRecord,
+                    SwarmRecord,
+                    ActorRecord,
+                    SwarmRecord,
+                    WorkRecord,
+                    str,
+                ],
+            ]
+            | None
+        ) = None
         if record.action == "work.transition":
             if set(record.parameters) != {"to"}:
                 raise ValueError(f"Lifecycle Action has invalid transition parameters: {record.id}")
@@ -2539,6 +2557,61 @@ class AgoraWorkspace:
                 work,
                 previous,
             )
+        elif record.action in {
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.reject",
+            "delegation.resume",
+        }:
+            delegation = self._load_delegation(root, record.parameters["delegation"])
+            if (
+                record.swarm_id != delegation.parent_swarm_id
+                or record.work_id != delegation.parent_work_id
+            ):
+                raise ValueError(
+                    f"Lifecycle Action delegation context is not canonical: {record.id}"
+                )
+            if record.action == "delegation.block":
+                target_status = "blocked"
+                authority = "parent"
+                allowed_statuses = {"proposed", "accepted"}
+                blocked_from = delegation.status
+            elif record.action == "delegation.resume":
+                if delegation.status != "blocked" or delegation.blocked_from not in {
+                    "proposed",
+                    "accepted",
+                }:
+                    raise ValueError(f"Delegation {delegation.id} has no resumable blocked state")
+                target_status = delegation.blocked_from
+                authority = "parent"
+                allowed_statuses = {"blocked"}
+                blocked_from = None
+            elif record.action == "delegation.reject":
+                target_status = "rejected"
+                authority = "child"
+                allowed_statuses = {"proposed"}
+                blocked_from = None
+            else:
+                target_status = "cancelled"
+                authority = "parent"
+                allowed_statuses = {"proposed", "accepted", "blocked"}
+                blocked_from = None
+            change = ChangeDelegationStatusInput(
+                id=record.id,
+                delegation_id=delegation.id,
+                actor_id=record.actor,
+                reason=record.parameters["reason"],
+            )
+            context = self._validate_delegation_status_change(
+                root,
+                change,
+                target_status=target_status,
+                action=record.action,
+                authority=authority,
+                allowed_statuses=allowed_statuses,
+            )
+            _, swarm, actor, _, work, _ = context
+            delegation_status_context = (change, target_status, blocked_from, context)
         else:
             raise ValueError(f"Unsupported Lifecycle Action kind: {record.action}")
         assert_actor_identity_available(actor)
@@ -2570,7 +2643,7 @@ class AgoraWorkspace:
         elif record.action == "handoff.create":
             assert handoff_context is not None
             self._apply_handoff(root, *handoff_context)
-        else:
+        elif record.action in {"work.block", "work.cancel", "work.resume"}:
             assert work_status_context is not None
             change, target_status, swarm, actor, work, previous = work_status_context
             self._apply_work_status_change(
@@ -2582,6 +2655,17 @@ class AgoraWorkspace:
                 actor,
                 work,
                 previous,
+            )
+        else:
+            assert delegation_status_context is not None
+            change, target_status, blocked_from, context = delegation_status_context
+            self._apply_delegation_status_change(
+                root,
+                change,
+                target_status=target_status,
+                action=record.action,
+                blocked_from=blocked_from,
+                context=context,
             )
         applied = LifecycleActionRecord(
             **{
@@ -3070,6 +3154,16 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def prepare_block_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        return self._prepare_delegation_status_change(
+            data,
+            target_status="blocked",
+            action="delegation.block",
+            authority="parent",
+            allowed_statuses={"proposed", "accepted"},
+        )
+
+    @_locked_mutation("project")
     def resume_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         delegation = self.show_delegation(data.delegation_id)
         if delegation.status != "blocked" or delegation.blocked_from not in {
@@ -3087,6 +3181,22 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def prepare_resume_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        delegation = self.show_delegation(data.delegation_id)
+        if delegation.status != "blocked" or delegation.blocked_from not in {
+            "proposed",
+            "accepted",
+        }:
+            raise ValueError(f"Delegation {delegation.id} has no resumable blocked state")
+        return self._prepare_delegation_status_change(
+            data,
+            target_status=delegation.blocked_from,
+            action="delegation.resume",
+            authority="parent",
+            allowed_statuses={"blocked"},
+        )
+
+    @_locked_mutation("project")
     def reject_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         return self._change_delegation_status(
             data,
@@ -3097,8 +3207,28 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def prepare_reject_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        return self._prepare_delegation_status_change(
+            data,
+            target_status="rejected",
+            action="delegation.reject",
+            authority="child",
+            allowed_statuses={"proposed"},
+        )
+
+    @_locked_mutation("project")
     def cancel_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         return self._change_delegation_status(
+            data,
+            target_status="cancelled",
+            action="delegation.cancel",
+            authority="parent",
+            allowed_statuses={"proposed", "accepted", "blocked"},
+        )
+
+    @_locked_mutation("project")
+    def prepare_cancel_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        return self._prepare_delegation_status_change(
             data,
             target_status="cancelled",
             action="delegation.cancel",
@@ -3126,9 +3256,84 @@ class AgoraWorkspace:
         allowed_statuses: set[str],
         blocked_from: str | None = None,
     ) -> StatusChangeRecord:
+        root = self.project_root()
+        context = self._validate_delegation_status_change(
+            root,
+            data,
+            target_status=target_status,
+            action=action,
+            authority=authority,
+            allowed_statuses=allowed_statuses,
+        )
+        actor = context[2]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                f"prepare {action} before applying it"
+            )
+        return self._apply_delegation_status_change(
+            root,
+            data,
+            target_status=target_status,
+            action=action,
+            blocked_from=blocked_from,
+            context=context,
+        )
+
+    def _prepare_delegation_status_change(
+        self,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        authority: str,
+        allowed_statuses: set[str],
+    ) -> LifecycleActionRecord:
+        if data.id is None:
+            raise ValueError(f"Prepared {action} requires an explicit id")
+        root = self.project_root()
+        delegation, _, actor, parent, parent_work, _ = self._validate_delegation_status_change(
+            root,
+            data,
+            target_status=target_status,
+            action=action,
+            authority=authority,
+            allowed_statuses=allowed_statuses,
+        )
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action=action,
+            actor=actor,
+            swarm=parent,
+            work=parent_work,
+            parameters={
+                "delegation": delegation.id,
+                "reason": data.reason.strip(),
+            },
+        )
+
+    def _validate_delegation_status_change(
+        self,
+        root: Path,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        authority: str,
+        allowed_statuses: set[str],
+    ) -> tuple[
+        DelegationRecord,
+        SwarmRecord,
+        ActorRecord,
+        SwarmRecord,
+        WorkRecord,
+        str,
+    ]:
         if not data.reason.strip():
             raise ValueError("Delegation status change reason cannot be empty")
-        root = self.project_root()
         delegation = self._load_delegation(root, data.delegation_id)
         if delegation.status not in allowed_statuses:
             raise ValueError(
@@ -3139,13 +3344,34 @@ class AgoraWorkspace:
         )
         swarm = self._load_swarm(root, swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
+        parent = self._load_swarm(root, delegation.parent_swarm_id)
+        parent_work = self._load_work(parent, delegation.parent_work_id)
         if action in {"delegation.block", "delegation.resume"}:
-            parent = self._load_swarm(root, delegation.parent_swarm_id)
-            parent_work = self._load_work(parent, delegation.parent_work_id)
             self._assert_work_mutable(root, parent, parent_work)
         previous = delegation.status
         change_root = Path(delegation.path).parent / "status-changes"
         self._assert_status_change_id_available(change_root, data.id)
+        return delegation, swarm, actor, parent, parent_work, previous
+
+    def _apply_delegation_status_change(
+        self,
+        root: Path,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        blocked_from: str | None,
+        context: tuple[
+            DelegationRecord,
+            SwarmRecord,
+            ActorRecord,
+            SwarmRecord,
+            WorkRecord,
+            str,
+        ],
+    ) -> StatusChangeRecord:
+        delegation, _, actor, parent, parent_work, previous = context
+        change_root = Path(delegation.path).parent / "status-changes"
         changed = DelegationRecord(
             **{
                 **delegation.__dict__,
@@ -3172,8 +3398,6 @@ class AgoraWorkspace:
             f"delegation={delegation.id} from={previous} to={target_status} "
             f"actor={actor.reference} change={record.id}"
         )
-        parent = self._load_swarm(root, delegation.parent_swarm_id)
-        parent_work = self._load_work(parent, delegation.parent_work_id)
         self._append_work_event(parent_work, action, detail)
         self._append_swarm_event(root, parent.id, action, detail)
         self._append_swarm_event(root, delegation.child_swarm_id, action, detail)
@@ -5009,6 +5233,74 @@ class AgoraWorkspace:
                                 status_path,
                                 "Status Change differs from its applied Lifecycle Action",
                             )
+            if action.action in {
+                "delegation.block",
+                "delegation.cancel",
+                "delegation.reject",
+                "delegation.resume",
+            }:
+                delegation_id = action.parameters["delegation"]
+                delegation_path = root / ".agora" / "delegations" / delegation_id / "DELEGATION.md"
+                if not delegation_path.is_file():
+                    issue(
+                        "lifecycle-action.delegation-missing",
+                        path,
+                        f"Lifecycle Action references missing delegation: {delegation_id}",
+                    )
+                    continue
+                try:
+                    delegation = self._load_delegation(root, delegation_id)
+                except (FileNotFoundError, ValueError) as error:
+                    issue("lifecycle-action.delegation-invalid", delegation_path, str(error))
+                    continue
+                if (
+                    action.swarm_id != delegation.parent_swarm_id
+                    or action.work_id != delegation.parent_work_id
+                ):
+                    issue(
+                        "lifecycle-action.delegation-context-mismatch",
+                        path,
+                        "Lifecycle Action does not use the delegation parent context",
+                    )
+                status_path = delegation_path.parent / "status-changes" / action.id / "STATUS.md"
+                if action.status == "prepared" and status_path.exists():
+                    issue(
+                        "lifecycle-action.status-change-conflict",
+                        path,
+                        f"Prepared action already has a Status Change: {action.id}",
+                    )
+                elif action.status == "applied" and not status_path.is_file():
+                    issue(
+                        "lifecycle-action.status-change-missing",
+                        path,
+                        f"Applied action has no Status Change: {action.id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        change = self._load_status_change(status_path.parent)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.status-change-invalid", status_path, str(error))
+                    else:
+                        expected_targets = {
+                            "delegation.block": {"blocked"},
+                            "delegation.cancel": {"cancelled"},
+                            "delegation.reject": {"rejected"},
+                            "delegation.resume": {"proposed", "accepted"},
+                        }[action.action]
+                        matches = (
+                            change.subject_type == "delegation"
+                            and change.subject == delegation.id
+                            and change.action == action.action
+                            and change.target_status in expected_targets
+                            and change.actor == action.actor
+                            and change.reason == action.parameters["reason"]
+                        )
+                        if not matches:
+                            issue(
+                                "lifecycle-action.status-change-mismatch",
+                                status_path,
+                                "Status Change differs from its applied Lifecycle Action",
+                            )
 
         for directory in _child_directories(root / ".agora" / "tool-runs"):
             path = directory / "RUN.md"
@@ -6045,9 +6337,11 @@ class AgoraWorkspace:
 
     def _lifecycle_precondition_sha256(
         self,
+        root: Path,
         action: str,
         swarm: SwarmRecord,
         work: WorkRecord | None,
+        parameters: dict[str, str],
     ) -> str:
         if action in {
             "approval.add",
@@ -6072,12 +6366,33 @@ class AgoraWorkspace:
                 digest.update(self._work_precondition_sha256(work).encode("ascii"))
                 digest.update(b"\0")
             return digest.hexdigest()
+        if action in {
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.reject",
+            "delegation.resume",
+        }:
+            if work is None:
+                raise ValueError(f"Lifecycle Action {action} requires parent work")
+            delegation_id = parameters.get("delegation")
+            if delegation_id is None:
+                raise ValueError(f"Lifecycle Action {action} requires a delegation")
+            delegation = self._load_delegation(root, delegation_id)
+            digest = hashlib.sha256()
+            digest.update(b"DELEGATION.md\0")
+            digest.update(Path(delegation.path).read_bytes())
+            digest.update(b"\0parent-work-precondition-sha256\0")
+            digest.update(self._work_precondition_sha256(work).encode("ascii"))
+            digest.update(b"\0")
+            return digest.hexdigest()
         raise ValueError(f"Unsupported Lifecycle Action kind: {action}")
 
     def _assert_lifecycle_precondition(self, root: Path, record: LifecycleActionRecord) -> None:
         swarm = self._load_swarm(root, record.swarm_id)
         work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
-        actual = self._lifecycle_precondition_sha256(record.action, swarm, work)
+        actual = self._lifecycle_precondition_sha256(
+            root, record.action, swarm, work, record.parameters
+        )
         if actual != record.precondition_sha256:
             raise ValueError(f"Lifecycle Action precondition digest mismatch: {record.id}")
 
@@ -6118,6 +6433,10 @@ class AgoraWorkspace:
         action = string_attribute(document.attributes, "action")
         if action not in {
             "approval.add",
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.reject",
+            "delegation.resume",
             "handoff.create",
             "work.block",
             "work.cancel",
@@ -6133,6 +6452,10 @@ class AgoraWorkspace:
             raise ValueError(f"Lifecycle Action parameters must contain string values: {path}")
         expected_parameters = {
             "approval.add": {"role", "note"},
+            "delegation.block": {"delegation", "reason"},
+            "delegation.cancel": {"delegation", "reason"},
+            "delegation.reject": {"delegation", "reason"},
+            "delegation.resume": {"delegation", "reason"},
             "handoff.create": {"role", "from", "to", "reason"},
             "work.block": {"reason"},
             "work.cancel": {"reason"},
@@ -6149,10 +6472,16 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Lifecycle Action handoff actors must use scoped references: {path}"
                 )
-        if (
-            action in {"work.block", "work.cancel", "work.resume"}
-            and not parameters["reason"].strip()
-        ):
+        reason_actions = {
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.reject",
+            "delegation.resume",
+            "work.block",
+            "work.cancel",
+            "work.resume",
+        }
+        if action in reason_actions and not parameters["reason"].strip():
             raise ValueError(f"Lifecycle Action status reason cannot be empty: {path}")
         precondition_sha256 = string_attribute(document.attributes, "precondition-sha256")
         authentication_verified = _boolean_attribute_default(

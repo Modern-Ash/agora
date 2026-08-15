@@ -172,8 +172,9 @@ current actor state, and replacement references.
 
 ## Current boundary
 
-This authentication policy protects work transitions, work interruptions, approvals, handoffs, Tool
-Run launch, and agent-session launch. It does not yet sign session preparation or delegation changes, and it does
+This authentication policy protects work transitions, work interruptions, approvals, handoffs,
+delegation status decisions, Tool Run launch, and agent-session launch. It does not yet sign session
+preparation or delegation creation, acceptance, and collection, and it does
 not authenticate the operating-system account running Agora. External CLIs still perform their own
 provider authentication. Rotation and revocation are local administrative mutations recorded in
 Markdown and Git; they are not themselves authorized by a second actor or remote identity authority.

@@ -337,6 +337,13 @@ def _build_parser() -> argparse.ArgumentParser:
         change.add_argument("--by", required=True)
         change.add_argument("--reason", required=True)
         change.add_argument("--id")
+        prepared_change = delegation.add_parser(
+            f"{command}-prepare", help=f"Prepare a durable delegation {command} intent"
+        )
+        prepared_change.add_argument("--delegation", required=True)
+        prepared_change.add_argument("--by", required=True)
+        prepared_change.add_argument("--reason", required=True)
+        prepared_change.add_argument("--id", required=True)
 
     delegation_changes = delegation.add_parser(
         "status-changes", help="List a delegation's durable status history"
@@ -826,6 +833,24 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
             "resume": workspace.resume_delegation,
             "reject": workspace.reject_delegation,
             "cancel": workspace.cancel_delegation,
+        }[args.delegation_command](change)
+    if args.command == "delegation" and args.delegation_command in {
+        "block-prepare",
+        "resume-prepare",
+        "reject-prepare",
+        "cancel-prepare",
+    }:
+        change = ChangeDelegationStatusInput(
+            delegation_id=args.delegation,
+            actor_id=args.by,
+            reason=args.reason,
+            id=args.id,
+        )
+        return {
+            "block-prepare": workspace.prepare_block_delegation,
+            "resume-prepare": workspace.prepare_resume_delegation,
+            "reject-prepare": workspace.prepare_reject_delegation,
+            "cancel-prepare": workspace.prepare_cancel_delegation,
         }[args.delegation_command](change)
     if args.command == "delegation" and args.delegation_command == "status-changes":
         return workspace.list_delegation_status_changes(args.delegation)

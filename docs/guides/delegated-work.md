@@ -21,6 +21,20 @@ The child may reject a proposal. The parent may cancel a proposed, accepted, or 
 Every such change requires a reason and writes a sequenced `status-changes/<id>/STATUS.md` record.
 See [Interruptions and cancellation](interruptions-and-cancellation.md) for the complete graph.
 
+Authenticated actors prepare these decisions before signing and applying them:
+
+```bash
+agora delegation block-prepare --id pause-specialist-task \
+  --delegation specialist-task --by facilitator --reason "Clarify the boundary"
+agora action authorization --action pause-specialist-task --output /tmp/pause.json
+openssl pkeyutl -sign -inkey facilitator-private.pem -rawin \
+  -in /tmp/pause.json -out /tmp/pause.sig
+agora action apply --action pause-specialist-task --signature /tmp/pause.sig
+```
+
+Equivalent `resume-prepare`, `reject-prepare`, and `cancel-prepare` commands retain the original
+parent or child authority rules. See [Signed lifecycle actions](signed-lifecycle-actions.md).
+
 ## Preconditions
 
 Create and fully assign the child, register a project-scoped swarm actor with
