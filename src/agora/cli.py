@@ -311,6 +311,9 @@ def _build_parser() -> argparse.ArgumentParser:
     delegation_create.add_argument("--criterion", action="append", default=[])
     delegation_create.add_argument("--required-artifact", action="append", default=[])
     delegation_create.add_argument("--result-kind", default="delegated-result")
+    delegation_create.add_argument(
+        "--budget", action="append", default=[], help="Delegated budget dimension=limit"
+    )
 
     delegation_create_prepare = delegation.add_parser(
         "create-prepare", help="Prepare a signed delegation proposal intent"
@@ -327,6 +330,9 @@ def _build_parser() -> argparse.ArgumentParser:
     delegation_create_prepare.add_argument("--criterion", action="append", default=[])
     delegation_create_prepare.add_argument("--required-artifact", action="append", default=[])
     delegation_create_prepare.add_argument("--result-kind", default="delegated-result")
+    delegation_create_prepare.add_argument(
+        "--budget", action="append", default=[], help="Delegated budget dimension=limit"
+    )
 
     delegation_accept = delegation.add_parser(
         "accept", help="Accept a proposal and create child work"
@@ -952,6 +958,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 acceptance_criteria=[_parse_criterion(item) for item in args.criterion],
                 required_artifacts=args.required_artifact,
                 result_kind=args.result_kind,
+                budget_limits=_parse_budget_limits(args.budget),
             )
         )
     if args.command == "delegation" and args.delegation_command == "create-prepare":
@@ -970,6 +977,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                     acceptance_criteria=[_parse_criterion(item) for item in args.criterion],
                     required_artifacts=args.required_artifact,
                     result_kind=args.result_kind,
+                    budget_limits=_parse_budget_limits(args.budget),
                 ),
             )
         )
@@ -1470,6 +1478,28 @@ def _parse_inputs(values: list[str]) -> dict[str, str]:
             raise ValueError(f"Duplicate tool input: {key}")
         inputs[key] = item
     return inputs
+
+
+def _parse_budget_limits(values: list[str]) -> dict[str, int] | None:
+    if not values:
+        return None
+    limits: dict[str, int] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f'Invalid delegation budget "{value}"; expected dimension=limit')
+        dimension, raw_limit = value.split("=", 1)
+        if not dimension or not raw_limit:
+            raise ValueError(f'Invalid delegation budget "{value}"; expected dimension=limit')
+        if dimension in limits:
+            raise ValueError(f"Duplicate delegation budget dimension: {dimension}")
+        try:
+            limit = int(raw_limit)
+        except ValueError as error:
+            raise ValueError(f'Delegation budget limit must be an integer: "{value}"') from error
+        if limit < 0:
+            raise ValueError(f'Delegation budget limit cannot be negative: "{value}"')
+        limits[dimension] = limit
+    return limits
 
 
 def _print_json(output: TextIO, value: Any) -> None:

@@ -343,3 +343,6 @@ recovery, actor runtime updates, governed vacant-role assignment, work transitio
 interruptions, approvals, handoffs, work creation, decomposition and material records, session
 preparation, and every delegation lifecycle mutation. Future
 administrative action kinds must keep their domain validation as the source of authority when added.
+
+Signed `delegation.create` parameters include the complete provider-neutral `budget-limits` map.
+Apply rechecks inherited dimensions and current sibling reservations before persisting the proposal.

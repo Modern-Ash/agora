@@ -52,7 +52,8 @@ validation, so front matter preserves structured metadata and gates remain execu
   native tools through the CLI-first adapter catalog. Partial AWS and Google Cloud inventory
   adapters provide bounded reads without claiming provider-wide deployment semantics. Jira has a
   complete ACLI adapter; Confluence still requires a reviewed wrapper or future supported CLI.
-- Delegation budgets and child artifact copying. Governed same-swarm work decomposition and explicit
-  cross-swarm reference-based result collection are part of the current filesystem protocol.
+- Child artifact copying. Governed same-swarm work decomposition, provider-neutral delegation
+  budgets, and explicit cross-swarm reference-based result collection are part of the current
+  filesystem protocol.
 - Distributed leases for work coordinated across separate hosts. Local writer locks are implemented.
-- Gate waivers, approval delegation, budgets, and environment-specific permissions.
+- Gate waivers, approval delegation, and environment-specific permissions.

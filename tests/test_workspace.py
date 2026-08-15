@@ -2515,3 +2515,180 @@ def _prepare_delegated_scrum_teams(workspace: AgoraWorkspace) -> None:
             actor_id="owner",
         )
     )
+
+
+def test_propagates_and_enforces_delegation_budgets(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
+    for actor in (
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="facilitator",
+            name="Facilitator",
+            kind="ai-agent",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="leaf-developer",
+            name="Leaf Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        ),
+    ):
+        workspace.add_actor(actor)
+
+    def form_swarm(swarm_id: str, developer: str) -> None:
+        workspace.create_swarm(
+            CreateSwarmInput(
+                id=swarm_id,
+                objective=f"Deliver {swarm_id}",
+                create_branch=False,
+            )
+        )
+        for role, actor_id in (
+            ("product-owner", "owner"),
+            ("scrum-master", "facilitator"),
+            ("developer", developer),
+        ):
+            workspace.assign_actor(
+                AssignActorInput(swarm_id=swarm_id, role_id=role, actor_id=actor_id)
+            )
+
+    form_swarm("leaf", "leaf-developer")
+    workspace.add_actor(
+        AddActorInput(
+            id="leaf-swarm",
+            name="Leaf Swarm",
+            kind="swarm",
+            capabilities=["implementation"],
+            scope="project",
+            represented_swarm="leaf",
+        )
+    )
+    form_swarm("middle", "leaf-swarm")
+    workspace.add_actor(
+        AddActorInput(
+            id="middle-swarm",
+            name="Middle Swarm",
+            kind="swarm",
+            capabilities=["implementation"],
+            scope="project",
+            represented_swarm="middle",
+        )
+    )
+    form_swarm("root", "middle-swarm")
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="root",
+            id="root-work",
+            title="Fund bounded delegated work",
+            actor_id="owner",
+        )
+    )
+    root_delegation = workspace.create_delegation(
+        CreateDelegationInput(
+            id="root-to-middle",
+            parent_swarm_id="root",
+            parent_work_id="root-work",
+            child_actor_id="middle-swarm",
+            child_work_id="middle-work",
+            actor_id="middle-swarm",
+            title="Deliver within a bounded allocation",
+            budget_limits={"effort": 10, "tokens": 100},
+        )
+    )
+    workspace.accept_delegation(
+        DelegationActorInput(delegation_id=root_delegation.id, actor_id="owner")
+    )
+
+    middle_work = workspace.show_work("middle", "middle-work")
+    assert middle_work.budget_limits == {"effort": 10, "tokens": 100}
+
+    first = workspace.create_delegation(
+        CreateDelegationInput(
+            id="middle-to-leaf-one",
+            parent_swarm_id="middle",
+            parent_work_id="middle-work",
+            child_actor_id="leaf-swarm",
+            child_work_id="leaf-work-one",
+            actor_id="leaf-swarm",
+            title="Use the first allocation",
+            budget_limits={"effort": 6, "tokens": 80},
+        )
+    )
+    with pytest.raises(ValueError, match="exceeds parent work allocation"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="middle-to-leaf-two",
+                parent_swarm_id="middle",
+                parent_work_id="middle-work",
+                child_actor_id="leaf-swarm",
+                child_work_id="leaf-work-two",
+                actor_id="leaf-swarm",
+                title="Exceed the remaining allocation",
+                budget_limits={"effort": 5, "tokens": 20},
+            )
+        )
+    with pytest.raises(ValueError, match="not available from parent work"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="middle-to-leaf-cost",
+                parent_swarm_id="middle",
+                parent_work_id="middle-work",
+                child_actor_id="leaf-swarm",
+                child_work_id="leaf-work-cost",
+                actor_id="leaf-swarm",
+                title="Invent an unavailable dimension",
+                budget_limits={"cost-cents": 1},
+            )
+        )
+    with pytest.raises(ValueError, match="cannot be negative"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="middle-to-leaf-negative",
+                parent_swarm_id="middle",
+                parent_work_id="middle-work",
+                child_actor_id="leaf-swarm",
+                child_work_id="leaf-work-negative",
+                actor_id="leaf-swarm",
+                title="Reject a negative allocation",
+                budget_limits={"effort": -1},
+            )
+        )
+
+    workspace.reject_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=first.id,
+            actor_id="owner",
+            reason="The leaf rejects this allocation",
+        )
+    )
+    second = workspace.create_delegation(
+        CreateDelegationInput(
+            id="middle-to-leaf-two",
+            parent_swarm_id="middle",
+            parent_work_id="middle-work",
+            child_actor_id="leaf-swarm",
+            child_work_id="leaf-work-two",
+            actor_id="leaf-swarm",
+            title="Use the released allocation",
+            budget_limits={"effort": 10, "tokens": 100},
+        )
+    )
+    workspace.accept_delegation(DelegationActorInput(delegation_id=second.id, actor_id="owner"))
+
+    assert workspace.show_work("leaf", "leaf-work-two").budget_limits == {
+        "effort": 10,
+        "tokens": 100,
+    }
+    assert workspace.validate().ok

@@ -80,13 +80,17 @@ agora delegation create \
   --description "Return a result that the parent can integrate." \
   --criterion usable:"The result can be integrated" \
   --required-artifact child-result \
+  --budget effort=8 \
+  --budget tokens=50000 \
   --result-kind delegated-result \
   --by specialist-swarm
 ```
 
 A different parent participant needs `delegation.manage`. The request persists the exact parent and
 child identities, criteria, required child artifacts, and the artifact kind expected by the parent.
-The child work id must not already exist.
+The child work id must not already exist. Optional provider-neutral budgets are persisted in the
+proposal and inherited by accepted child work. Nested sibling allocations cannot exceed that map;
+see [Delegation budgets](delegation-budgets.md).
 
 When the requester requires authentication, use `create-prepare` with a distinct `--action-id`,
 export its authorization, sign it outside Agora, and apply it. The signature binds every field shown

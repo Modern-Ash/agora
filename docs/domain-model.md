@@ -62,6 +62,11 @@ child-work artifact reference and successful delegated-work evidence to the pare
 accepted delegation does not rewrite its independently owned child work. Child artifacts remain
 authoritative in the child and parent completion gates remain independent.
 
+A Delegation may carry provider-neutral integer budget limits. Acceptance copies those limits to
+the child work. Nested delegations may allocate only inherited dimensions, and non-rejected sibling
+allocations cannot exceed the parent work limit. Agora validates declared capacity; consumption
+evidence remains the responsibility of the selected runtime or external adapter.
+
 ## Swarm
 
 A swarm is a temporary team associated with an objective, Method Pack, and branch. It starts as

@@ -139,6 +139,7 @@ def main() -> None:
         acceptance_criteria=[("usable", "The result can be integrated")],
         required_artifacts=["child-result"],
         result_kind="delegated-result",
+        budget_limits={"effort": 8, "tokens": 50000},
     )
     created = agora.prepare_create_delegation(
         PrepareCreateDelegationInput(
@@ -263,6 +264,7 @@ def main() -> None:
     print(f"Project: {project}")
     print(f"Delegation: {proposed.status} -> {accepted.status} -> {collected.status}")
     print(f"Child swarm: {agora.show_swarm('specialists').status}")
+    print(f"Child budget: {agora.show_work('specialists', 'child-slice').budget_limits}")
     print(f"Parent artifacts: {', '.join(parent_work.artifact_kinds)}")
     print(f"Parent evidence: {', '.join(parent_work.evidence_results)}")
     print(f"Record: {collected.path}")

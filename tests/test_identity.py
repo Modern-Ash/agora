@@ -1116,6 +1116,7 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
         acceptance_criteria=[("usable", "The result can be integrated")],
         required_artifacts=["child-result"],
         result_kind="delegated-result",
+        budget_limits={"effort": 5},
     )
     with pytest.raises(PermissionError, match="prepare delegation.create"):
         workspace.create_delegation(proposal)
@@ -1124,6 +1125,7 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
     )
     create_payload = sign_and_apply("propose-signed-contract")
     assert create_payload["parameters"]["delegation"] == "signed-contract"
+    assert create_payload["parameters"]["budget-limits"] == '{"effort":5}'
     assert workspace.show_delegation("signed-contract").status == "proposed"
 
     acceptance = DelegationActorInput(delegation_id="signed-contract", actor_id="owner")
@@ -1137,6 +1139,9 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
         )
     )
     sign_and_apply("accept-signed-contract")
+    assert workspace.show_work("signed-specialists", "signed-child-work").budget_limits == {
+        "effort": 5
+    }
 
     for state in ("planned", "implementing", "reviewing", "verifying"):
         workspace.transition_work(

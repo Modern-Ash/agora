@@ -49,6 +49,7 @@ from agora.identity import (
 from agora.locking import WorkspaceLock, inspect_workspace_lock
 from agora.markdown import (
     MarkdownDocument,
+    optional_integer_record_attribute,
     optional_string_attribute,
     read_markdown,
     record_attribute,
@@ -2477,6 +2478,7 @@ class AgoraWorkspace:
         data: CreateWorkInput,
         context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
         parent_work_ref: str | None = None,
+        budget_limits: dict[str, int] | None = None,
     ) -> WorkRecord:
         swarm, actor, contract, criteria, path = context
         work = WorkRecord(
@@ -2492,6 +2494,7 @@ class AgoraWorkspace:
             evidence_results=[],
             approval_roles=[],
             path=str(path),
+            budget_limits=budget_limits,
             parent_work_ref=parent_work_ref,
         )
         write_new(path / "WORK.md", self._render_work(work))
@@ -2611,7 +2614,12 @@ class AgoraWorkspace:
         swarm, actor, _, _, _ = context
         parent_reference = f"{swarm.id}/{parent.id}"
         child_reference = f"{swarm.id}/{child.id}"
-        result = self._apply_create_work(child, context, parent_work_ref=parent_reference)
+        result = self._apply_create_work(
+            child,
+            context,
+            parent_work_ref=parent_reference,
+            budget_limits={} if parent.budget_limits is not None else None,
+        )
         parent.child_work_refs = list(dict.fromkeys([*parent.child_work_refs, child_reference]))
         atomic_write(Path(parent.path) / "WORK.md", self._render_work(parent))
         self._append_work_event(
@@ -3608,6 +3616,30 @@ class AgoraWorkspace:
         return value
 
     @classmethod
+    def _budget_limits_parameter(
+        cls, record: LifecycleActionRecord, key: str = "budget-limits"
+    ) -> dict[str, int] | None:
+        if key not in record.parameters:
+            return None
+        try:
+            value = json.loads(record.parameters[key])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid JSON parameter {key}: {record.id}"
+            ) from error
+        if value is not None and (
+            not isinstance(value, dict)
+            or any(
+                not isinstance(name, str) or not isinstance(limit, int) or isinstance(limit, bool)
+                for name, limit in value.items()
+            )
+        ):
+            raise ValueError(
+                f"Lifecycle Action parameter {key} must be an integer map or null: {record.id}"
+            )
+        return cls._normalize_budget_limits(value)
+
+    @classmethod
     def _work_creation_input_from_action(cls, record: LifecycleActionRecord) -> CreateWorkInput:
         if record.work_id is None:
             raise ValueError(f"Lifecycle Action has no created work id: {record.id}")
@@ -3706,6 +3738,7 @@ class AgoraWorkspace:
             acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
             required_artifacts=raw_artifacts,
             result_kind=record.parameters["result-kind"],
+            budget_limits=AgoraWorkspace._budget_limits_parameter(record),
         )
 
     def list_lifecycle_actions(self, status: str | None = None) -> list[LifecycleActionRecord]:
@@ -3988,6 +4021,7 @@ class AgoraWorkspace:
         root = self.project_root()
         context = self._validate_create_delegation(root, data.delegation)
         parent, parent_work, child_actor, requester, _, criteria, delegation_id, _ = context
+        budget_limits = self._validate_delegation_budget(root, parent_work, data.delegation)
         assert_actor_identity_available(requester)
         self._assert_current_actor_key(requester)
         return self._prepare_lifecycle_action(
@@ -4012,6 +4046,9 @@ class AgoraWorkspace:
                     separators=(",", ":"),
                 ),
                 "result-kind": data.delegation.result_kind,
+                "budget-limits": json.dumps(
+                    budget_limits, ensure_ascii=True, separators=(",", ":")
+                ),
             },
         )
 
@@ -4062,12 +4099,69 @@ class AgoraWorkspace:
             raise ValueError("Delegated acceptance criterion ids must be unique")
         for criterion_id in criteria:
             assert_slug(criterion_id, "Delegated criterion id")
+        self._validate_delegation_budget(root, parent_work, data)
         delegation_id = data.id or self._now().astimezone(UTC).strftime("delegation-%Y%m%dt%H%M%sz")
         assert_slug(delegation_id, "Delegation id")
         path = root / ".agora" / "delegations" / delegation_id / "DELEGATION.md"
         if path.exists():
             raise FileExistsError(f"Delegation already exists: {delegation_id}")
         return parent, parent_work, child_actor, requester, child, criteria, delegation_id, path
+
+    def _validate_delegation_budget(
+        self,
+        root: Path,
+        parent_work: WorkRecord,
+        data: CreateDelegationInput,
+    ) -> dict[str, int] | None:
+        requested = self._normalize_budget_limits(data.budget_limits)
+        if parent_work.budget_limits is None:
+            return requested
+        effective = requested or {}
+        unknown = sorted(set(effective) - set(parent_work.budget_limits))
+        if unknown:
+            raise ValueError(
+                "Delegation budget dimensions are not available from parent work: "
+                f"{', '.join(unknown)}"
+            )
+        allocated = {dimension: 0 for dimension in parent_work.budget_limits}
+        for delegation in self.list_delegations():
+            if (
+                delegation.parent_swarm_id != data.parent_swarm_id
+                or delegation.parent_work_id != data.parent_work_id
+                or delegation.status == "rejected"
+            ):
+                continue
+            for dimension, limit in (delegation.budget_limits or {}).items():
+                if dimension in allocated:
+                    allocated[dimension] += limit
+        exceeded = [
+            f"{dimension}={allocated[dimension] + effective.get(dimension, 0)}"
+            f"/{parent_work.budget_limits[dimension]}"
+            for dimension in sorted(parent_work.budget_limits)
+            if allocated[dimension] + effective.get(dimension, 0)
+            > parent_work.budget_limits[dimension]
+        ]
+        if exceeded:
+            raise ValueError(
+                "Delegation budget exceeds parent work allocation: " + ", ".join(exceeded)
+            )
+        return effective
+
+    @staticmethod
+    def _normalize_budget_limits(
+        limits: dict[str, int] | None,
+    ) -> dict[str, int] | None:
+        if limits is None:
+            return None
+        normalized: dict[str, int] = {}
+        for dimension, limit in sorted(limits.items()):
+            assert_slug(dimension, "Delegation budget dimension")
+            if not isinstance(limit, int) or isinstance(limit, bool):
+                raise ValueError(f"Delegation budget {dimension} must be an integer")
+            if limit < 0:
+                raise ValueError(f"Delegation budget {dimension} cannot be negative")
+            normalized[dimension] = limit
+        return normalized
 
     def _apply_create_delegation(
         self,
@@ -4085,6 +4179,7 @@ class AgoraWorkspace:
         ],
     ) -> DelegationRecord:
         parent, parent_work, child_actor, requester, child, criteria, delegation_id, path = context
+        budget_limits = self._validate_delegation_budget(root, parent_work, data)
         record = DelegationRecord(
             id=delegation_id,
             parent_swarm_id=parent.id,
@@ -4101,6 +4196,7 @@ class AgoraWorkspace:
             status="proposed",
             created_at=self._timestamp(),
             path=str(path),
+            budget_limits=budget_limits,
         )
         write_new(path, self._render_delegation(record))
         detail = (
@@ -4187,7 +4283,11 @@ class AgoraWorkspace:
             required_artifacts=delegation.required_artifacts,
             description=delegation.description,
         )
-        child_work = self._apply_create_work(work_data, self._validate_create_work(root, work_data))
+        child_work = self._apply_create_work(
+            work_data,
+            self._validate_create_work(root, work_data),
+            budget_limits=delegation.budget_limits,
+        )
         child_work.delegation_id = delegation.id
         child_work.parent_work_ref = f"{delegation.parent_swarm_id}/{delegation.parent_work_id}"
         atomic_write(Path(child_work.path) / "WORK.md", self._render_work(child_work))
@@ -6001,6 +6101,10 @@ class AgoraWorkspace:
                 if not isinstance(work, WorkRecord):
                     continue
                 work_records[(swarm.id, work.id)] = work
+                try:
+                    self._normalize_budget_limits(work.budget_limits)
+                except ValueError as error:
+                    issue("work.budget-invalid", path, str(error))
                 if work.id != path.parent.name:
                     issue(
                         "work.id-mismatch",
@@ -6172,6 +6276,7 @@ class AgoraWorkspace:
         except Exception as error:
             issue("swarm.graph-invalid", swarm_root, str(error))
 
+        delegation_records: dict[str, DelegationRecord] = {}
         for directory in _child_directories(root / ".agora" / "delegations"):
             path = directory / "DELEGATION.md"
             delegation = inspect(
@@ -6182,6 +6287,11 @@ class AgoraWorkspace:
             )
             if not isinstance(delegation, DelegationRecord):
                 continue
+            delegation_records[delegation.id] = delegation
+            try:
+                self._normalize_budget_limits(delegation.budget_limits)
+            except ValueError as error:
+                issue("delegation.budget-invalid", path, str(error))
             if delegation.id != path.parent.name:
                 issue(
                     "delegation.id-mismatch",
@@ -6252,6 +6362,12 @@ class AgoraWorkspace:
                         "delegation.child-link-invalid",
                         Path(child_work.path) / "WORK.md",
                         "Child work does not link to its delegation and parent work",
+                    )
+                if child_work.budget_limits != delegation.budget_limits:
+                    issue(
+                        "delegation.child-budget-mismatch",
+                        Path(child_work.path) / "WORK.md",
+                        "Child work budget does not match its delegation",
                     )
             represented = resolve_actor(delegation.represented_by, path)
             resolve_actor(delegation.requested_by, path)
@@ -6384,6 +6500,38 @@ class AgoraWorkspace:
                             evidence_path,
                             "Collected result evidence is missing from parent work",
                         )
+
+        allocated_budgets: dict[tuple[str, str], dict[str, int]] = {}
+        for delegation in delegation_records.values():
+            if delegation.status == "rejected":
+                continue
+            parent_key = (delegation.parent_swarm_id, delegation.parent_work_id)
+            parent_work = work_records.get(parent_key)
+            if parent_work is None or parent_work.budget_limits is None:
+                continue
+            allocated = allocated_budgets.setdefault(
+                parent_key, {dimension: 0 for dimension in parent_work.budget_limits}
+            )
+            for dimension, limit in (delegation.budget_limits or {}).items():
+                if dimension not in allocated:
+                    issue(
+                        "delegation.budget-dimension-unavailable",
+                        Path(delegation.path),
+                        f"Budget dimension is unavailable from parent work: {dimension}",
+                    )
+                    continue
+                allocated[dimension] += limit
+        for parent_key, allocated in allocated_budgets.items():
+            parent = work_records[parent_key]
+            assert parent.budget_limits is not None
+            for dimension, total in allocated.items():
+                if total > parent.budget_limits[dimension]:
+                    issue(
+                        "delegation.budget-exceeded",
+                        Path(parent.path) / "WORK.md",
+                        f"Delegated {dimension} budget {total} exceeds "
+                        f"parent limit {parent.budget_limits[dimension]}",
+                    )
 
         for directory in _child_directories(root / ".agora" / "sessions"):
             path = directory / "SESSION.md"
@@ -6872,6 +7020,7 @@ class AgoraWorkspace:
                             dict(creation.acceptance_criteria),
                             list(dict.fromkeys(creation.required_artifacts)),
                             creation.result_kind,
+                            creation.budget_limits,
                         )
                         actual = (
                             delegation.parent_swarm_id,
@@ -6885,6 +7034,7 @@ class AgoraWorkspace:
                             delegation.acceptance_criteria,
                             delegation.required_artifacts,
                             delegation.result_kind,
+                            delegation.budget_limits,
                         )
                         if actual != expected:
                             issue(
@@ -7861,6 +8011,7 @@ class AgoraWorkspace:
                     "acceptance-criteria": record.acceptance_criteria,
                     "required-artifacts": record.required_artifacts,
                     "result-kind": record.result_kind,
+                    "budget-limits": record.budget_limits,
                     "status": record.status,
                     "created-at": record.created_at,
                     "accepted-by": record.accepted_by,
@@ -7921,6 +8072,7 @@ class AgoraWorkspace:
             status_by=optional_string_attribute(document.attributes, "status-by"),
             status_at=optional_string_attribute(document.attributes, "status-at"),
             path=str(path),
+            budget_limits=optional_integer_record_attribute(document.attributes, "budget-limits"),
         )
 
     def _load_work(self, swarm: SwarmRecord, work_id: str) -> WorkRecord:
@@ -7952,7 +8104,12 @@ class AgoraWorkspace:
             evidence_results=strings_attribute(evidence.attributes, "results"),
             approval_roles=approval_roles,
             path=str(path),
-            child_work_refs=strings_attribute(document.attributes, "child-work-refs"),
+            child_work_refs=(
+                strings_attribute(document.attributes, "child-work-refs")
+                if "child-work-refs" in document.attributes
+                else []
+            ),
+            budget_limits=optional_integer_record_attribute(document.attributes, "budget-limits"),
             operational_status=_work_operational_status(
                 document.attributes.get("operational-status", "active")
             ),
@@ -7983,6 +8140,7 @@ class AgoraWorkspace:
             "satisfied-criteria": work.satisfied_criteria,
             "required-artifacts": work.required_artifacts,
             "child-work-refs": work.child_work_refs,
+            "budget-limits": work.budget_limits,
         }
         if work.delegation_id is not None:
             attributes["delegation"] = work.delegation_id
@@ -8293,6 +8451,7 @@ class AgoraWorkspace:
                 "acceptance-criteria",
                 "required-artifacts",
                 "result-kind",
+                "budget-limits",
             },
             "delegation.reject": {"delegation", "reason"},
             "delegation.resume": {"delegation", "reason"},
@@ -8318,7 +8477,12 @@ class AgoraWorkspace:
                 "required-artifacts",
             },
         }[action]
-        if set(parameters) != expected_parameters:
+        parameter_keys = set(parameters)
+        legacy_delegation_parameters = (
+            action == "delegation.create"
+            and parameter_keys == expected_parameters - {"budget-limits"}
+        )
+        if parameter_keys != expected_parameters and not legacy_delegation_parameters:
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
         if action in {"actor.key.recover", "actor.key.revoke", "actor.key.rotate"}:
             fingerprint_keys = (
@@ -8378,6 +8542,11 @@ class AgoraWorkspace:
             try:
                 criteria = json.loads(parameters["acceptance-criteria"])
                 artifacts = json.loads(parameters["required-artifacts"])
+                budgets = (
+                    json.loads(parameters["budget-limits"])
+                    if "budget-limits" in parameters
+                    else None
+                )
             except json.JSONDecodeError as error:
                 raise ValueError(
                     f"Lifecycle Action has invalid delegation JSON parameters: {path}"
@@ -8397,6 +8566,19 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Lifecycle Action has invalid delegation required artifacts: {path}"
                 )
+            if budgets is not None and (
+                not isinstance(budgets, dict)
+                or any(
+                    not isinstance(name, str)
+                    or not isinstance(limit, int)
+                    or isinstance(limit, bool)
+                    or limit < 0
+                    for name, limit in budgets.items()
+                )
+            ):
+                raise ValueError(f"Lifecycle Action has invalid delegation budgets: {path}")
+            for dimension in budgets or {}:
+                assert_slug(dimension, "Lifecycle Action delegation budget dimension")
         if action in {"work.create", "work.decompose"}:
             if action == "work.decompose":
                 assert_slug(parameters["child-work"], "Lifecycle Action child work id")

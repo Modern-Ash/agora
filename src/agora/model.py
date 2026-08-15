@@ -190,6 +190,7 @@ class WorkRecord:
     approval_roles: list[str]
     path: str
     child_work_refs: list[str] = field(default_factory=list)
+    budget_limits: dict[str, int] | None = None
     operational_status: WorkOperationalStatus = "active"
     status_reason: str | None = None
     status_by: str | None = None
@@ -565,6 +566,7 @@ class DelegationRecord:
     status: DelegationStatus
     created_at: str
     path: str
+    budget_limits: dict[str, int] | None = None
     accepted_by: str | None = None
     accepted_at: str | None = None
     collected_by: str | None = None
@@ -913,6 +915,7 @@ class CreateDelegationInput:
     result_kind: str = "delegated-result"
     description: str = ""
     id: str | None = None
+    budget_limits: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)

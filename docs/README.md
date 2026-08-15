@@ -58,6 +58,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Recursive swarms](guides/recursive-swarms.md): link a real child swarm with cycle and depth limits.
 - [Delegated work](guides/delegated-work.md): propose child work, accept it, and collect a terminal
   result into its parent.
+- [Delegation budgets](guides/delegation-budgets.md): propagate provider-neutral integer limits and
+  prevent sibling allocations from exceeding their parent work budget.
 - [Work decomposition](guides/work-decomposition.md): materialize same-swarm child contracts and
   enforce parent-child closure.
 - [Operations and validation](guides/operations-and-validation.md): query active state, inspect
@@ -117,7 +119,7 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child
   swarm and reject excessive nesting.
 - [Delegated work](../samples/delegated-work/README.md): execute the proposal, child acceptance, and
-  result collection lifecycle.
+  result collection lifecycle with a signed inherited budget.
 - [Work decomposition](../samples/work-decomposition/README.md): create local child work and reject
   parent closure until every child is terminal or cancelled.
 - [Operational queries](../samples/operational-query/README.md): summarize and validate a generated
