@@ -13,6 +13,7 @@ from agora.model import (
     AddArtifactInput,
     AddEnvironmentInput,
     AddEvidenceInput,
+    AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
@@ -64,6 +65,7 @@ from agora.model import (
     RotateActorKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
+    SyncOrganizationTrustInput,
     TransitionWorkInput,
     UpdateCatalogPackInput,
     UpdateRegistryInput,
@@ -224,6 +226,28 @@ def _build_parser() -> argparse.ArgumentParser:
     trust_revoke.add_argument("--scope", choices=("user", "project"), default="user")
     trust_revoke.add_argument("--reason", required=True)
     trust_revoke.add_argument("--replaced-by")
+    trust_organization = trust.add_parser(
+        "organization", help="Manage signed organization trust feeds"
+    ).add_subparsers(dest="organization_trust_command", required=True)
+    organization_add = trust_organization.add_parser(
+        "add", help="Pin an organization trust root public key"
+    )
+    organization_add.add_argument("--id", required=True)
+    organization_add.add_argument("--public-key", required=True)
+    organization_add.add_argument("--scope", choices=("user", "project"), default="user")
+    organization_show = trust_organization.add_parser(
+        "show", help="Show an organization trust root and sync position"
+    )
+    organization_show.add_argument("--id", required=True)
+    organization_show.add_argument("--scope", choices=("user", "project"), default="user")
+    organization_sync = trust_organization.add_parser(
+        "sync", help="Preview or apply the next signed organization trust bundle"
+    )
+    organization_sync.add_argument("--id", required=True)
+    organization_sync.add_argument("--scope", choices=("user", "project"), default="user")
+    organization_sync.add_argument("--source")
+    organization_sync.add_argument("--apply", action="store_true")
+    organization_sync.add_argument("--allow-insecure-http", action="store_true")
 
     pack = commands.add_parser("pack", help="Manage installed and catalog packs").add_subparsers(
         dest="pack_command", required=True
@@ -972,6 +996,27 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 replaced_by=args.replaced_by,
             )
         )
+    if args.command == "trust" and args.trust_command == "organization":
+        if args.organization_trust_command == "add":
+            return workspace.add_organization_trust_root(
+                AddOrganizationTrustRootInput(
+                    id=args.id,
+                    public_key=args.public_key,
+                    scope=args.scope,
+                )
+            )
+        if args.organization_trust_command == "show":
+            return workspace.get_organization_trust_root(args.id, args.scope)
+        if args.organization_trust_command == "sync":
+            return workspace.sync_organization_trust(
+                SyncOrganizationTrustInput(
+                    id=args.id,
+                    scope=args.scope,
+                    source=args.source,
+                    apply=args.apply,
+                    allow_insecure_http=args.allow_insecure_http,
+                )
+            )
     if args.command == "pack" and args.pack_command == "search":
         return workspace.search_catalog(args.kind, args.query, args.registry)
     if args.command == "pack" and args.pack_command == "install":

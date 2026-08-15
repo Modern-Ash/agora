@@ -444,6 +444,40 @@ class RegistryTrustKeyRecord:
 
 
 @dataclass(frozen=True)
+class OrganizationTrustRootRecord:
+    id: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    scope: Literal["user", "project"]
+    path: str
+    created_at: str
+    source: str | None = None
+    last_sequence: int = 0
+    last_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class OrganizationTrustSyncStep:
+    id: str
+    registry: str
+    action: Literal["add", "revoke", "unchanged"]
+
+
+@dataclass(frozen=True)
+class OrganizationTrustSyncResult:
+    organization: str
+    scope: Literal["user", "project"]
+    sequence: int
+    sha256: str
+    signature_verified: bool
+    applied: bool
+    source: str
+    steps: list[OrganizationTrustSyncStep]
+    history_path: str | None = None
+
+
+@dataclass(frozen=True)
 class RegistryUpdateRecord:
     id: str
     registry: str
@@ -815,6 +849,22 @@ class RevokeRegistryTrustKeyInput:
     scope: Literal["user", "project"]
     reason: str
     replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class AddOrganizationTrustRootInput:
+    id: str
+    public_key: str
+    scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class SyncOrganizationTrustInput:
+    id: str
+    scope: Literal["user", "project"]
+    source: str | None = None
+    apply: bool = False
+    allow_insecure_http: bool = False
 
 
 @dataclass(frozen=True)

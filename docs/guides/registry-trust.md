@@ -128,8 +128,72 @@ replaced-by: "team-release-2027"
 `agora validate` recomputes the fingerprint, verifies key length and algorithm, checks file identity,
 and confirms that every declared replacement is active for the same registry.
 
+## Organization trust feeds
+
+An organization can publish a signed sequence of registry key and revocation declarations. Pin
+the organization's Ed25519 root public key through an independently trusted channel:
+
+```bash
+agora trust organization add \
+  --id example-org \
+  --public-key ./example-org-trust-root.pem \
+  --scope project
+```
+
+The private root key remains in the organization's signing system. Agora persists only the public
+root, its fingerprint, the applied sequence, and the checksum of the last bundle under:
+
+```text
+<project>/.agora/trust/organizations/example-org/ROOT.md
+<project>/.agora/trust/organizations/example-org/history/00000000000000000001.md
+```
+
+Preview the next bundle before changing trust:
+
+```bash
+agora trust organization sync \
+  --id example-org \
+  --source https://trust.example.com/agora/BUNDLE.md \
+  --scope project
+```
+
+Apply the reviewed result explicitly:
+
+```bash
+agora trust organization sync \
+  --id example-org \
+  --source https://trust.example.com/agora/BUNDLE.md \
+  --scope project \
+  --apply
+```
+
+After the first applied sync, the source is remembered and `--source` may be omitted. HTTPS is
+required for remote feeds; HTTP requires the explicit development-only
+`--allow-insecure-http` switch. Downloads are time- and size-bounded.
+
+Each bundle uses `agora/organization-trust-bundle/v1` and contains an organization id, a strictly
+consecutive sequence, generation time, previous-bundle SHA-256, key declarations, and an
+Ed25519 signature over the canonical statement. Applying a bundle transactionally materializes its
+keys in the ordinary scoped trust store and archives the exact signed document. Omitted local keys
+remain unchanged, so removal from a feed cannot erase trust history. Agora rejects:
+
+- invalid signatures, skipped sequences, rollbacks, and broken previous-checksum links;
+- duplicate key ids, changed public material under an existing id, or rewritten revocation facts;
+- any attempt to reactivate a key already persisted as revoked;
+- replacements that are missing, inactive, or authorized for another registry.
+
+The runnable [organization trust sample](../../samples/organization-trust/README.md) shows the exact
+bundle fields and canonical signature payload. Publishing and private-key custody deliberately stay
+outside the Agora CLI; teams can use their existing signing service, HSM workflow, or reviewed
+release automation.
+
+`agora validate` re-verifies every project bundle signature and its complete checksum chain against
+the pinned root. The history is therefore a locally auditable transparency trail, while Git can
+provide review and replication for project scope.
+
 ## Current boundary
 
-Trust stores are local or project-versioned. Agora does not yet fetch organization trust policy,
-certificate chains, revocation feeds, transparency logs, or threshold signatures. Human review and
-Git remain the distribution mechanism for project trust changes.
+Agora supports a single pinned Ed25519 organization root and sequential snapshot feeds. Root-key
+rotation, threshold signatures, third-party transparency-log inclusion proofs, and automatic
+background synchronization are not implemented. Feed application remains an explicit reviewed
+operation.

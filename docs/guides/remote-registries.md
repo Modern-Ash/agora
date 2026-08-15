@@ -127,10 +127,10 @@ directory. Removed files do not leak from an older release into a newer verified
 
 ## Current boundary
 
-Agora manages local and project trust keys, rotations, and revocations. It does not yet synchronize
-organization trust policy, consume revocation feeds, use transparency logs, resolve dependencies, or
-notify about registry updates. The index is a distribution convenience; installed filesystem state
-remains the governed operational record.
+Agora manages local and project trust keys, rotations, revocations, and signed sequential
+organization trust feeds. It does not yet rotate organization roots, use threshold signatures,
+verify third-party transparency-log proofs, or notify about registry updates. The index is a
+distribution convenience; installed filesystem state remains the governed operational record.
 
 Use [Registry updates](registry-updates.md) to check and apply later releases without replacing packs
 that were already installed from the catalog.

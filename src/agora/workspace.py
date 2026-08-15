@@ -10,6 +10,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
@@ -74,6 +75,7 @@ from agora.model import (
     AddArtifactInput,
     AddEnvironmentInput,
     AddEvidenceInput,
+    AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
     ApprovalDelegationRecord,
@@ -113,6 +115,9 @@ from agora.model import (
     Method,
     MethodContract,
     MethodPackRecord,
+    OrganizationTrustRootRecord,
+    OrganizationTrustSyncResult,
+    OrganizationTrustSyncStep,
     PackKind,
     PackLockEntry,
     PackLockRecord,
@@ -161,6 +166,7 @@ from agora.model import (
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
+    SyncOrganizationTrustInput,
     ToolAdapterRecord,
     ToolAuthorizationRecord,
     ToolContract,
@@ -182,6 +188,14 @@ from agora.model import (
     WorkRecord,
     WorkspaceLockStatus,
     WorkspaceStatus,
+)
+from agora.organization_trust import (
+    advance_organization_trust_root,
+    load_organization_trust_bundle,
+    load_organization_trust_root,
+    organization_trust_root_from_pem,
+    read_organization_trust_source,
+    render_organization_trust_root,
 )
 from agora.packs import (
     compare_pack_versions,
@@ -987,6 +1001,220 @@ class AgoraWorkspace:
         )
         atomic_write(path, render_trust_key(revoked))
         return load_trust_key(path, data.scope)
+
+    @_locked_mutation("scoped")
+    def add_organization_trust_root(
+        self, data: AddOrganizationTrustRootInput
+    ) -> OrganizationTrustRootRecord:
+        assert_slug(data.id, "Organization trust id")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        destination = root / "trust" / "organizations" / data.id / "ROOT.md"
+        if destination.exists():
+            raise FileExistsError(f"Organization trust root already exists: {destination}")
+        record = organization_trust_root_from_pem(
+            id_=data.id,
+            public_key_path=Path(data.public_key).expanduser().resolve(),
+            scope=data.scope,
+            path=destination,
+            created_at=self._timestamp(),
+        )
+        atomic_write(destination, render_organization_trust_root(record))
+        return load_organization_trust_root(destination, data.scope)
+
+    def get_organization_trust_root(self, id_: str, scope: str) -> OrganizationTrustRootRecord:
+        assert_slug(id_, "Organization trust id")
+        root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        path = root / "trust" / "organizations" / id_ / "ROOT.md"
+        if not path.is_file():
+            raise FileNotFoundError(f"Organization trust root not found: {path}")
+        return load_organization_trust_root(path, scope)
+
+    @_locked_mutation("scoped")
+    def sync_organization_trust(
+        self, data: SyncOrganizationTrustInput
+    ) -> OrganizationTrustSyncResult:
+        root_record = self.get_organization_trust_root(data.id, data.scope)
+        source = data.source or root_record.source
+        if source is None:
+            raise ValueError("First organization trust sync requires --source")
+        contents, resolved_source = read_organization_trust_source(
+            source, allow_insecure_http=data.allow_insecure_http
+        )
+        sequence, previous_sha256, incoming, checksum, _ = load_organization_trust_bundle(
+            contents, root=root_record
+        )
+        expected_sequence = root_record.last_sequence + 1
+        if sequence != expected_sequence:
+            raise ValueError(
+                f"Organization trust bundle sequence must be {expected_sequence}, got {sequence}"
+            )
+        if previous_sha256 != root_record.last_sha256:
+            raise ValueError("Organization trust bundle does not continue the applied history")
+
+        scope_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        keys_root = scope_root / "trust" / "keys"
+        existing = {item.id: item for item in self._trust_keys_at(keys_root, data.scope)}
+        projected = dict(existing)
+        steps: list[OrganizationTrustSyncStep] = []
+        for item in incoming:
+            path = keys_root / f"{item.id}.md"
+            candidate = replace(item, path=str(path))
+            current = existing.get(item.id)
+            action = self._organization_trust_action(current, candidate)
+            steps.append(
+                OrganizationTrustSyncStep(
+                    id=item.id,
+                    registry=item.registry,
+                    action=action,
+                )
+            )
+            if action != "unchanged":
+                projected[item.id] = candidate
+        for item in projected.values():
+            if item.replaced_by is None:
+                continue
+            replacement = projected.get(item.replaced_by)
+            if replacement is None:
+                raise ValueError(
+                    f"Organization trust replacement key does not exist: {item.replaced_by}"
+                )
+            if replacement.registry != item.registry or replacement.status != "active":
+                raise ValueError(
+                    "Organization trust replacement key must be active for the same registry"
+                )
+
+        history_path = (
+            scope_root / "trust" / "organizations" / data.id / "history" / f"{sequence:020d}.md"
+        )
+        result = OrganizationTrustSyncResult(
+            organization=data.id,
+            scope=data.scope,
+            sequence=sequence,
+            sha256=checksum,
+            signature_verified=True,
+            applied=data.apply,
+            source=resolved_source,
+            steps=steps,
+            history_path=str(history_path) if data.apply else None,
+        )
+        if not data.apply:
+            return result
+        if history_path.exists():
+            raise FileExistsError(f"Organization trust history already exists: {history_path}")
+        self._apply_organization_trust_sync(
+            scope_root=scope_root,
+            root_record=root_record,
+            resolved_source=resolved_source,
+            sequence=sequence,
+            checksum=checksum,
+            contents=contents,
+            incoming=incoming,
+            steps=steps,
+        )
+        return result
+
+    @staticmethod
+    def _organization_trust_action(
+        current: RegistryTrustKeyRecord | None, incoming: RegistryTrustKeyRecord
+    ) -> str:
+        if current is None:
+            return "add"
+        immutable_current = (
+            current.registry,
+            current.algorithm,
+            current.public_key,
+            current.fingerprint,
+            current.created_at,
+        )
+        immutable_incoming = (
+            incoming.registry,
+            incoming.algorithm,
+            incoming.public_key,
+            incoming.fingerprint,
+            incoming.created_at,
+        )
+        if immutable_current != immutable_incoming:
+            raise ValueError(f"Organization trust bundle attempts to redefine key {incoming.id}")
+        if current.status == "revoked" and incoming.status == "active":
+            raise PermissionError(
+                f"Organization trust bundle attempts to reactivate revoked key {incoming.id}"
+            )
+        if current.status == "active" and incoming.status == "revoked":
+            return "revoke"
+        revocation_current = (
+            current.revoked_at,
+            current.revoked_reason,
+            current.replaced_by,
+        )
+        revocation_incoming = (
+            incoming.revoked_at,
+            incoming.revoked_reason,
+            incoming.replaced_by,
+        )
+        if revocation_current != revocation_incoming:
+            raise ValueError(
+                f"Organization trust bundle attempts to rewrite key {incoming.id} history"
+            )
+        return "unchanged"
+
+    @staticmethod
+    def _apply_organization_trust_sync(
+        *,
+        scope_root: Path,
+        root_record: OrganizationTrustRootRecord,
+        resolved_source: str,
+        sequence: int,
+        checksum: str,
+        contents: bytes,
+        incoming: list[RegistryTrustKeyRecord],
+        steps: list[OrganizationTrustSyncStep],
+    ) -> None:
+        trust_root = scope_root / "trust"
+        scope_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".trust-stage-", dir=scope_root) as temporary:
+            staged = Path(temporary) / "trust"
+            if trust_root.exists():
+                copy_template_tree(trust_root, staged, {}, False)
+            else:
+                staged.mkdir(parents=True)
+            staged_keys = staged / "keys"
+            for item, step in zip(incoming, steps, strict=True):
+                if step.action == "unchanged":
+                    continue
+                staged_path = staged_keys / f"{item.id}.md"
+                atomic_write(staged_path, render_trust_key(replace(item, path=str(staged_path))))
+            organization_root = staged / "organizations" / root_record.id
+            history_path = organization_root / "history" / f"{sequence:020d}.md"
+            if history_path.exists():
+                raise FileExistsError(f"Organization trust history already exists: {history_path}")
+            try:
+                history_contents = contents.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError("Organization trust bundle must be UTF-8") from error
+            atomic_write(history_path, history_contents)
+            updated_root = advance_organization_trust_root(
+                root_record,
+                source=resolved_source,
+                sequence=sequence,
+                checksum=checksum,
+            )
+            atomic_write(
+                organization_root / "ROOT.md", render_organization_trust_root(updated_root)
+            )
+            backup = scope_root / ".trust-backup"
+            if backup.exists():
+                raise FileExistsError(f"Organization trust backup already exists: {backup}")
+            replaced = trust_root.exists()
+            if replaced:
+                trust_root.replace(backup)
+            try:
+                staged.replace(trust_root)
+            except Exception:
+                if replaced:
+                    backup.replace(trust_root)
+                raise
+            if replaced:
+                shutil.rmtree(backup)
 
     def list_registries(self) -> list[RegistryRecord]:
         records = [bundled_registry()]
@@ -6297,6 +6525,8 @@ class AgoraWorkspace:
             "upgrades": 0,
             "registries": 0,
             "trust-keys": 0,
+            "organization-trust-roots": 0,
+            "organization-trust-bundles": 0,
             "pack-sources": 0,
             "pack-histories": 0,
             "pack-locks": 0,
@@ -6413,6 +6643,96 @@ class AgoraWorkspace:
                     Path(record.path),
                     "Replacement registry trust key must be active for the same registry",
                 )
+        for directory in _child_directories(root / ".agora" / "trust" / "organizations"):
+            root_path = directory / "ROOT.md"
+            organization_root = inspect(
+                "organization-trust-roots",
+                "organization-trust-root.invalid",
+                root_path,
+                lambda root_path=root_path: load_organization_trust_root(root_path, "project"),
+            )
+            if not isinstance(organization_root, OrganizationTrustRootRecord):
+                continue
+            if organization_root.id != directory.name:
+                issue(
+                    "organization-trust-root.id-mismatch",
+                    root_path,
+                    f"Organization trust id {organization_root.id} does not match directory "
+                    f"{directory.name}",
+                )
+            expected_sequence = 1
+            previous_sha256: str | None = None
+            managed_keys: dict[str, RegistryTrustKeyRecord] = {}
+            for history_path in sorted((directory / "history").glob("*.md")):
+                try:
+                    sequence, previous, bundle_keys, checksum, _ = load_organization_trust_bundle(
+                        history_path.read_bytes(), root=organization_root
+                    )
+                except Exception as error:
+                    issue("organization-trust-bundle.invalid", history_path, str(error))
+                    continue
+                checked["organization-trust-bundles"] += 1
+                if history_path.stem != f"{sequence:020d}":
+                    issue(
+                        "organization-trust-bundle.filename-mismatch",
+                        history_path,
+                        f"Bundle sequence {sequence} does not match {history_path.name}",
+                    )
+                if sequence != expected_sequence or previous != previous_sha256:
+                    issue(
+                        "organization-trust-bundle.history-gap",
+                        history_path,
+                        "Organization trust bundle history is not continuous",
+                    )
+                expected_sequence = sequence + 1
+                previous_sha256 = checksum
+                managed_keys.update((item.id, item) for item in bundle_keys)
+            if (
+                organization_root.last_sequence != expected_sequence - 1
+                or organization_root.last_sha256 != previous_sha256
+            ):
+                issue(
+                    "organization-trust-root.history-mismatch",
+                    root_path,
+                    "Organization trust root does not match its persisted bundle history",
+                )
+            for id_, managed in managed_keys.items():
+                current = trust_keys.get(id_)
+                if current is None:
+                    issue(
+                        "organization-trust-key.missing",
+                        root_path,
+                        f"Organization-managed registry trust key is missing: {id_}",
+                    )
+                    continue
+                current_state = (
+                    current.registry,
+                    current.algorithm,
+                    current.public_key,
+                    current.fingerprint,
+                    current.status,
+                    current.created_at,
+                    current.revoked_at,
+                    current.revoked_reason,
+                    current.replaced_by,
+                )
+                managed_state = (
+                    managed.registry,
+                    managed.algorithm,
+                    managed.public_key,
+                    managed.fingerprint,
+                    managed.status,
+                    managed.created_at,
+                    managed.revoked_at,
+                    managed.revoked_reason,
+                    managed.replaced_by,
+                )
+                if current_state != managed_state:
+                    issue(
+                        "organization-trust-key.history-mismatch",
+                        Path(current.path),
+                        f"Registry trust key {id_} differs from its latest organization bundle",
+                    )
         for path, schema in (
             (root / ".agora" / "constitution.md", "agora/constitution/v1"),
             (root / ".agora" / "PROTOCOL.md", "agora/protocol/v1"),

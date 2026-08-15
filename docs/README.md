@@ -47,8 +47,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   references, and explicitly prune unused dependency closures.
 - [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
   checksum-pinned and Ed25519-signed registry snapshots.
-- [Registry trust stores](guides/registry-trust.md): approve, resolve, rotate, and revoke registry
-  signing keys through local Markdown and Git.
+- [Registry trust stores](guides/registry-trust.md): approve, rotate, revoke, and synchronize signed
+  organization registry trust through local Markdown and Git.
 - [Registry updates](guides/registry-updates.md): preview and transactionally apply authenticated
   releases while preserving provenance and update history.
 - [Getting started](getting-started.md): install Agora, initialize a project, form a swarm, and

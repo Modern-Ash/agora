@@ -38,8 +38,8 @@ validation, so front matter preserves structured metadata and gates remain execu
 
 ## Future work
 
-- Organization trust synchronization, revocation feeds, and transparency for remote registry
-  releases. Local and project trust keys, rotation, and revocation are implemented.
+- Organization root rotation, threshold signatures, and third-party transparency-log proofs for
+  remote registry releases. Signed sequential trust and revocation feeds are implemented.
 - Background registry notifications and automatic installed-pack updates. Explicit authenticated
   checks, transactional registry replacement, durable update history, dependency manifests, and
   compatibility-aware catalog installation are implemented. Installed pack provenance and explicit,

@@ -151,6 +151,11 @@ Discover bundled and registered packs, or install a reviewed local or remote reg
 agora registry install --source ./team-registry --scope user
 agora trust add --id team-release --registry team-catalog \
   --public-key ./team-release.pem --scope user
+agora trust organization add --id example-org \
+  --public-key ./example-org-root.pem --scope project
+agora trust organization sync --id example-org \
+  --source https://trust.example.com/agora/BUNDLE.md --scope project
+agora trust organization sync --id example-org --scope project --apply
 agora registry install --source https://catalog.example.com/INDEX.md \
   --version 1.0.0 --require-signature --scope user
 agora registry update --id team-catalog
@@ -178,6 +183,8 @@ provenance beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
 Trusted public keys, rotations, and revocations can be persisted at user or project scope. See the
 [registry trust guide](docs/guides/registry-trust.md).
+Signed organization feeds synchronize those keys and revocations through preview-first,
+sequence-bound updates with a durable local history.
 Registry updates are preview-only unless `--apply` is passed, preserve provenance and history, and
 never update installed packs implicitly. See the
 [registry update guide](docs/guides/registry-updates.md).
@@ -706,7 +713,7 @@ mutation in a structured external lease while retaining the local operating-syst
 - [Pack updates](docs/guides/pack-updates.md)
 - [Pack composition locks](docs/guides/pack-locks.md)
 - [Remote registry releases](docs/guides/remote-registries.md)
-- [Registry trust stores](docs/guides/registry-trust.md)
+- [Registry trust stores and organization feeds](docs/guides/registry-trust.md)
 - [Registry updates](docs/guides/registry-updates.md)
 - [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
 - [ADR 0001](docs/decisions/0001-initial-architecture.md)
@@ -720,8 +727,9 @@ mutation in a structured external lease while retaining the local operating-syst
   registry snapshots. Local and project trust stores, rotation, and revocation are implemented;
   explicit update checks, transactional application, and dependency-aware installation are
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
-  Organization trust synchronization, transparency, automatic background pack updates, and
-  notifications are not.
+  Signed organization trust synchronization and a locally verified feed history are implemented.
+  Root rotation, threshold signatures, third-party transparency proofs, automatic background pack
+  updates, and notifications are not.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,

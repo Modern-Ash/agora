@@ -82,6 +82,10 @@ index remaining available.
 
 Registry trust uses the same scope rule: project keys precede user keys. Verification binds a key id
 to one registry id, and a matching revocation blocks both automatic resolution and an explicit PEM.
+Organizations may distribute those public keys and revocations through a signed Markdown snapshot.
+Agora pins the organization's public root locally, requires a consecutive sequence and previous
+checksum, previews changes before application, then transactionally archives the bundle and updates
+the ordinary scoped trust store. Private root keys remain external.
 
 Registry updates are read-only plans unless application is explicit. Update staging carries forward
 installer-owned history, adds the next transition record, validates the complete candidate, and only
