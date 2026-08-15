@@ -214,10 +214,10 @@ transition-specific role, WIP, gates, approval records, Tool Pack inputs, tool c
 environment capability and role policy, interruption edges, status attribution, sequence
 continuity, and derived swarm state.
 Mutating workspace operations hold a reentrant operating-system lock keyed by the canonical project
-or Agora home path. Initialization acquires home and target locks in deterministic order. Lock
-metadata is runtime-only Markdown outside the repository; atomic document replacement still protects
-readers. This prevents lost updates between local processes and releases automatically after process
-termination.
+or Agora home path. Initialization acquires home and target locks in deterministic order. A project
+may additionally configure a provider-neutral external lease CLI for cross-host coordination; local
+locks are acquired first and remain mandatory. Lock metadata is runtime-only while external lease
+configuration is reviewed Markdown. Atomic document replacement still protects readers.
 
 External commands still run with the caller's operating-system permissions. Tool Pack manifests
 bound the direct process by elapsed time and captured output; those values are persisted in the Tool
@@ -226,6 +226,6 @@ violations, but does not isolate filesystems, networks, syscalls, resources, cre
 descendants. Signed actor authorization currently covers work creation and decomposition, criteria,
 artifacts, evidence, transitions, interruptions, approvals, handoffs, actor key rotation, independently
 authorized revocation and recovery, actor runtime updates, vacant-role assignment, the complete
-delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not yet implement an
-operating-system sandbox or distributed leases across separate hosts. Those rules must be added
-without turning chat history or a proprietary service into the source of truth.
+delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not
+implement an operating-system sandbox, remote lease service, or scheduler. Optional lease adapters
+coordinate writers without turning chat history or a proprietary service into the source of truth.

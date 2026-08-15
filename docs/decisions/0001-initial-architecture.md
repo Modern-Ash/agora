@@ -55,7 +55,8 @@ validation, so front matter preserves structured metadata and gates remain execu
 - Governed same-swarm work decomposition, provider-neutral delegation budgets, opt-in typed child
   artifact promotion, and explicit cross-swarm reference-based result collection are part of the
   current filesystem protocol. Opaque external artifact bytes remain provider-owned.
-- Distributed leases for work coordinated across separate hosts. Local writer locks are implemented.
+- Optional distributed writer coordination is implemented through a provider-neutral external lease
+  CLI layered over mandatory local locks. The lease service and remote scheduling remain external.
 - Environment-specific Tool Run permissions are implemented through project-defined Markdown
   policies, Method Pack role restrictions, operation opt-in, approvals, evidence, launch-time
   revalidation, and signed environment binding. Single-use, work-scoped Approval Delegation and

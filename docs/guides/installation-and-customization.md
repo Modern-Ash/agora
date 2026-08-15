@@ -464,6 +464,11 @@ Project execution targets are governed separately through Markdown environment p
 limit Method Pack roles with `allowed-environments`. Provider account and target translation still
 belongs in the adapter. See [Environment permissions](environment-permissions.md).
 
+Projects mutated from multiple hosts may also configure a reviewed external lease CLI with
+`agora coordination configure`. This layers remote mutual exclusion over the mandatory local lock;
+it does not introduce a database or make the lease service authoritative for work. See
+[Concurrent writers](concurrent-writers.md).
+
 ## Customize distribution templates
 
 Framework developers may point initialization at an alternate complete template tree:

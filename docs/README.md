@@ -10,7 +10,7 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Project upgrades](guides/project-upgrades.md): preview, apply, audit, and recover protocol
   migrations without replacing local policies or Method Packs.
 - [Concurrent writers](guides/concurrent-writers.md): serialize local mutations, inspect lock owners,
-  and configure bounded contention waits.
+  configure bounded contention waits, and add an optional cross-host lease CLI.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
 - [Actor authentication](guides/actor-authentication.md): bind governed operations to external
@@ -144,6 +144,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   preserving local policy and validating the resulting records.
 - [Concurrent writers](../samples/concurrent-writes/README.md): reject a competing mutation and
   continue safely after the operating-system lock is released.
+- [Distributed coordination](../samples/distributed-coordination/README.md): wrap a project mutation
+  in an external lease while preserving mandatory local locking.
 - [Pack registry](../samples/pack-registry/README.md): discover and install a custom lifecycle from a
   user-scoped Markdown catalog.
 - [Pack dependencies](../samples/pack-dependencies/README.md): install a Method Pack and recursively

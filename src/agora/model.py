@@ -682,6 +682,32 @@ class WorkspaceLockStatus:
 
 
 @dataclass(frozen=True)
+class CoordinationPolicyRecord:
+    mode: Literal["local", "external-lease"]
+    resource_id: str | None
+    executable: str | None
+    arguments: list[str]
+    version_arguments: list[str]
+    minimum_runtime_version: str | None
+    lease_seconds: int
+    command_timeout_seconds: int
+    path: str
+
+
+@dataclass(frozen=True)
+class ConfigureCoordinationInput:
+    mode: Literal["local", "external-lease"]
+    resource_id: str | None = None
+    executable: str | None = None
+    arguments: list[str] = field(default_factory=list)
+    version_arguments: list[str] = field(default_factory=list)
+    minimum_runtime_version: str | None = None
+    lease_seconds: int = 300
+    command_timeout_seconds: int = 10
+    force: bool = False
+
+
+@dataclass(frozen=True)
 class ValidationIssue:
     severity: ValidationSeverity
     code: str

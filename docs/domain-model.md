@@ -221,6 +221,11 @@ whether it meets the manifest's minimum runtime version. Neither result implies 
 installation, authority, or a successful provider call. The Jira adapter demonstrates the absent
 state when ACLI is not installed.
 
+A **Coordination Policy** keeps local operating-system locking as the baseline and may require an
+external lease CLI for project mutations across hosts. The policy stores a stable resource id and
+structured command settings, never credentials. Lease ids and fencing tokens are runtime state;
+Markdown and Git remain the durable collaboration substrate.
+
 A project **Environment Policy** names a stable governance boundary and restricts provider-neutral
 Tool Pack capabilities. It may require work approvals and successful evidence. Method Pack roles
 independently restrict their capabilities through `allowed-environments`; provider accounts,

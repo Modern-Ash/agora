@@ -14,6 +14,12 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 
+from agora.coordination import (
+    ExternalLease,
+    LeaseRunner,
+    load_coordination_policy,
+    render_coordination_policy,
+)
 from agora.filesystem import (
     agora_home,
     append_entry,
@@ -75,7 +81,9 @@ from agora.model import (
     CatalogPackRecord,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
+    ConfigureCoordinationInput,
     ConfigureInput,
+    CoordinationPolicyRecord,
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
@@ -246,6 +254,7 @@ class AgoraWorkspace:
             Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess[str]] | None
         ) = None,
         runtime_probe: Callable[[ToolContract, str | None], ToolRuntimeProbe] | None = None,
+        lease_runner: LeaseRunner | None = None,
         lock_timeout: float | None = None,
     ) -> None:
         self.cwd = Path(cwd or Path.cwd()).resolve()
@@ -253,6 +262,7 @@ class AgoraWorkspace:
         self._launcher = launcher or _launch_process
         self._tool_runner = tool_runner
         self._runtime_probe = runtime_probe or probe_tool_runtime
+        self._lease_runner = lease_runner
         configured_timeout = os.environ.get("AGORA_LOCK_TIMEOUT", "0")
         try:
             self.lock_timeout = float(configured_timeout) if lock_timeout is None else lock_timeout
@@ -439,6 +449,50 @@ class AgoraWorkspace:
             f"- {self._timestamp()} | environment.configured | environment={record.id}",
         )
         return record
+
+    @_locked_mutation("project")
+    def configure_coordination(self, data: ConfigureCoordinationInput) -> CoordinationPolicyRecord:
+        if data.mode not in {"local", "external-lease"}:
+            raise ValueError(f"Unsupported coordination mode: {data.mode}")
+        record = CoordinationPolicyRecord(
+            mode=data.mode,
+            resource_id=data.resource_id,
+            executable=data.executable,
+            arguments=data.arguments,
+            version_arguments=data.version_arguments,
+            minimum_runtime_version=data.minimum_runtime_version,
+            lease_seconds=data.lease_seconds,
+            command_timeout_seconds=data.command_timeout_seconds,
+            path=str(self.project_root() / ".agora" / "coordination.md"),
+        )
+        contents = render_coordination_policy(record)
+        candidate = Path(record.path)
+        with tempfile.TemporaryDirectory(prefix="agora-coordination-") as temporary:
+            temporary_path = Path(temporary) / "coordination.md"
+            temporary_path.write_text(contents, encoding="utf-8")
+            load_coordination_policy(temporary_path)
+        write_new(candidate, contents, data.force)
+        append_entry(
+            self.project_root() / ".agora" / "events.md",
+            f"- {self._timestamp()} | coordination.configured | mode={record.mode}",
+        )
+        return record
+
+    def show_coordination(self) -> CoordinationPolicyRecord:
+        path = self.project_root() / ".agora" / "coordination.md"
+        if path.is_file():
+            return load_coordination_policy(path)
+        return CoordinationPolicyRecord(
+            mode="local",
+            resource_id=None,
+            executable=None,
+            arguments=[],
+            version_arguments=[],
+            minimum_runtime_version=None,
+            lease_seconds=300,
+            command_timeout_seconds=10,
+            path=str(path),
+        )
 
     def show_environment(self, environment_id: str) -> EnvironmentPolicyRecord:
         assert_slug(environment_id, "Environment id")
@@ -6370,6 +6424,14 @@ class AgoraWorkspace:
                 path,
                 lambda path=path, schema=schema: _assert_schema(read_markdown(path), schema, path),
             )
+        coordination_path = root / ".agora" / "coordination.md"
+        if coordination_path.exists():
+            inspect(
+                "documents",
+                "coordination.invalid",
+                coordination_path,
+                lambda: load_coordination_policy(coordination_path),
+            )
         standards_path = root / ".agora" / "STANDARDS.md"
         inspect(
             "documents",
@@ -8505,6 +8567,20 @@ class AgoraWorkspace:
                         now=self._now(),
                     )
                 )
+            for resource in resolved:
+                coordination_path = resource / ".agora" / "coordination.md"
+                if not coordination_path.is_file():
+                    continue
+                policy = load_coordination_policy(coordination_path)
+                if policy.mode == "external-lease":
+                    stack.enter_context(
+                        ExternalLease(
+                            policy,
+                            operation,
+                            resource,
+                            runner=self._lease_runner,
+                        )
+                    )
             self._lock_resources = resolved
             self._lock_depth = 1
             try:
@@ -10301,6 +10377,7 @@ class AgoraWorkspace:
             root / ".agora" / "constitution.md",
             root / ".agora" / "PROTOCOL.md",
             root / ".agora" / "STANDARDS.md",
+            root / ".agora" / "coordination.md",
             root / ".agora" / "tools" / "TOOLS.md",
             swarm_root / "SWARM.md",
             swarm_root / "events.md",

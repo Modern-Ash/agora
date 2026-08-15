@@ -18,6 +18,7 @@ from agora.model import (
     AssignActorInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
+    ConfigureCoordinationInput,
     ConfigureInput,
     CreateDelegationInput,
     CreateSwarmInput,
@@ -155,6 +156,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     lock_status = lock.add_parser("status", help="Show a project or user write lock")
     lock_status.add_argument("--scope", choices=("project", "user"), default="project")
+    coordination = commands.add_parser(
+        "coordination", help="Configure optional cross-host writer leases"
+    ).add_subparsers(dest="coordination_command", required=True)
+    coordination_configure = coordination.add_parser(
+        "configure", help="Persist project writer coordination policy"
+    )
+    coordination_configure.add_argument(
+        "--mode", choices=("local", "external-lease"), required=True
+    )
+    coordination_configure.add_argument("--resource-id")
+    coordination_configure.add_argument("--executable")
+    coordination_configure.add_argument("--argument", action="append", default=[])
+    coordination_configure.add_argument("--version-argument", action="append", default=[])
+    coordination_configure.add_argument("--minimum-runtime-version")
+    coordination_configure.add_argument("--lease-seconds", type=int, default=300)
+    coordination_configure.add_argument("--command-timeout-seconds", type=int, default=10)
+    coordination_configure.add_argument("--force", action="store_true")
+    coordination.add_parser("show", help="Show effective writer coordination policy")
     upgrade = commands.add_parser("upgrade", help="Plan or apply a safe project migration")
     upgrade.add_argument("--apply", action="store_true", help="Apply the displayed migration")
     upgrade.add_argument("--id", help="Stable id for the durable upgrade record")
@@ -842,6 +861,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
+    if args.command == "coordination" and args.coordination_command == "configure":
+        return workspace.configure_coordination(
+            ConfigureCoordinationInput(
+                mode=args.mode,
+                resource_id=args.resource_id,
+                executable=args.executable,
+                arguments=args.argument,
+                version_arguments=args.version_argument,
+                minimum_runtime_version=args.minimum_runtime_version,
+                lease_seconds=args.lease_seconds,
+                command_timeout_seconds=args.command_timeout_seconds,
+                force=args.force,
+            )
+        )
+    if args.command == "coordination" and args.coordination_command == "show":
+        return workspace.show_coordination()
     if args.command == "environment" and args.environment_command == "add":
         return workspace.add_environment(
             AddEnvironmentInput(

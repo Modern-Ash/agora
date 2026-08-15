@@ -41,6 +41,7 @@ Agora distribution
   pack-removals/        Auditable records for applied composition removals
   constitution.md       Local principles and restrictions
   PROTOCOL.md           Shared collaboration protocol
+  coordination.md       Optional external writer lease policy
   STANDARDS.md          Enforced cross-actor engineering standards
   commands/*.md         Portable agent commands
   methods/              Built-in and custom lifecycle Method Packs
@@ -575,8 +576,9 @@ AGORA_LOCK_TIMEOUT=10 agora work transition \
 ```
 
 Locks are reentrant for nested Agora operations and release on success, exceptions, or process exit.
-They coordinate processes that share one host and lock directory; distributed leases across separate
-hosts remain future work. See the [concurrent writers guide](docs/guides/concurrent-writers.md).
+Projects may layer a reviewed external lease CLI over the mandatory local lock to coordinate
+separate hosts while keeping Markdown and Git authoritative. See the
+[concurrent writers guide](docs/guides/concurrent-writers.md).
 
 ## Operational queries and validation
 
@@ -641,6 +643,7 @@ uv run python samples/pack-dependencies/run.py
 uv run python samples/remote-registry/run.py
 uv run python samples/gate-waivers/run.py
 uv run python samples/approval-delegation/run.py
+uv run python samples/distributed-coordination/run.py
 uv run python samples/environment-permissions/run.py
 ```
 
@@ -670,6 +673,8 @@ compatible Tool Pack before copying either catalog selection. The
 versioned registry snapshot without persisting a private key.
 The [environment permissions sample](samples/environment-permissions/README.md) gates a production
 Tool Run on role scope, Product Owner approval, and successful work evidence.
+The [distributed coordination sample](samples/distributed-coordination/README.md) wraps a project
+mutation in a structured external lease while retaining the local operating-system lock.
 
 ## Documentation
 
@@ -726,8 +731,9 @@ Tool Run on role scope, Product Owner approval, and successful work evidence.
   external runtimes remain responsible for usage metering. Opt-in typed child artifact promotion is
   implemented as a reference to the authoritative child record; Agora deliberately does not copy
   opaque external bytes. Granular, evidence-backed Gate Waivers and single-use, work-scoped
-  Approval Delegation are implemented. Distributed leases and remote concurrency remain future
-  work. Local cross-process writer locks, explicit child work acceptance, interruption,
+  Approval Delegation are implemented. Distributed coordination is available through an optional
+  reviewed lease CLI; remote scheduling remains external. Local cross-process writer locks,
+  explicit child work acceptance, interruption,
   cancellation, and reference-based result collection are implemented.
 - Optional Ed25519 actor authentication protects key rotation, independently authorized revocation
   and recovery, actor runtime updates, vacant-role assignment, work creation and decomposition,
