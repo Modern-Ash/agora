@@ -1,9 +1,12 @@
+import hashlib
 import math
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
@@ -21,6 +24,26 @@ from agora.filesystem import (
     write_new,
 )
 from agora.git import create_branch, current_branch, is_git_repository
+from agora.identity import (
+    actor_identity_from_pem,
+    actor_key_from_actor,
+    actor_key_from_pem,
+    assert_actor_identity_available,
+    end_actor_key,
+    lifecycle_authorization_payload,
+    link_actor_key_replacement,
+    load_actor_key,
+    render_actor_key,
+    session_authorization_payload,
+    tool_authorization_payload,
+    validate_actor_identity,
+    validate_persisted_lifecycle_authorization,
+    validate_persisted_session_authorization,
+    validate_persisted_tool_authorization,
+    verify_lifecycle_authorization,
+    verify_session_authorization,
+    verify_tool_authorization,
+)
 from agora.locking import WorkspaceLock, inspect_workspace_lock
 from agora.markdown import (
     MarkdownDocument,
@@ -35,12 +58,14 @@ from agora.methods import load_method_contract
 from agora.model import (
     ACTOR_KINDS,
     INTEGRATIONS,
+    ActorKeyRecord,
     ActorRecord,
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
     AddEvidenceInput,
     AddRegistryTrustKeyInput,
+    ApplyLifecycleActionInput,
     AssignActorInput,
     CatalogPackRecord,
     ChangeDelegationStatusInput,
@@ -64,6 +89,10 @@ from agora.model import (
     InstallToolInput,
     Integration,
     InvokeToolInput,
+    LaunchSessionInput,
+    LaunchToolRunInput,
+    LifecycleActionRecord,
+    LifecycleAuthorizationRecord,
     Method,
     MethodContract,
     MethodPackRecord,
@@ -77,6 +106,11 @@ from agora.model import (
     PackUpdateHistoryRecord,
     PackUpdateResult,
     PackUpdateStep,
+    PrepareApprovalInput,
+    PrepareLifecycleAuthorizationInput,
+    PrepareSessionAuthorizationInput,
+    PrepareToolAuthorizationInput,
+    PrepareWorkTransitionInput,
     ProjectConfiguration,
     RefreshPackLockInput,
     RegistryRecord,
@@ -85,13 +119,17 @@ from agora.model import (
     RegistryUpdateRecord,
     RegistryUpdateResult,
     RemovePackInput,
+    RevokeActorKeyInput,
     RevokeRegistryTrustKeyInput,
+    RotateActorKeyInput,
+    SessionAuthorizationRecord,
     SessionRecord,
     SetActorRuntimeInput,
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
     ToolAdapterRecord,
+    ToolAuthorizationRecord,
     ToolContract,
     ToolPackRecord,
     ToolRisk,
@@ -138,6 +176,10 @@ from agora.registry_distribution import (
     inspect_registry_release,
 )
 from agora.tools import (
+    DEFAULT_TOOL_MAX_OUTPUT_BYTES,
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
+    MAX_TOOL_MAX_OUTPUT_BYTES,
+    MAX_TOOL_TIMEOUT_SECONDS,
     load_tool_contract,
     probe_tool_runtime,
     validate_operation_inputs,
@@ -182,7 +224,7 @@ class AgoraWorkspace:
         self.cwd = Path(cwd or Path.cwd()).resolve()
         self._now = now or (lambda: datetime.now(UTC))
         self._launcher = launcher or _launch_process
-        self._tool_runner = tool_runner or _run_tool_process
+        self._tool_runner = tool_runner
         self._runtime_probe = runtime_probe or probe_tool_runtime
         configured_timeout = os.environ.get("AGORA_LOCK_TIMEOUT", "0")
         try:
@@ -1629,6 +1671,14 @@ class AgoraWorkspace:
             raise ValueError(f"Unsupported actor kind: {data.kind}")
         if data.integration is not None:
             self._assert_integration(data.integration)
+        if data.require_authentication and data.public_key is None:
+            raise ValueError("An actor requiring authentication must declare --public-key")
+        authentication_public_key: str | None = None
+        authentication_fingerprint: str | None = None
+        if data.public_key is not None:
+            authentication_public_key, authentication_fingerprint = actor_identity_from_pem(
+                Path(data.public_key).expanduser().resolve()
+            )
         root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
         if data.represented_swarm is not None:
             assert_slug(data.represented_swarm, "Represented swarm id")
@@ -1638,6 +1688,20 @@ class AgoraWorkspace:
                 raise ValueError("A represented swarm actor must use project scope")
             self._load_swarm(self.project_root(), data.represented_swarm)
         path = root / "actors" / f"{data.id}.md"
+        if path.exists() and data.force:
+            existing = self._find_actor(self.project_root(), f"{data.scope}:{data.id}")
+            if (
+                existing.authentication_fingerprint is not None
+                or authentication_fingerprint is not None
+            ):
+                raise ValueError(
+                    "Actor authentication identity cannot be replaced with --force; "
+                    "use `agora actor key rotate`"
+                )
+        if authentication_fingerprint is not None:
+            pending_key_path = path.with_suffix("") / "keys" / f"{authentication_fingerprint}.md"
+            if pending_key_path.exists() and not data.force:
+                raise FileExistsError(f"Actor key already exists: {pending_key_path}")
         capabilities = sorted(set(data.capabilities))
         description = data.description or (
             "Describe this actor's operating context and constraints."
@@ -1659,6 +1723,11 @@ class AgoraWorkspace:
             attributes["model"] = data.model
         if data.represented_swarm is not None:
             attributes["represented-swarm"] = data.represented_swarm
+        attributes["authentication-required"] = data.require_authentication
+        if authentication_public_key is not None:
+            attributes["authentication-algorithm"] = "ed25519"
+            attributes["authentication-public-key"] = authentication_public_key
+            attributes["authentication-fingerprint"] = authentication_fingerprint
         write_new(
             path,
             render_markdown(
@@ -1669,7 +1738,7 @@ class AgoraWorkspace:
             ),
             data.force,
         )
-        return ActorRecord(
+        record = ActorRecord(
             id=data.id,
             name=data.name,
             kind=data.kind,
@@ -1680,7 +1749,107 @@ class AgoraWorkspace:
             provider=data.provider,
             model=data.model,
             represented_swarm=data.represented_swarm,
+            authentication_required=data.require_authentication,
+            authentication_algorithm="ed25519" if authentication_public_key else None,
+            authentication_public_key=authentication_public_key,
+            authentication_fingerprint=authentication_fingerprint,
         )
+        if authentication_fingerprint is not None:
+            key_path = self._actor_key_root(record) / f"{authentication_fingerprint}.md"
+            key = actor_key_from_actor(record, key_path, attributes["created-at"])
+            write_new(key_path, render_actor_key(key), data.force)
+        return record
+
+    @_locked_mutation("actor-runtime")
+    def rotate_actor_key(self, data: RotateActorKeyInput) -> ActorKeyRecord:
+        if not data.reason.strip():
+            raise ValueError("Actor key rotation reason cannot be empty")
+        root = self.project_root()
+        actor = self._find_actor(root, data.actor_id)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key to rotate")
+        current = self._ensure_current_actor_key(actor)
+        created_at = self._timestamp()
+        replacement = actor_key_from_pem(
+            actor.reference,
+            Path(data.public_key).expanduser().resolve(),
+            self._actor_key_root(actor),
+            created_at,
+        )
+        if replacement.fingerprint == current.fingerprint:
+            raise ValueError("Replacement actor key must differ from the current key")
+        if Path(replacement.path).exists():
+            raise ValueError(f"Actor key fingerprint was already used: {replacement.fingerprint}")
+        if current.status == "active":
+            previous = end_actor_key(
+                current,
+                status="rotated",
+                ended_at=created_at,
+                reason=data.reason,
+                replaced_by=replacement.fingerprint,
+            )
+        else:
+            previous = link_actor_key_replacement(current, replacement.fingerprint)
+
+        write_new(Path(replacement.path), render_actor_key(replacement))
+        atomic_write(Path(previous.path), render_actor_key(previous))
+        actor_path = Path(actor.path)
+        document = read_markdown(actor_path)
+        document.attributes.update(
+            {
+                "authentication-algorithm": "ed25519",
+                "authentication-public-key": replacement.public_key,
+                "authentication-fingerprint": replacement.fingerprint,
+                "authentication-updated-at": created_at,
+            }
+        )
+        document.attributes.pop("authentication-revoked-at", None)
+        document.attributes.pop("authentication-revoked-reason", None)
+        atomic_write(actor_path, render_markdown(document))
+        self._append_actor_event(
+            root,
+            actor,
+            "actor.key-rotated",
+            f"from={current.fingerprint} to={replacement.fingerprint}",
+        )
+        return replacement
+
+    @_locked_mutation("actor-runtime")
+    def revoke_actor_key(self, data: RevokeActorKeyInput) -> ActorKeyRecord:
+        if not data.reason.strip():
+            raise ValueError("Actor key revocation reason cannot be empty")
+        root = self.project_root()
+        actor = self._find_actor(root, data.actor_id)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key to revoke")
+        if actor.authentication_revoked_at is not None:
+            raise ValueError(f"Actor authentication key is already revoked: {actor.reference}")
+        current = self._ensure_current_actor_key(actor)
+        revoked_at = self._timestamp()
+        revoked = end_actor_key(
+            current,
+            status="revoked",
+            ended_at=revoked_at,
+            reason=data.reason,
+        )
+        atomic_write(Path(revoked.path), render_actor_key(revoked))
+        actor_path = Path(actor.path)
+        document = read_markdown(actor_path)
+        document.attributes["authentication-revoked-at"] = revoked_at
+        document.attributes["authentication-revoked-reason"] = data.reason.strip()
+        atomic_write(actor_path, render_markdown(document))
+        self._append_actor_event(
+            root,
+            actor,
+            "actor.key-revoked",
+            f"fingerprint={revoked.fingerprint}",
+        )
+        return revoked
+
+    def list_actor_keys(self, actor_id: str) -> list[ActorKeyRecord]:
+        actor = self._find_actor(self.project_root(), actor_id)
+        records = [load_actor_key(path) for path in self._actor_key_root(actor).glob("*.md")]
+        return sorted(records, key=lambda record: (record.created_at, record.fingerprint))
 
     @_locked_mutation("actor-runtime")
     def set_actor_runtime(self, data: SetActorRuntimeInput) -> ActorRecord:
@@ -2044,8 +2213,36 @@ class AgoraWorkspace:
 
     @_locked_mutation("project")
     def add_approval(self, data: AddApprovalInput) -> WorkRecord:
-        assert_slug(data.role_id, "Approval role id")
         root = self.project_root()
+        swarm, actor, work = self._validate_approval(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare the approval before applying it"
+            )
+        return self._apply_approval(swarm, actor, work, data.role_id, data.note)
+
+    @_locked_mutation("project")
+    def prepare_approval(self, data: PrepareApprovalInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_approval(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="approval.add",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"role": data.role_id, "note": data.note},
+        )
+
+    def _validate_approval(
+        self, root: Path, data: AddApprovalInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
+        assert_slug(data.role_id, "Approval role id")
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "approval.add")
         roles = self._actor_roles(swarm, actor.reference)
@@ -2055,26 +2252,211 @@ class AgoraWorkspace:
             )
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        return swarm, actor, work
+
+    def _apply_approval(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        role_id: str,
+        note_value: str,
+    ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
         approval_roles = strings_attribute(document.attributes, "approval-roles")
-        document.attributes["approval-roles"] = list(dict.fromkeys([*approval_roles, data.role_id]))
-        note = data.note.replace("|", "\\|") or "Approved"
+        document.attributes["approval-roles"] = list(dict.fromkeys([*approval_roles, role_id]))
+        note = note_value.replace("|", "\\|") or "Approved"
         document.body = (
-            f"{document.body.rstrip()}\n| {data.role_id} | {actor.reference} | {note} | "
+            f"{document.body.rstrip()}\n| {role_id} | {actor.reference} | {note} | "
             f"{self._timestamp()} |"
         )
         atomic_write(path, render_markdown(document))
         self._append_work_event(
             work,
             "approval.added",
-            f"role={data.role_id} actor={actor.reference}",
+            f"role={role_id} actor={actor.reference}",
         )
-        return self._load_work(swarm, data.work_id)
+        return self._load_work(swarm, work.id)
 
     @_locked_mutation("project")
     def transition_work(self, data: TransitionWorkInput) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_work_transition(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare the transition before applying it"
+            )
+        return self._apply_work_transition(root, swarm, actor, work, data.target_state)
+
+    @_locked_mutation("project")
+    def prepare_work_transition(self, data: PrepareWorkTransitionInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_work_transition(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="work.transition",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"to": data.target_state},
+        )
+
+    def _prepare_lifecycle_action(
+        self,
+        root: Path,
+        *,
+        id_: str,
+        action: str,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord,
+        parameters: dict[str, str],
+    ) -> LifecycleActionRecord:
+        action_root = root / ".agora" / "actions" / id_
+        if action_root.exists():
+            raise FileExistsError(f"Lifecycle Action already exists: {id_}")
+        record = LifecycleActionRecord(
+            id=id_,
+            action=action,
+            actor=actor.reference,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            parameters=parameters,
+            precondition_sha256=self._work_precondition_sha256(work),
+            status="prepared",
+            path=str(action_root),
+            created_at=self._timestamp(),
+        )
+        write_new(action_root / "ACTION.md", self._render_lifecycle_action(record))
+        append_entry(
+            root / ".agora" / "events.md",
+            (
+                f"- {self._timestamp()} | lifecycle-action.prepared | action={record.id} "
+                f"kind={record.action} actor={record.actor} swarm={record.swarm_id} "
+                f"work={record.work_id}"
+            ),
+        )
+        return record
+
+    def prepare_lifecycle_authorization(
+        self, data: PrepareLifecycleAuthorizationInput
+    ) -> LifecycleAuthorizationRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        record = self._load_lifecycle_action(root / ".agora" / "actions" / data.action_id)
+        if record.status != "prepared":
+            raise ValueError(f"Lifecycle Action must be prepared for authorization: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        self._assert_lifecycle_precondition(root, record)
+        payload = lifecycle_authorization_payload(record)
+        output = Path(data.output).expanduser().resolve()
+        write_new(output, payload.decode("ascii"), data.force)
+        return LifecycleAuthorizationRecord(
+            action_id=record.id,
+            actor=actor.reference,
+            algorithm="ed25519",
+            fingerprint=actor.authentication_fingerprint,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            path=str(output),
+        )
+
+    @_locked_mutation("project")
+    def apply_lifecycle_action(self, data: ApplyLifecycleActionInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        record = self._load_lifecycle_action(root / ".agora" / "actions" / data.action_id)
+        if record.status != "prepared":
+            raise ValueError(f"Lifecycle Action must be prepared before apply: {record.id}")
+        self._assert_lifecycle_precondition(root, record)
+        if record.action == "work.transition":
+            if set(record.parameters) != {"to"}:
+                raise ValueError(f"Lifecycle Action has invalid transition parameters: {record.id}")
+            transition = TransitionWorkInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                target_state=record.parameters["to"],
+            )
+            swarm, actor, work = self._validate_work_transition(root, transition)
+        elif record.action == "approval.add":
+            if set(record.parameters) != {"role", "note"}:
+                raise ValueError(f"Lifecycle Action has invalid approval parameters: {record.id}")
+            approval = AddApprovalInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                role_id=record.parameters["role"],
+                note=record.parameters["note"],
+            )
+            swarm, actor, work = self._validate_approval(root, approval)
+        else:
+            raise ValueError(f"Unsupported Lifecycle Action kind: {record.action}")
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+
+        fingerprint: str | None = None
+        public_key: str | None = None
+        payload_sha256: str | None = None
+        signature: str | None = None
+        if actor.authentication_required and data.signature is None:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle authorization"
+            )
+        if data.signature is not None:
+            fingerprint, payload_sha256, public_key, signature = verify_lifecycle_authorization(
+                actor, record, Path(data.signature).expanduser().resolve()
+            )
+
+        if record.action == "work.transition":
+            self._apply_work_transition(root, swarm, actor, work, record.parameters["to"])
+        else:
+            self._apply_approval(
+                swarm,
+                actor,
+                work,
+                record.parameters["role"],
+                record.parameters["note"],
+            )
+        applied = LifecycleActionRecord(
+            **{
+                **record.__dict__,
+                "status": "applied",
+                "applied_at": self._timestamp(),
+                "authentication_verified": fingerprint is not None,
+                "authentication_fingerprint": fingerprint,
+                "authentication_public_key": public_key,
+                "authorization_sha256": payload_sha256,
+                "authorization_signature": signature,
+            }
+        )
+        atomic_write(Path(record.path) / "ACTION.md", self._render_lifecycle_action(applied))
+        append_entry(
+            root / ".agora" / "events.md",
+            f"- {self._timestamp()} | lifecycle-action.applied | action={record.id}",
+        )
+        return applied
+
+    def list_lifecycle_actions(self, status: str | None = None) -> list[LifecycleActionRecord]:
+        root = self.project_root()
+        records = [
+            self._load_lifecycle_action(path.parent)
+            for path in sorted((root / ".agora" / "actions").glob("*/ACTION.md"))
+        ]
+        return [record for record in records if status is None or record.status == status]
+
+    def _validate_work_transition(
+        self, root: Path, data: TransitionWorkInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "work.transition")
         work = self._load_work(swarm, data.work_id)
@@ -2105,14 +2487,23 @@ class AgoraWorkspace:
         self._assert_wip_limit(swarm, work, data.target_state, contract.wip_limits)
         if transition.gate is not None:
             self._assert_work_gate(work, contract.gates[transition.gate], transition.gate)
+        return swarm, actor, work
 
+    def _apply_work_transition(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        target_state: str,
+    ) -> WorkRecord:
         previous = work.state
-        work.state = data.target_state
+        work.state = target_state
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
         self._append_work_event(
             work,
             "work.transitioned",
-            f"from={previous} to={data.target_state} actor={actor.reference}",
+            f"from={previous} to={target_state} actor={actor.reference}",
         )
         self._refresh_swarm_status(root, swarm)
         return work
@@ -2584,6 +2975,13 @@ class AgoraWorkspace:
         if swarm.status not in {"ready", "running"}:
             raise ValueError(f"Swarm {swarm.id} must be ready before a session can start")
         actor = self._find_actor(root, data.actor_id)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        if data.launch and actor.authentication_required:
+            raise ValueError(
+                f"Actor {actor.reference} requires signed session launch: prepare the session "
+                "without --launch, export its authorization, then use session launch"
+            )
         self._assert_represented_swarm_operational(root, actor)
         roles = self._actor_roles(swarm, actor.reference)
         if not roles:
@@ -2610,6 +3008,17 @@ class AgoraWorkspace:
                 f"Session already exists: {session_id}. Pass --force to replace it."
             )
         context_path = session_path / "CONTEXT.md"
+        context_contents = self._render_session_context(
+            root,
+            project,
+            actor,
+            swarm,
+            roles,
+            work,
+            integration,
+            provider,
+            model,
+        )
         record = SessionRecord(
             id=session_id,
             actor=actor.reference,
@@ -2625,22 +3034,9 @@ class AgoraWorkspace:
             launch_command=command,
             runtime_available=runtime_available,
             created_at=self._timestamp(),
+            context_sha256=hashlib.sha256(context_contents.encode()).hexdigest(),
         )
-        write_new(
-            context_path,
-            self._render_session_context(
-                root,
-                project,
-                actor,
-                swarm,
-                roles,
-                work,
-                integration,
-                provider,
-                model,
-            ),
-            data.force,
-        )
+        write_new(context_path, context_contents, data.force)
         write_new(session_path / "SESSION.md", self._render_session(record), data.force)
         append_entry(
             root / ".agora" / "events.md",
@@ -2652,32 +3048,151 @@ class AgoraWorkspace:
         if not data.launch:
             return record
 
+        return self._execute_session(root, record, actor, swarm, work)
+
+    def prepare_session_authorization(
+        self, data: PrepareSessionAuthorizationInput
+    ) -> SessionAuthorizationRecord:
+        assert_slug(data.session_id, "Session id")
+        root = self.project_root()
+        record = self._load_session(root / ".agora" / "sessions" / data.session_id)
+        if record.status != "prepared":
+            raise ValueError(f"Session must be prepared for authorization: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        self._assert_session_context(record)
+        payload = session_authorization_payload(record)
+        output = Path(data.output).expanduser().resolve()
+        write_new(output, payload.decode("ascii"), data.force)
+        return SessionAuthorizationRecord(
+            session_id=record.id,
+            actor=actor.reference,
+            algorithm="ed25519",
+            fingerprint=actor.authentication_fingerprint,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            path=str(output),
+        )
+
+    @_locked_mutation("project")
+    def launch_session(self, data: LaunchSessionInput) -> SessionRecord:
+        assert_slug(data.session_id, "Session id")
+        root = self.project_root()
+        record = self._load_session(root / ".agora" / "sessions" / data.session_id)
+        if record.status != "prepared":
+            raise ValueError(f"Session must be prepared before launch: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        swarm = self._load_swarm(root, record.swarm_id)
+        if swarm.status not in {"ready", "running"}:
+            raise ValueError(f"Swarm {swarm.id} must be ready before a session can launch")
+        self._assert_represented_swarm_operational(root, actor)
+        roles = self._actor_roles(swarm, actor.reference)
+        if not roles:
+            raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+        if roles != record.roles:
+            raise ValueError(f"Prepared session roles no longer match assignments: {record.id}")
+        work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
+        if work is not None:
+            self._assert_work_mutable(root, swarm, work)
+        project = self._load_project_configuration(root)
+        expected_runtime = (
+            actor.integration or project.integration,
+            actor.provider or project.provider,
+            actor.model or project.model,
+        )
+        if (record.integration, record.provider, record.model) != expected_runtime:
+            raise ValueError(f"Prepared session runtime no longer matches its actor: {record.id}")
+        self._assert_session_context(record)
+        if not record.launch_command:
+            raise ValueError(f"Session has no launch command: {record.id}")
+        if shutil.which(record.launch_command[0]) is None:
+            raise FileNotFoundError(f"Runtime executable not found: {record.launch_command[0]}")
+
+        fingerprint: str | None = None
+        authentication_public_key: str | None = None
+        authorization_sha256: str | None = None
+        authorization_signature: str | None = None
+        if actor.authentication_required and data.signature is None:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed session authorization"
+            )
+        if data.signature is not None:
+            (
+                fingerprint,
+                authorization_sha256,
+                authentication_public_key,
+                authorization_signature,
+            ) = verify_session_authorization(
+                actor, record, Path(data.signature).expanduser().resolve()
+            )
+        authorized = SessionRecord(
+            **{
+                **record.__dict__,
+                "runtime_available": True,
+                "authentication_verified": fingerprint is not None,
+                "authentication_fingerprint": fingerprint,
+                "authentication_public_key": authentication_public_key,
+                "authorization_sha256": authorization_sha256,
+                "authorization_signature": authorization_signature,
+            }
+        )
+        return self._execute_session(root, authorized, actor, swarm, work)
+
+    def _execute_session(
+        self,
+        root: Path,
+        record: SessionRecord,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord | None,
+    ) -> SessionRecord:
+        session_path = Path(record.path)
         running = SessionRecord(**{**record.__dict__, "status": "running"})
         atomic_write(session_path / "SESSION.md", self._render_session(running))
         environment = {
             **os.environ,
             "AGORA_PROJECT": str(root),
             "AGORA_SESSION": str(session_path / "SESSION.md"),
-            "AGORA_CONTEXT": str(context_path),
+            "AGORA_CONTEXT": record.context_path,
             "AGORA_ACTOR": actor.reference,
             "AGORA_SWARM": swarm.id,
         }
         if work is not None:
             environment["AGORA_WORK"] = work.id
-        exit_code = self._launcher(command, root, environment)
+        exit_code = self._launcher(record.launch_command, root, environment)
         status = "completed" if exit_code == 0 else "failed"
         finished = SessionRecord(**{**record.__dict__, "status": status, "exit_code": exit_code})
         atomic_write(session_path / "SESSION.md", self._render_session(finished))
         append_entry(
             root / ".agora" / "events.md",
             (
-                f"- {self._timestamp()} | session.{status} | session={session_id} "
+                f"- {self._timestamp()} | session.{status} | session={record.id} "
                 f"exit-code={exit_code}"
             ),
         )
         if exit_code != 0:
-            raise RuntimeError(f"Session runner exited with code {exit_code}: {' '.join(command)}")
+            raise RuntimeError(
+                f"Session runner exited with code {exit_code}: {' '.join(record.launch_command)}"
+            )
         return finished
+
+    @staticmethod
+    def _assert_session_context(record: SessionRecord) -> None:
+        context_path = Path(record.context_path)
+        expected_path = Path(record.path) / "CONTEXT.md"
+        if context_path != expected_path:
+            raise ValueError(f"Session context path is not canonical: {record.id}")
+        if not context_path.is_file():
+            raise FileNotFoundError(f"Session context is missing: {context_path}")
+        if record.context_sha256 is None:
+            raise ValueError(f"Session has no context digest: {record.id}")
+        digest = hashlib.sha256(context_path.read_bytes()).hexdigest()
+        if digest != record.context_sha256:
+            raise ValueError(f"Session context digest mismatch: {record.id}")
 
     def list_sessions(self, status: str | None = None) -> list[SessionRecord]:
         root = self.project_root()
@@ -2696,6 +3211,13 @@ class AgoraWorkspace:
         if swarm.status not in {"ready", "running"}:
             raise ValueError(f"Swarm {swarm.id} must be ready before a tool can be invoked")
         actor = self._find_actor(root, data.actor_id)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        if data.launch and actor.authentication_required:
+            raise ValueError(
+                f"Actor {actor.reference} requires signed launch: prepare the run without "
+                "--launch, export its authorization, then use tool launch"
+            )
         self._assert_represented_swarm_operational(root, actor)
         roles = self._actor_roles(swarm, actor.reference)
         if not roles:
@@ -2777,6 +3299,8 @@ class AgoraWorkspace:
             path=str(run_path),
             created_at=self._timestamp(),
             result_kind=operation.result_kind,
+            timeout_seconds=contract.timeout_seconds,
+            max_output_bytes=contract.max_output_bytes,
         )
         write_new(run_path / "RUN.md", self._render_tool_run(record, contract), data.force)
         self._append_tool_event(root, record, "prepared")
@@ -2789,6 +3313,152 @@ class AgoraWorkspace:
         if not data.launch:
             return record
 
+        return self._execute_tool_run(root, record, contract, actor, swarm, work, data.force)
+
+    def prepare_tool_authorization(
+        self, data: PrepareToolAuthorizationInput
+    ) -> ToolAuthorizationRecord:
+        assert_slug(data.run_id, "Tool run id")
+        root = self.project_root()
+        record = self._load_tool_run(root / ".agora" / "tool-runs" / data.run_id)
+        if record.status != "prepared":
+            raise ValueError(f"Tool run must be prepared for authorization: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        validate_actor_identity(actor)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        payload = tool_authorization_payload(record)
+        output = Path(data.output).expanduser().resolve()
+        write_new(output, payload.decode("ascii"), data.force)
+        return ToolAuthorizationRecord(
+            run_id=record.id,
+            actor=actor.reference,
+            algorithm="ed25519",
+            fingerprint=actor.authentication_fingerprint,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            path=str(output),
+        )
+
+    @_locked_mutation("project")
+    def launch_tool_run(self, data: LaunchToolRunInput) -> ToolRunRecord:
+        assert_slug(data.run_id, "Tool run id")
+        root = self.project_root()
+        record = self._load_tool_run(root / ".agora" / "tool-runs" / data.run_id)
+        if record.status != "prepared":
+            raise ValueError(f"Tool run must be prepared before launch: {record.id}")
+        swarm = self._load_swarm(root, record.swarm_id)
+        if swarm.status not in {"ready", "running"}:
+            raise ValueError(f"Swarm {swarm.id} must be ready before a tool can be launched")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        self._assert_represented_swarm_operational(root, actor)
+        roles = self._actor_roles(swarm, actor.reference)
+        if not roles:
+            raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+
+        contract = load_tool_contract(root / ".agora" / "tools" / record.tool_id)
+        operation = contract.operations.get(record.operation_id)
+        if operation is None:
+            raise FileNotFoundError(
+                f"Tool operation not found: {record.tool_id}/{record.operation_id}"
+            )
+        if operation.capability not in self._actor_tool_capabilities(root, swarm, roles):
+            raise PermissionError(
+                f"Actor {actor.reference} is not allowed tool capability {operation.capability}"
+            )
+        expected_inputs = set(operation.inputs)
+        provided_inputs = set(record.inputs)
+        missing_inputs = sorted(expected_inputs - provided_inputs)
+        unknown_inputs = sorted(provided_inputs - expected_inputs)
+        empty_inputs = sorted(key for key, value in record.inputs.items() if not value)
+        if missing_inputs or unknown_inputs or empty_inputs:
+            raise ValueError(
+                f"Prepared Tool Run has invalid inputs: "
+                f"missing=[{', '.join(missing_inputs)}], "
+                f"unknown=[{', '.join(unknown_inputs)}], "
+                f"empty=[{', '.join(empty_inputs)}]"
+            )
+        validate_operation_inputs(operation, record.inputs)
+        command = [
+            contract.executable,
+            *(
+                self._substitute_tool_inputs(argument, record.inputs)
+                for argument in operation.arguments
+            ),
+        ]
+        if record.command != command:
+            raise ValueError(f"Prepared tool command no longer matches its contract: {record.id}")
+        if (
+            record.capability != operation.capability
+            or record.risk != operation.risk
+            or record.result_kind != operation.result_kind
+            or record.timeout_seconds != contract.timeout_seconds
+            or record.max_output_bytes != contract.max_output_bytes
+        ):
+            raise ValueError(f"Prepared tool policy no longer matches its contract: {record.id}")
+
+        work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
+        if work is not None:
+            self._assert_work_mutable(root, swarm, work)
+        if operation.approval_role is not None:
+            if work is None or operation.approval_role not in work.approval_roles:
+                raise PermissionError(
+                    f"Tool operation {contract.id}/{operation.id} requires approval from "
+                    f"{operation.approval_role}"
+                )
+
+        executable_path = shutil.which(contract.executable)
+        if executable_path is None:
+            raise FileNotFoundError(f"Tool executable not found: {contract.executable}")
+        if contract.minimum_runtime_version is not None:
+            probe = self._runtime_probe(contract, executable_path)
+            if probe.compatible is not True:
+                raise RuntimeError(
+                    f"Tool runtime compatibility check failed for {contract.id}: {probe.detail}"
+                )
+
+        fingerprint: str | None = None
+        authentication_public_key: str | None = None
+        authorization_sha256: str | None = None
+        authorization_signature: str | None = None
+        if actor.authentication_required and data.signature is None:
+            raise PermissionError(f"Actor {actor.reference} requires a signed tool authorization")
+        if data.signature is not None:
+            (
+                fingerprint,
+                authorization_sha256,
+                authentication_public_key,
+                authorization_signature,
+            ) = verify_tool_authorization(
+                actor, record, Path(data.signature).expanduser().resolve()
+            )
+        authorized = ToolRunRecord(
+            **{
+                **record.__dict__,
+                "runtime_available": True,
+                "authentication_verified": fingerprint is not None,
+                "authentication_fingerprint": fingerprint,
+                "authentication_public_key": authentication_public_key,
+                "authorization_sha256": authorization_sha256,
+                "authorization_signature": authorization_signature,
+            }
+        )
+        return self._execute_tool_run(root, authorized, contract, actor, swarm, work)
+
+    def _execute_tool_run(
+        self,
+        root: Path,
+        record: ToolRunRecord,
+        contract: ToolContract,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord | None,
+        force: bool = False,
+    ) -> ToolRunRecord:
+        run_path = Path(record.path)
         running = ToolRunRecord(**{**record.__dict__, "status": "running"})
         atomic_write(run_path / "RUN.md", self._render_tool_run(running, contract))
         environment = {
@@ -2800,7 +3470,19 @@ class AgoraWorkspace:
         }
         if work is not None:
             environment["AGORA_WORK"] = work.id
-        result = self._tool_runner(command, root, environment)
+        if self._tool_runner is None:
+            result = _run_tool_process(
+                record.command,
+                root,
+                environment,
+                timeout_seconds=record.timeout_seconds,
+                max_output_bytes=record.max_output_bytes,
+            )
+        else:
+            result = _bound_tool_output(
+                self._tool_runner(record.command, root, environment),
+                record.max_output_bytes,
+            )
         status = "completed" if result.returncode == 0 else "failed"
         finished = ToolRunRecord(
             **{**record.__dict__, "status": status, "exit_code": result.returncode}
@@ -2809,18 +3491,18 @@ class AgoraWorkspace:
         write_new(
             run_path / "RESULT.md",
             self._render_tool_result(finished, result.stdout, result.stderr),
-            data.force,
+            force,
         )
         self._append_tool_event(root, finished, status)
         if work is not None:
             self._append_work_event(
                 work,
                 f"tool.{status}",
-                f"run={run_id} exit-code={result.returncode}",
+                f"run={record.id} exit-code={result.returncode}",
             )
         if result.returncode != 0:
             raise RuntimeError(
-                f"Tool operation exited with code {result.returncode}: {' '.join(command)}"
+                f"Tool operation exited with code {result.returncode}: {' '.join(record.command)}"
             )
         return finished
 
@@ -2946,12 +3628,14 @@ class AgoraWorkspace:
             "tools": 0,
             "tool-adapters": 0,
             "actors": 0,
+            "actor-keys": 0,
             "swarms": 0,
             "work": 0,
             "handoffs": 0,
             "delegations": 0,
             "status-changes": 0,
             "sessions": 0,
+            "lifecycle-actions": 0,
             "tool-runs": 0,
             "event-files": 0,
             "upgrades": 0,
@@ -3278,6 +3962,71 @@ class AgoraWorkspace:
                 )
 
         actor_cache: dict[str, ActorRecord] = {}
+        validated_actor_key_histories: set[str] = set()
+
+        def inspect_actor_key_history(actor: ActorRecord) -> None:
+            if actor.reference in validated_actor_key_histories:
+                return
+            validated_actor_key_histories.add(actor.reference)
+            records: dict[str, ActorKeyRecord] = {}
+            for key_path in sorted(self._actor_key_root(actor).glob("*.md")):
+                key = inspect(
+                    "actor-keys",
+                    "actor-key.invalid",
+                    key_path,
+                    lambda key_path=key_path: load_actor_key(key_path),
+                )
+                if not isinstance(key, ActorKeyRecord):
+                    continue
+                if key.fingerprint != key_path.stem:
+                    issue(
+                        "actor-key.fingerprint-mismatch",
+                        key_path,
+                        "Actor key fingerprint does not match its filename",
+                    )
+                if key.actor != actor.reference:
+                    issue(
+                        "actor-key.actor-mismatch",
+                        key_path,
+                        f"Actor key belongs to {key.actor}, expected {actor.reference}",
+                    )
+                if key.fingerprint in records:
+                    issue(
+                        "actor-key.duplicate",
+                        key_path,
+                        f"Duplicate actor key fingerprint: {key.fingerprint}",
+                    )
+                records[key.fingerprint] = key
+            if not records:
+                return
+            current = (
+                records.get(actor.authentication_fingerprint)
+                if actor.authentication_fingerprint is not None
+                else None
+            )
+            expected_status = "revoked" if actor.authentication_revoked_at is not None else "active"
+            if current is None or current.status != expected_status:
+                issue(
+                    "actor-key.current-mismatch",
+                    Path(actor.path),
+                    "Actor current authentication state differs from its key history",
+                )
+            active = [record for record in records.values() if record.status == "active"]
+            expected_active = 0 if actor.authentication_revoked_at is not None else 1
+            if len(active) != expected_active:
+                issue(
+                    "actor-key.active-count",
+                    self._actor_key_root(actor),
+                    f"Actor key history must contain {expected_active} active key(s)",
+                )
+            for record in records.values():
+                if record.replaced_by is not None and record.replaced_by not in records:
+                    issue(
+                        "actor-key.replacement-missing",
+                        Path(record.path),
+                        f"Replacement actor key does not exist: {record.replaced_by}",
+                    )
+
         actor_root = root / ".agora" / "actors"
         for path in sorted(actor_root.glob("*.md")):
             if path.name == "README.md":
@@ -3290,6 +4039,7 @@ class AgoraWorkspace:
             )
             if isinstance(actor, ActorRecord):
                 actor_cache[actor.reference] = actor
+                inspect_actor_key_history(actor)
                 if actor.id != path.stem:
                     issue(
                         "actor.id-mismatch",
@@ -3308,6 +4058,7 @@ class AgoraWorkspace:
             )
             if isinstance(actor, ActorRecord):
                 actor_cache[actor.reference] = actor
+                inspect_actor_key_history(actor)
                 if actor.id != Path(actor.path).stem:
                     issue(
                         "actor.id-mismatch",
@@ -3834,7 +4585,18 @@ class AgoraWorkspace:
                     path,
                     f"Session id {session.id} does not match directory {path.parent.name}",
                 )
-            resolve_actor(session.actor, path)
+            session_actor = resolve_actor(session.actor, path)
+            if (
+                session_actor is not None
+                and session.status in {"running", "completed", "failed"}
+                and session_actor.authentication_required
+                and not session.authentication_verified
+            ):
+                issue(
+                    "session.authentication-missing",
+                    path,
+                    f"Actor {session.actor} requires authentication for launched sessions",
+                )
             swarm = swarms.get(session.swarm_id)
             if swarm is None:
                 issue(
@@ -3870,6 +4632,62 @@ class AgoraWorkspace:
                 )
             if not (path.parent / "CONTEXT.md").is_file():
                 issue("session.context-missing", path, "Session CONTEXT.md is missing")
+            elif session.context_sha256 is not None:
+                try:
+                    self._assert_session_context(session)
+                except (FileNotFoundError, ValueError) as error:
+                    issue("session.context-invalid", path, str(error))
+
+        for directory in _child_directories(root / ".agora" / "actions"):
+            path = directory / "ACTION.md"
+            action = inspect(
+                "lifecycle-actions",
+                "lifecycle-action.invalid",
+                path,
+                lambda path=path: self._load_lifecycle_action(path.parent),
+            )
+            if not isinstance(action, LifecycleActionRecord):
+                continue
+            if action.id != path.parent.name:
+                issue(
+                    "lifecycle-action.id-mismatch",
+                    path,
+                    f"Lifecycle Action id {action.id} does not match directory {path.parent.name}",
+                )
+            action_actor = resolve_actor(action.actor, path)
+            if (
+                action_actor is not None
+                and action.status == "applied"
+                and action_actor.authentication_required
+                and not action.authentication_verified
+            ):
+                issue(
+                    "lifecycle-action.authentication-missing",
+                    path,
+                    f"Actor {action.actor} requires authentication for applied actions",
+                )
+            if action.swarm_id not in swarms:
+                issue(
+                    "lifecycle-action.swarm-missing",
+                    path,
+                    f"Lifecycle Action references missing swarm: {action.swarm_id}",
+                )
+            if (action.swarm_id, action.work_id) not in work_records:
+                issue(
+                    "lifecycle-action.work-missing",
+                    path,
+                    f"Lifecycle Action references missing work: {action.work_id}",
+                )
+            elif action.status == "prepared":
+                try:
+                    self._assert_lifecycle_precondition(root, action)
+                except (FileNotFoundError, ValueError) as error:
+                    issue(
+                        "lifecycle-action.precondition-stale",
+                        path,
+                        str(error),
+                        "warning",
+                    )
 
         for directory in _child_directories(root / ".agora" / "tool-runs"):
             path = directory / "RUN.md"
@@ -3895,13 +4713,30 @@ class AgoraWorkspace:
                     path,
                     f"Tool operation is not installed: {run.tool_id}/{run.operation_id}",
                 )
-            elif operation.capability != run.capability or operation.risk != run.risk:
+            elif (
+                operation.capability != run.capability
+                or operation.risk != run.risk
+                or operation.result_kind != run.result_kind
+                or contract.timeout_seconds != run.timeout_seconds
+                or contract.max_output_bytes != run.max_output_bytes
+            ):
                 issue(
                     "tool-run.contract-mismatch",
                     path,
-                    "Tool run capability or risk differs from its installed operation",
+                    "Tool run policy differs from its installed Tool Pack operation",
                 )
-            resolve_actor(run.actor, path)
+            run_actor = resolve_actor(run.actor, path)
+            if (
+                run_actor is not None
+                and run.status in {"running", "completed", "failed"}
+                and run_actor.authentication_required
+                and not run.authentication_verified
+            ):
+                issue(
+                    "tool-run.authentication-missing",
+                    path,
+                    f"Actor {run.actor} requires authentication for launched Tool Runs",
+                )
             if run.swarm_id not in swarms:
                 issue(
                     "tool-run.swarm-missing",
@@ -4232,7 +5067,7 @@ class AgoraWorkspace:
         kind = string_attribute(attributes, "kind")
         if kind not in ACTOR_KINDS:
             raise ValueError(f"Unsupported actor kind: {kind}")
-        return ActorRecord(
+        record = ActorRecord(
             id=string_attribute(attributes, "id"),
             name=string_attribute(attributes, "name"),
             kind=kind,
@@ -4247,6 +5082,76 @@ class AgoraWorkspace:
             provider=optional_string_attribute(attributes, "provider"),
             model=optional_string_attribute(attributes, "model"),
             represented_swarm=optional_string_attribute(attributes, "represented-swarm"),
+            authentication_required=_boolean_attribute_default(
+                attributes, "authentication-required", False
+            ),
+            authentication_algorithm=optional_string_attribute(
+                attributes, "authentication-algorithm"
+            ),
+            authentication_public_key=optional_string_attribute(
+                attributes, "authentication-public-key"
+            ),
+            authentication_fingerprint=optional_string_attribute(
+                attributes, "authentication-fingerprint"
+            ),
+            authentication_revoked_at=optional_string_attribute(
+                attributes, "authentication-revoked-at"
+            ),
+            authentication_revoked_reason=optional_string_attribute(
+                attributes, "authentication-revoked-reason"
+            ),
+        )
+        validate_actor_identity(record)
+        return record
+
+    @staticmethod
+    def _actor_key_root(actor: ActorRecord) -> Path:
+        return Path(actor.path).with_suffix("") / "keys"
+
+    def _ensure_current_actor_key(self, actor: ActorRecord) -> ActorKeyRecord:
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        key_path = self._actor_key_root(actor) / f"{actor.authentication_fingerprint}.md"
+        if not key_path.is_file():
+            actor_document = read_markdown(Path(actor.path))
+            record = actor_key_from_actor(
+                actor,
+                key_path,
+                string_attribute(actor_document.attributes, "created-at"),
+            )
+            write_new(key_path, render_actor_key(record))
+        record = self._assert_current_actor_key(actor)
+        assert record is not None
+        return record
+
+    def _assert_current_actor_key(self, actor: ActorRecord) -> ActorKeyRecord | None:
+        if actor.authentication_fingerprint is None:
+            return None
+        key_path = self._actor_key_root(actor) / f"{actor.authentication_fingerprint}.md"
+        if not key_path.is_file():
+            return None
+        record = load_actor_key(key_path)
+        expected_status = "revoked" if actor.authentication_revoked_at is not None else "active"
+        if (
+            record.actor != actor.reference
+            or record.fingerprint != actor.authentication_fingerprint
+            or record.public_key != actor.authentication_public_key
+            or record.status != expected_status
+        ):
+            raise ValueError(f"Actor key history differs from current actor identity: {actor.path}")
+        return record
+
+    def _append_actor_event(self, root: Path, actor: ActorRecord, type_: str, detail: str) -> None:
+        event_path = (
+            agora_home() / "events.md"
+            if actor.reference.startswith("user:")
+            else root / ".agora" / "events.md"
+        )
+        if not event_path.exists():
+            write_new(event_path, "# Agora events\n\n")
+        append_entry(
+            event_path,
+            f"- {self._timestamp()} | {type_} | actor={actor.reference} {detail}",
         )
 
     def _require_actor_for_action(
@@ -4796,6 +5701,140 @@ class AgoraWorkspace:
         return []
 
     @staticmethod
+    def _work_precondition_sha256(work: WorkRecord) -> str:
+        digest = hashlib.sha256()
+        work_root = Path(work.path)
+        for name in ("WORK.md", "approvals.md", "artifacts.md", "evidence.md"):
+            path = work_root / name
+            if not path.is_file():
+                raise FileNotFoundError(f"Work policy document is missing: {path}")
+            digest.update(name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+        return digest.hexdigest()
+
+    def _assert_lifecycle_precondition(self, root: Path, record: LifecycleActionRecord) -> None:
+        swarm = self._load_swarm(root, record.swarm_id)
+        work = self._load_work(swarm, record.work_id)
+        actual = self._work_precondition_sha256(work)
+        if actual != record.precondition_sha256:
+            raise ValueError(f"Lifecycle Action precondition digest mismatch: {record.id}")
+
+    @staticmethod
+    def _render_lifecycle_action(record: LifecycleActionRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/lifecycle-action/v1",
+                    "id": record.id,
+                    "action": record.action,
+                    "actor": record.actor,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "parameters": record.parameters,
+                    "precondition-sha256": record.precondition_sha256,
+                    "status": record.status,
+                    "created-at": record.created_at,
+                    "applied-at": record.applied_at,
+                    "authentication-verified": record.authentication_verified,
+                    "authentication-fingerprint": record.authentication_fingerprint,
+                    "authentication-public-key": record.authentication_public_key,
+                    "authorization-sha256": record.authorization_sha256,
+                    "authorization-signature": record.authorization_signature,
+                },
+                body=(
+                    f"# Lifecycle Action {record.id}\n\n"
+                    "This durable intent binds an actor, a governed mutation, its parameters, "
+                    "and the work state against which it was authorized."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_lifecycle_action(path: Path) -> LifecycleActionRecord:
+        document = read_markdown(path / "ACTION.md")
+        _assert_schema(document, "agora/lifecycle-action/v1", path / "ACTION.md")
+        action = string_attribute(document.attributes, "action")
+        if action not in {"approval.add", "work.transition"}:
+            raise ValueError(f"Unsupported Lifecycle Action kind: {action}")
+        status = string_attribute(document.attributes, "status")
+        if status not in {"prepared", "applied"}:
+            raise ValueError(f"Unsupported Lifecycle Action status: {status}")
+        parameters = record_attribute(document.attributes, "parameters")
+        if any(not isinstance(value, str) for value in parameters.values()):
+            raise ValueError(f"Lifecycle Action parameters must contain string values: {path}")
+        precondition_sha256 = string_attribute(document.attributes, "precondition-sha256")
+        authentication_verified = _boolean_attribute_default(
+            document.attributes, "authentication-verified", False
+        )
+        authentication_fingerprint = optional_string_attribute(
+            document.attributes, "authentication-fingerprint"
+        )
+        authentication_public_key = optional_string_attribute(
+            document.attributes, "authentication-public-key"
+        )
+        authorization_sha256 = optional_string_attribute(
+            document.attributes, "authorization-sha256"
+        )
+        authorization_signature = optional_string_attribute(
+            document.attributes, "authorization-signature"
+        )
+        authentication_values = (
+            authentication_fingerprint,
+            authentication_public_key,
+            authorization_sha256,
+            authorization_signature,
+        )
+        if authentication_verified and any(value is None for value in authentication_values):
+            raise ValueError(
+                f"Verified Lifecycle Action authentication evidence is incomplete: {path}"
+            )
+        if not authentication_verified and any(
+            value is not None for value in authentication_values
+        ):
+            raise ValueError(
+                f"Unverified Lifecycle Action cannot contain authentication evidence: {path}"
+            )
+        applied_at = optional_string_attribute(document.attributes, "applied-at")
+        if status == "prepared" and applied_at is not None:
+            raise ValueError(f"Prepared Lifecycle Action cannot have applied-at: {path}")
+        if status == "applied" and applied_at is None:
+            raise ValueError(f"Applied Lifecycle Action requires applied-at: {path}")
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (
+                precondition_sha256,
+                *(
+                    value
+                    for value in (authentication_fingerprint, authorization_sha256)
+                    if value is not None
+                ),
+            )
+        ):
+            raise ValueError(f"Lifecycle Action digests must be SHA-256 values: {path}")
+        record = LifecycleActionRecord(
+            id=string_attribute(document.attributes, "id"),
+            action=action,
+            actor=string_attribute(document.attributes, "actor"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            parameters=parameters,
+            precondition_sha256=precondition_sha256,
+            status=status,  # type: ignore[arg-type]
+            path=str(path),
+            created_at=string_attribute(document.attributes, "created-at"),
+            applied_at=applied_at,
+            authentication_verified=authentication_verified,
+            authentication_fingerprint=authentication_fingerprint,
+            authentication_public_key=authentication_public_key,
+            authorization_sha256=authorization_sha256,
+            authorization_signature=authorization_signature,
+        )
+        validate_persisted_lifecycle_authorization(record)
+        return record
+
+    @staticmethod
     def _render_session(record: SessionRecord) -> str:
         attributes = {
             "schema": "agora/session/v1",
@@ -4813,6 +5852,12 @@ class AgoraWorkspace:
             "runtime-available": record.runtime_available,
             "created-at": record.created_at,
             "exit-code": record.exit_code,
+            "context-sha256": record.context_sha256,
+            "authentication-verified": record.authentication_verified,
+            "authentication-fingerprint": record.authentication_fingerprint,
+            "authentication-public-key": record.authentication_public_key,
+            "authorization-sha256": record.authorization_sha256,
+            "authorization-signature": record.authorization_signature,
         }
         return render_markdown(
             MarkdownDocument(
@@ -4831,7 +5876,40 @@ class AgoraWorkspace:
         status = string_attribute(document.attributes, "status")
         if status not in {"prepared", "running", "completed", "failed"}:
             raise ValueError(f"Unsupported session status: {status}")
-        return SessionRecord(
+        authentication_verified = _boolean_attribute_default(
+            document.attributes, "authentication-verified", False
+        )
+        authentication_fingerprint = optional_string_attribute(
+            document.attributes, "authentication-fingerprint"
+        )
+        authentication_public_key = optional_string_attribute(
+            document.attributes, "authentication-public-key"
+        )
+        authorization_sha256 = optional_string_attribute(
+            document.attributes, "authorization-sha256"
+        )
+        authorization_signature = optional_string_attribute(
+            document.attributes, "authorization-signature"
+        )
+        authentication_values = (
+            authentication_fingerprint,
+            authentication_public_key,
+            authorization_sha256,
+            authorization_signature,
+        )
+        if authentication_verified and any(value is None for value in authentication_values):
+            raise ValueError(f"Verified Session authentication evidence is incomplete: {path}")
+        if not authentication_verified and any(
+            value is not None for value in authentication_values
+        ):
+            raise ValueError(f"Unverified Session cannot contain authentication evidence: {path}")
+        context_sha256 = optional_string_attribute(document.attributes, "context-sha256")
+        if any(
+            value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (context_sha256, authentication_fingerprint, authorization_sha256)
+        ):
+            raise ValueError(f"Session digests must be SHA-256 values: {path}")
+        record = SessionRecord(
             id=string_attribute(document.attributes, "id"),
             actor=string_attribute(document.attributes, "actor"),
             swarm_id=string_attribute(document.attributes, "swarm"),
@@ -4847,7 +5925,15 @@ class AgoraWorkspace:
             runtime_available=_boolean_attribute(document.attributes, "runtime-available"),
             created_at=string_attribute(document.attributes, "created-at"),
             exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
+            context_sha256=context_sha256,
+            authentication_verified=authentication_verified,
+            authentication_fingerprint=authentication_fingerprint,
+            authentication_public_key=authentication_public_key,
+            authorization_sha256=authorization_sha256,
+            authorization_signature=authorization_signature,
         )
+        validate_persisted_session_authorization(record)
+        return record
 
     def _render_session_context(
         self,
@@ -5012,6 +6098,8 @@ class AgoraWorkspace:
             implements_operations=contract.implements_operations,
             version_command=contract.version_command,
             minimum_runtime_version=contract.minimum_runtime_version,
+            timeout_seconds=contract.timeout_seconds,
+            max_output_bytes=contract.max_output_bytes,
             source=source,
             updates=updates,
         )
@@ -5056,9 +6144,16 @@ class AgoraWorkspace:
                     "runtime-available": record.runtime_available,
                     "status": record.status,
                     "result-kind": record.result_kind,
+                    "timeout-seconds": record.timeout_seconds,
+                    "max-output-bytes": record.max_output_bytes,
                     "authentication-reference": contract.authentication_reference,
                     "created-at": record.created_at,
                     "exit-code": record.exit_code,
+                    "authentication-verified": record.authentication_verified,
+                    "authentication-fingerprint": record.authentication_fingerprint,
+                    "authentication-public-key": record.authentication_public_key,
+                    "authorization-sha256": record.authorization_sha256,
+                    "authorization-signature": record.authorization_signature,
                 },
                 body=(
                     f"# Tool run {record.id}\n\n"
@@ -5078,7 +6173,53 @@ class AgoraWorkspace:
         status = string_attribute(document.attributes, "status")
         if status not in {"prepared", "running", "completed", "failed"}:
             raise ValueError(f"Unsupported tool run status: {status}")
-        return ToolRunRecord(
+        authentication_verified = _boolean_attribute_default(
+            document.attributes, "authentication-verified", False
+        )
+        authentication_fingerprint = optional_string_attribute(
+            document.attributes, "authentication-fingerprint"
+        )
+        authentication_public_key = optional_string_attribute(
+            document.attributes, "authentication-public-key"
+        )
+        authorization_sha256 = optional_string_attribute(
+            document.attributes, "authorization-sha256"
+        )
+        authorization_signature = optional_string_attribute(
+            document.attributes, "authorization-signature"
+        )
+        timeout_seconds = _positive_integer_attribute_default(
+            document.attributes,
+            "timeout-seconds",
+            DEFAULT_TOOL_TIMEOUT_SECONDS,
+            MAX_TOOL_TIMEOUT_SECONDS,
+        )
+        max_output_bytes = _positive_integer_attribute_default(
+            document.attributes,
+            "max-output-bytes",
+            DEFAULT_TOOL_MAX_OUTPUT_BYTES,
+            MAX_TOOL_MAX_OUTPUT_BYTES,
+        )
+        authentication_values = (
+            authentication_fingerprint,
+            authentication_public_key,
+            authorization_sha256,
+            authorization_signature,
+        )
+        if authentication_verified and any(value is None for value in authentication_values):
+            raise ValueError(
+                f"Verified Tool Run authentication requires fingerprint and payload digest: {path}"
+            )
+        if not authentication_verified and any(
+            value is not None for value in authentication_values
+        ):
+            raise ValueError(f"Unverified Tool Run cannot contain authentication evidence: {path}")
+        if any(
+            value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (authentication_fingerprint, authorization_sha256)
+        ):
+            raise ValueError(f"Tool Run authentication digests must be SHA-256 values: {path}")
+        record = ToolRunRecord(
             id=string_attribute(document.attributes, "id"),
             tool_id=string_attribute(document.attributes, "tool"),
             operation_id=string_attribute(document.attributes, "operation"),
@@ -5095,7 +6236,16 @@ class AgoraWorkspace:
             created_at=string_attribute(document.attributes, "created-at"),
             result_kind=optional_string_attribute(document.attributes, "result-kind"),
             exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
+            authentication_verified=authentication_verified,
+            authentication_fingerprint=authentication_fingerprint,
+            authentication_public_key=authentication_public_key,
+            authorization_sha256=authorization_sha256,
+            authorization_signature=authorization_signature,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
         )
+        validate_persisted_tool_authorization(record)
+        return record
 
     @staticmethod
     def _render_tool_result(record: ToolRunRecord, stdout: str, stderr: str) -> str:
@@ -5287,12 +6437,28 @@ def _boolean_attribute(attributes: dict[str, object], key: str) -> bool:
     return value
 
 
+def _boolean_attribute_default(attributes: dict[str, object], key: str, default: bool) -> bool:
+    value = attributes.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"Expected boolean attribute: {key}")
+    return value
+
+
 def _optional_integer_attribute(attributes: dict[str, object], key: str) -> int | None:
     value = attributes.get(key)
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"Expected integer attribute or null: {key}")
+    return value
+
+
+def _positive_integer_attribute_default(
+    attributes: dict[str, object], key: str, default: int, maximum: int
+) -> int:
+    value = attributes.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > maximum:
+        raise ValueError(f"Expected integer attribute between 1 and {maximum}: {key}")
     return value
 
 
@@ -5333,13 +6499,77 @@ def _launch_process(command: list[str], cwd: Path, environment: dict[str, str]) 
 
 
 def _run_tool_process(
-    command: list[str], cwd: Path, environment: dict[str, str]
+    command: list[str],
+    cwd: Path,
+    environment: dict[str, str],
+    timeout_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
+    max_output_bytes: int = DEFAULT_TOOL_MAX_OUTPUT_BYTES,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    started = time.monotonic()
+    boundary: str | None = None
+    boundary_exit_code: int | None = None
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=environment,
+            stdout=stdout_file,
+            stderr=stderr_file,
+        )
+        while process.poll() is None:
+            output_size = (
+                os.fstat(stdout_file.fileno()).st_size + os.fstat(stderr_file.fileno()).st_size
+            )
+            if output_size > max_output_bytes:
+                boundary = (
+                    f"Agora terminated the tool after output exceeded {max_output_bytes} bytes."
+                )
+                boundary_exit_code = 125
+                process.kill()
+                break
+            if time.monotonic() - started >= timeout_seconds:
+                boundary = f"Agora terminated the tool after {timeout_seconds:g} seconds."
+                boundary_exit_code = 124
+                process.kill()
+                break
+            time.sleep(0.01)
+        process.wait()
+        actual_output_size = (
+            os.fstat(stdout_file.fileno()).st_size + os.fstat(stderr_file.fileno()).st_size
+        )
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read(max_output_bytes)
+        stderr = stderr_file.read(max(0, max_output_bytes - len(stdout)))
+
+    if boundary is None and actual_output_size > max_output_bytes:
+        boundary = f"Agora limited captured tool output to {max_output_bytes} bytes."
+        boundary_exit_code = 125
+    exit_code = process.returncode if boundary_exit_code is None else boundary_exit_code
+    stderr_text = stderr.decode("utf-8", errors="replace")
+    if boundary:
+        stderr_text = f"{stderr_text.rstrip()}\n{boundary}\n".lstrip()
+    return subprocess.CompletedProcess(
         command,
-        cwd=cwd,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
+        exit_code,
+        stdout.decode("utf-8", errors="replace"),
+        stderr_text,
+    )
+
+
+def _bound_tool_output(
+    result: subprocess.CompletedProcess[str], max_output_bytes: int
+) -> subprocess.CompletedProcess[str]:
+    stdout = result.stdout.encode("utf-8")
+    stderr = result.stderr.encode("utf-8")
+    if len(stdout) + len(stderr) <= max_output_bytes:
+        return result
+    bounded_stdout = stdout[:max_output_bytes]
+    bounded_stderr = stderr[: max(0, max_output_bytes - len(bounded_stdout))]
+    diagnostic = f"Agora limited captured tool output to {max_output_bytes} bytes.\n"
+    return subprocess.CompletedProcess(
+        result.args,
+        125,
+        bounded_stdout.decode("utf-8", errors="replace"),
+        f"{bounded_stderr.decode('utf-8', errors='replace').rstrip()}\n{diagnostic}".lstrip(),
     )

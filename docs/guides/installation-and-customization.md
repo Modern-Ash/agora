@@ -375,6 +375,10 @@ agora actor runtime --actor delivery-agent \
 agora actor runtime --actor delivery-agent --clear
 ```
 
+Add `--public-key <pem> --require-authentication` when Tool Run launches must be signed by an
+external Ed25519 identity. Public keys can then be rotated, revoked, recovered, and inspected through
+`agora actor key`; private keys never enter Agora. See [Actor authentication](actor-authentication.md).
+
 Responsibility can move from a human to an AI agent or swarm by registering the receiver and using a
 governed handoff:
 
@@ -425,6 +429,10 @@ This resolves actor overrides over project defaults and persists the runtime plu
 under `.agora/sessions/delivery-run`. Use `--launch` to run the detected `codex` or `claude` command,
 or pass `--runner "your-command" --launch` for another CLI. Without `--launch`, the session remains a
 portable delegation record for an IDE, CI worker, or cloud orchestrator.
+
+For actors requiring authentication, prepare without `--launch`, export the signed payload through
+`agora session authorization`, and execute it through `agora session launch --signature`. Agora binds
+the signature to the resolved runtime, exact command, assignments, and materialized context digest.
 
 Keep environment-specific behavior out of Method Packs. Roles and lifecycle rules must remain usable
 when the project changes model provider, IDE, CLI, or cloud environment.

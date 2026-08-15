@@ -13,6 +13,13 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   and configure bounded contention waits.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
+- [Actor authentication](guides/actor-authentication.md): bind authenticated Tool Run launches to
+  external Ed25519 identities, sign agent-session launches, and preserve public-key rotation and
+  revocation history without storing private keys.
+- [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
+  and audit work transitions and approvals bound to the current durable work state.
+- [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct
+  process timeouts and captured-output limits without claiming operating-system isolation.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native
   CLI integrations while keeping MCP as an explicit alternative transport.
 - [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
@@ -68,6 +75,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 
 ## Executable samples
 
+- [Actor authentication](../samples/actor-authentication/README.md): sign a lifecycle action, Tool
+  Run, and agent session externally, then rotate and revoke the public key without losing evidence.
 - [Basic Scrum swarm](../samples/basic-swarm/README.md): a human Product Owner, AI Scrum Master, and
   nested delivery swarm complete a governed increment.
 - [LLM environments](../samples/llm-environments/README.md): materialize Codex, Claude, and
@@ -76,6 +85,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   or Kanban.
 - [Governed tool integration](../samples/tool-integration/README.md): invoke Git through a
   role-authorized Tool Pack and inspect its durable result.
+- [Tool execution boundaries](../samples/execution-boundaries/README.md): observe a successful run,
+  timeout, and output-limit failure through one bounded Python provider.
 - [Governed work management](../samples/work-management/README.md): execute a provider-neutral issue
   tracker contract through a local Python adapter and reject unauthorized transitions.
 - [Governed CI/CD](../samples/ci-cd/README.md): trigger a pipeline and require explicit capability

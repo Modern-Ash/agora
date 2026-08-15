@@ -20,6 +20,10 @@ PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9-]*)\}")
 CONVENTIONAL_COMMIT_HEADER = re.compile(r"[A-Za-z][A-Za-z0-9-]*(?:\([^()\r\n]+\))?!?: \S.*")
 SUPPORTED_INPUT_RULES = {"conventional-commits/v1.0.0"}
 RUNTIME_VERSION_PATTERN = re.compile(r"(?<!\d)(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?!\d)")
+DEFAULT_TOOL_TIMEOUT_SECONDS = 300
+MAX_TOOL_TIMEOUT_SECONDS = 3600
+DEFAULT_TOOL_MAX_OUTPUT_BYTES = 1048576
+MAX_TOOL_MAX_OUTPUT_BYTES = 10485760
 
 
 def load_tool_contract(root: Path) -> ToolContract:
@@ -80,6 +84,18 @@ def load_tool_contract(root: Path) -> ToolContract:
         )
     if minimum_runtime_version is not None:
         validate_pack_version(minimum_runtime_version)
+    timeout_seconds = _bounded_positive_integer_attribute(
+        document.attributes,
+        "timeout-seconds",
+        DEFAULT_TOOL_TIMEOUT_SECONDS,
+        MAX_TOOL_TIMEOUT_SECONDS,
+    )
+    max_output_bytes = _bounded_positive_integer_attribute(
+        document.attributes,
+        "max-output-bytes",
+        DEFAULT_TOOL_MAX_OUTPUT_BYTES,
+        MAX_TOOL_MAX_OUTPUT_BYTES,
+    )
 
     operation_root = root / "operations"
     paths = sorted(operation_root.glob("*.md")) if operation_root.exists() else []
@@ -108,7 +124,18 @@ def load_tool_contract(root: Path) -> ToolContract:
         implements_operations=implements_operations,
         version_command=version_command,
         minimum_runtime_version=minimum_runtime_version,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
     )
+
+
+def _bounded_positive_integer_attribute(
+    attributes: dict[str, object], key: str, default: int, maximum: int
+) -> int:
+    value = attributes.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > maximum:
+        raise ValueError(f"Tool {key} must be an integer between 1 and {maximum}")
+    return value
 
 
 def probe_tool_runtime(

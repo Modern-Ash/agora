@@ -21,6 +21,15 @@ An **Actor** has an identity, kind, and capabilities. Kinds include human, AI ag
 and automation. A **Role** declares required capabilities, allowed actor kinds, and allowed actions.
 An **Assignment** temporarily links an actor to a role within a swarm.
 
+An actor may also declare an Ed25519 public identity and require authentication for supported
+lifecycle actions, Tool Run launch, and agent-session launch. Canonical authorizations bind the
+actor to one exact prepared operation. The external signer holds the private key; applied records
+retain public key, fingerprint, payload digest, and signature so validation can verify the
+historical proof independently of the actor's current key.
+Each public **Actor Key** has an `active`, `rotated`, or `revoked` lifecycle. Rotation links an old
+fingerprint to its replacement. Revocation disables new governed signed operations until an explicit
+replacement is installed, without invalidating historical signatures.
+
 Identity does not change when work moves from a person to an AI agent or swarm. The assignment changes
 and the handoff is preserved. A swarm can act as a composite actor inside another swarm.
 
@@ -85,6 +94,19 @@ To act, an actor must:
 3. Have a kind and capabilities accepted by that role.
 4. Have the action listed in the role's `allowed-actions`.
 
+## Lifecycle Action
+
+A **Lifecycle Action** is a prepared mutation intent stored independently from current work state.
+Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
+SHA-256 precondition. `work.transition` and `approval.add` are the supported kinds. Their
+precondition covers the work projection, artifacts, evidence, and approvals on which the mutation
+depends. Approval parameters bind both the asserted role and durable note.
+
+Applying the action rechecks the precondition, current actor assignment, Method Pack transition,
+role authority, WIP limit, gate, and active public key before changing `WORK.md`. Authenticated
+actors must provide an external Ed25519 signature. Applied actions retain public verification
+evidence; prepared actions whose work changes remain durable but stale and cannot execute.
+
 ## Artifact, evidence, and approval
 
 An artifact is a durable output or external reference, such as code, a specification, ticket, build,
@@ -103,6 +125,11 @@ provider-neutral capability, risk classification, arguments, required inputs, op
 and result kind. A role grants exact values through `allowed-tool-capabilities`; installing a pack
 does not grant authority.
 
+Every Tool Pack also resolves a portable execution policy: a direct-process timeout and a combined
+captured-output limit. Agora copies that policy into each Tool Run, includes it in signed launch
+authorization, and persists bounded results. This policy controls execution duration and audit data
+size; it is not filesystem, network, syscall, resource, or process-tree isolation.
+
 A **Tool Adapter** is a provider-specific Tool Pack that declares `provider`, `transport`, and the
 provider-neutral contract it `implements`. The adapter changes command translation, not lifecycle
 authority. Adapter discovery records whether its executable is available; installation and
@@ -119,7 +146,8 @@ state when ACLI is not installed.
 
 A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
-and command metadata, while `RESULT.md` captures status, output, and exit code.
+and command metadata, optional actor authentication evidence, while `RESULT.md` captures status,
+output, and exit code.
 
 The bundled **Work Management Tool Pack** separates `issue.read`, `issue.write`, and
 `issue.transition` authority behind a stable `workctl` interface. External ticket state and Agora
@@ -212,8 +240,10 @@ than invoking a model SDK.
 
 A session binds an assigned actor, its active roles, a swarm, optional work, and effective runtime.
 `SESSION.md` records the selection and launch result; `CONTEXT.md` lists the project, method, roles,
-work, related delegations, policies, and operating rules the external agent must read. Conversation
-history remains external unless a material outcome is persisted in Agora files.
+work, related delegations, policies, and operating rules the external agent must read. An
+authenticated launch binds the runtime, exact command, and context digest to the actor's signature;
+the completed session retains public verification evidence. Conversation history remains external
+unless a material outcome is persisted in Agora files.
 
 ## Operational view and validation
 

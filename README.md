@@ -33,6 +33,7 @@ Agora distribution
 ~/.agora/
   config.md             Runtime, method, and delegation defaults
   actors/*.md           Reusable user actors
+  actors/*/keys/        Public actor key lifecycle histories
 
 <project>/.agora/
   project.md            Effective project configuration
@@ -44,11 +45,12 @@ Agora distribution
   commands/*.md         Portable agent commands
   methods/              Built-in and custom lifecycle Method Packs
   registries/           Project-local pack catalog snapshots
-  actors/               Project-specific actors
+  actors/               Project actors and public key lifecycle histories
   tools/                Policy and installed Tool Packs
   artifacts/            Artifact catalog
   delegations/          Parent-to-child work contracts and collection state
   swarms/               Durable work state
+  actions/              Prepared and applied lifecycle mutation intents
   sessions/             Resolved runtimes and compiled execution context
   tool-runs/             Governed external invocations and results
   upgrades/              Applied migrations, manifests, and pre-change backups
@@ -202,6 +204,44 @@ agora swarm create --id payments --objective "Deliver governed payment changes"
 agora swarm assign --swarm payments --role product-owner --actor user:owner
 agora swarm assign --swarm payments --role scrum-master --actor facilitator
 agora swarm assign --swarm payments --role developer --actor delivery-swarm
+```
+
+An actor may bind its identity to an external Ed25519 key and require signed authorization before
+applying supported lifecycle mutations or launching a Tool Run:
+
+```bash
+agora actor add --id authenticated-developer \
+  --name "Authenticated Developer" --kind ai-agent \
+  --capability implementation \
+  --public-key developer-public.pem \
+  --require-authentication
+```
+
+Agora stores only the public key and durable signature evidence. The private key remains in the
+actor's keychain, hardware, workload identity, or secret manager. See the
+[actor authentication guide](docs/guides/actor-authentication.md) for the prepare, sign, and launch
+flow.
+
+Authenticated work transitions use a two-phase lifecycle action:
+
+```bash
+agora work transition-prepare --id begin-payment-work \
+  --swarm payments --work payment-retry --to implementing --by authenticated-developer
+agora action authorization --action begin-payment-work --output /tmp/begin-payment-work.json
+agora action apply --action begin-payment-work --signature /tmp/begin-payment-work.sig
+```
+
+The external signer signs the exact bytes in `/tmp/begin-payment-work.json`. See
+[signed lifecycle actions](docs/guides/signed-lifecycle-actions.md) for signing commands,
+precondition rules, replay protection, and audit behavior.
+
+Rotate, revoke, and inspect public actor keys without replacing historical evidence:
+
+```bash
+agora actor key rotate --actor authenticated-developer \
+  --public-key developer-next-public.pem --reason "Scheduled rotation"
+agora actor key revoke --actor authenticated-developer --reason "Credential exposure"
+agora actor key list --actor authenticated-developer
 ```
 
 In a Git repository, `swarm create` creates `agora/<swarm-id>` by default. Use `--no-branch` to retain
@@ -506,8 +546,10 @@ uv run python scripts/verify_all.py
 ```
 
 It checks Python, Markdown links, generated adapter semantics, all samples, tests, and both package
-distributions. See the [complete verification guide](docs/guides/verification.md). The individual
-commands are:
+distributions. GitHub Actions runs the test suite on Python 3.11 through 3.13 and executes this same
+complete verifier on Python 3.13. Version-matched `vMAJOR.MINOR.PATCH` tags publish checksum-protected
+wheel and source artifacts as a GitHub release. See the
+[complete verification guide](docs/guides/verification.md). The individual commands are:
 
 ```bash
 uv run ruff format --check .
@@ -573,6 +615,8 @@ versioned registry snapshot without persisting a private key.
 - [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
 - [Concurrent writers](docs/guides/concurrent-writers.md)
 - [Conventional Commits](docs/guides/conventional-commits.md)
+- [Actor authentication](docs/guides/actor-authentication.md)
+- [Portable Tool execution boundaries](docs/guides/execution-boundaries.md)
 - [Pack registries](docs/guides/pack-registries.md)
 - [Pack dependencies](docs/guides/pack-dependencies.md)
 - [Pack updates](docs/guides/pack-updates.md)
@@ -602,6 +646,12 @@ versioned registry snapshot without persisting a private key.
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
   are implemented.
+- Optional Ed25519 actor authentication protects work transitions, approvals, Tool Run launch, and
+  agent-session launch while leaving
+  private keys external. Public-key rotation and revocation histories are implemented. Tool Packs
+  declare portable direct-process timeouts and captured-output limits. Other lifecycle mutations,
+  session preparation, administrative key-change authorization, filesystem/network/syscall isolation,
+  resource quotas, and process-tree containment are not yet covered by that policy.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.
 

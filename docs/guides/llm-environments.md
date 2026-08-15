@@ -227,6 +227,12 @@ The child process receives `AGORA_PROJECT`, `AGORA_SESSION`, `AGORA_CONTEXT`, `A
 `AGORA_CONTEXT` before acting. Agora records the command, resolved integration/provider/model, exit
 status, and session events without binding the framework to a provider SDK.
 
+When the actor was registered with `--require-authentication`, immediate `start --launch` is
+rejected. Prepare the session, export its canonical payload with `agora session authorization`, sign
+those bytes externally, and launch it with `agora session launch --signature`. The signature covers
+the exact runtime selection, command, assignments, and `CONTEXT.md` digest. See
+[Actor authentication](actor-authentication.md) for the complete flow.
+
 ## Credentials and sensitive data
 
 Never place API keys, access tokens, or cloud credentials in Agora Markdown. Keep authentication in

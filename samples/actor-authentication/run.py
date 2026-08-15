@@ -1,0 +1,238 @@
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from agora.model import (
+    AddActorInput,
+    AddApprovalInput,
+    ApplyLifecycleActionInput,
+    AssignActorInput,
+    CreateSwarmInput,
+    CreateWorkInput,
+    InitInput,
+    InvokeToolInput,
+    LaunchSessionInput,
+    LaunchToolRunInput,
+    PrepareApprovalInput,
+    PrepareLifecycleAuthorizationInput,
+    PrepareSessionAuthorizationInput,
+    PrepareToolAuthorizationInput,
+    PrepareWorkTransitionInput,
+    RevokeActorKeyInput,
+    RotateActorKeyInput,
+    StartSessionInput,
+)
+from agora.workspace import AgoraWorkspace
+
+
+def main() -> None:
+    runtime = Path(tempfile.mkdtemp(prefix="agora-actor-authentication-sample-"))
+    project = runtime / "project"
+    project.mkdir()
+    os.environ["AGORA_HOME"] = str(runtime / "home")
+    os.environ["AGORA_LOCK_HOME"] = str(runtime / "locks")
+
+    private_key = Ed25519PrivateKey.generate()
+    public_key = runtime / "developer-public.pem"
+    public_key.write_bytes(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    owner_private_key = Ed25519PrivateKey.generate()
+    owner_public_key = runtime / "owner-public.pem"
+    owner_public_key.write_bytes(
+        owner_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
+    def run_tool(
+        command: list[str], cwd: Path, environment: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout="clean", stderr="")
+
+    agora = AgoraWorkspace(cwd=project, tool_runner=run_tool)
+    agora.initialize(InitInput(integration="generic", default_method="scrum"))
+    for actor in (
+        AddActorInput(
+            id="owner",
+            name="Product Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+            public_key=str(owner_public_key),
+            require_authentication=True,
+        ),
+        AddActorInput(
+            id="facilitator",
+            name="Scrum Master",
+            kind="ai-agent",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="developer",
+            name="Authenticated Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+            public_key=str(public_key),
+            require_authentication=True,
+        ),
+    ):
+        agora.add_actor(actor)
+    agora.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Execute signed work", create_branch=False)
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "developer"),
+    ):
+        agora.assign_actor(AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor_id))
+
+    agora.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="signed-work",
+            title="Apply a signed lifecycle mutation",
+            actor_id="owner",
+        )
+    )
+    prepared_action = agora.prepare_work_transition(
+        PrepareWorkTransitionInput(
+            id="plan-signed-work",
+            swarm_id="delivery",
+            work_id="signed-work",
+            actor_id="developer",
+            target_state="planned",
+        )
+    )
+    action_payload = runtime / "lifecycle-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared_action.id,
+            output=str(action_payload),
+        )
+    )
+    action_signature = runtime / "lifecycle-authorization.sig"
+    action_signature.write_bytes(private_key.sign(action_payload.read_bytes()))
+    applied_action = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=prepared_action.id,
+            signature=str(action_signature),
+        )
+    )
+    approval = AddApprovalInput(
+        swarm_id="delivery",
+        work_id="signed-work",
+        actor_id="owner",
+        role_id="product-owner",
+        note="Accepted by the external signer",
+    )
+    prepared_approval = agora.prepare_approval(
+        PrepareApprovalInput(id="accept-signed-work", **approval.__dict__)
+    )
+    approval_payload = runtime / "approval-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared_approval.id,
+            output=str(approval_payload),
+        )
+    )
+    approval_signature = runtime / "approval-authorization.sig"
+    approval_signature.write_bytes(owner_private_key.sign(approval_payload.read_bytes()))
+    applied_approval = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=prepared_approval.id,
+            signature=str(approval_signature),
+        )
+    )
+
+    prepared = agora.invoke_tool(
+        InvokeToolInput(
+            id="signed-status",
+            tool_id="repository",
+            operation_id="status",
+            actor_id="developer",
+            swarm_id="delivery",
+        )
+    )
+    payload = runtime / "authorization.json"
+    authorization = agora.prepare_tool_authorization(
+        PrepareToolAuthorizationInput(run_id=prepared.id, output=str(payload))
+    )
+    signature = runtime / "authorization.sig"
+    signature.write_bytes(private_key.sign(payload.read_bytes()))
+    completed = agora.launch_tool_run(
+        LaunchToolRunInput(run_id=prepared.id, signature=str(signature))
+    )
+
+    prepared_session = agora.start_session(
+        StartSessionInput(
+            id="signed-agent-session",
+            actor_id="developer",
+            swarm_id="delivery",
+            runner="/bin/true --agent",
+        )
+    )
+    session_payload = runtime / "session-authorization.json"
+    agora.prepare_session_authorization(
+        PrepareSessionAuthorizationInput(
+            session_id=prepared_session.id,
+            output=str(session_payload),
+        )
+    )
+    session_signature = runtime / "session-authorization.sig"
+    session_signature.write_bytes(private_key.sign(session_payload.read_bytes()))
+    completed_session = agora.launch_session(
+        LaunchSessionInput(
+            session_id=prepared_session.id,
+            signature=str(session_signature),
+        )
+    )
+
+    replacement_private_key = Ed25519PrivateKey.generate()
+    replacement_public_key = runtime / "developer-replacement-public.pem"
+    replacement_public_key.write_bytes(
+        replacement_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    replacement = agora.rotate_actor_key(
+        RotateActorKeyInput(
+            actor_id="developer",
+            public_key=str(replacement_public_key),
+            reason="Scheduled sample rotation",
+        )
+    )
+    revoked = agora.revoke_actor_key(
+        RevokeActorKeyInput(actor_id="developer", reason="Demonstrate emergency revocation")
+    )
+
+    assert completed.authentication_verified
+    assert completed_session.authentication_verified
+    assert applied_action.authentication_verified
+    assert applied_approval.authentication_verified
+    assert replacement.fingerprint == revoked.fingerprint
+    assert agora.validate().ok
+    print(f"Project: {project}")
+    print(f"Actor fingerprint: {authorization.fingerprint}")
+    print(f"Authorization SHA-256: {authorization.payload_sha256}")
+    print(f"Run status: {completed.status}")
+    print(f"Session status: {completed_session.status}")
+    print(f"Replacement status: {replacement.status}")
+    print(f"Current status: {revoked.status}")
+    print(f"Key records: {len(agora.list_actor_keys('developer'))}")
+
+
+if __name__ == "__main__":
+    main()

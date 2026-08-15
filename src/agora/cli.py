@@ -13,6 +13,7 @@ from agora.model import (
     AddArtifactInput,
     AddEvidenceInput,
     AddRegistryTrustKeyInput,
+    ApplyLifecycleActionInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
@@ -29,9 +30,18 @@ from agora.model import (
     InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
+    LaunchSessionInput,
+    LaunchToolRunInput,
+    PrepareApprovalInput,
+    PrepareLifecycleAuthorizationInput,
+    PrepareSessionAuthorizationInput,
+    PrepareToolAuthorizationInput,
+    PrepareWorkTransitionInput,
     RefreshPackLockInput,
     RemovePackInput,
+    RevokeActorKeyInput,
     RevokeRegistryTrustKeyInput,
+    RotateActorKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
@@ -250,6 +260,17 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_runs = tool.add_parser("runs", help="List governed tool runs")
     tool_runs.add_argument("--status")
 
+    tool_authorization = tool.add_parser(
+        "authorization", help="Export the canonical payload for a prepared Tool Run"
+    )
+    tool_authorization.add_argument("--run", required=True)
+    tool_authorization.add_argument("--output", required=True)
+    tool_authorization.add_argument("--force", action="store_true")
+
+    tool_launch = tool.add_parser("launch", help="Launch a prepared Tool Run")
+    tool_launch.add_argument("--run", required=True)
+    tool_launch.add_argument("--signature", help="Raw Ed25519 signature file")
+
     tool_invoke = tool.add_parser("invoke", help="Prepare or launch a governed tool operation")
     tool_invoke.add_argument("--id")
     tool_invoke.add_argument("--tool", required=True)
@@ -335,6 +356,12 @@ def _build_parser() -> argparse.ArgumentParser:
     actor_add.add_argument("--integration", choices=INTEGRATIONS)
     actor_add.add_argument("--provider")
     actor_add.add_argument("--model")
+    actor_add.add_argument("--public-key", help="Ed25519 public key in PEM format")
+    actor_add.add_argument(
+        "--require-authentication",
+        action="store_true",
+        help="Require signed authorization before this actor launches a Tool Run",
+    )
     actor_add.add_argument(
         "--represented-swarm",
         help="Project swarm represented by an actor whose kind is swarm",
@@ -347,6 +374,19 @@ def _build_parser() -> argparse.ArgumentParser:
     actor_runtime.add_argument("--provider")
     actor_runtime.add_argument("--model")
     actor_runtime.add_argument("--clear", action="store_true")
+
+    actor_key = actor.add_parser(
+        "key", help="Rotate, revoke, or inspect actor authentication keys"
+    ).add_subparsers(dest="actor_key_command", required=True)
+    actor_key_rotate = actor_key.add_parser("rotate", help="Rotate an actor public key")
+    actor_key_rotate.add_argument("--actor", required=True)
+    actor_key_rotate.add_argument("--public-key", required=True)
+    actor_key_rotate.add_argument("--reason", required=True)
+    actor_key_revoke = actor_key.add_parser("revoke", help="Revoke an actor public key")
+    actor_key_revoke.add_argument("--actor", required=True)
+    actor_key_revoke.add_argument("--reason", required=True)
+    actor_key_list = actor_key.add_parser("list", help="List an actor's public key history")
+    actor_key_list.add_argument("--actor", required=True)
 
     actor_list = actor.add_parser("list", help="List effective actors")
     actor_list.add_argument("--scope", choices=("all", "user", "project"), default="all")
@@ -409,6 +449,15 @@ def _build_parser() -> argparse.ArgumentParser:
     transition.add_argument("--to", required=True)
     transition.add_argument("--by", required=True)
 
+    transition_prepare = work.add_parser(
+        "transition-prepare", help="Prepare a durable work transition intent"
+    )
+    transition_prepare.add_argument("--id", required=True)
+    transition_prepare.add_argument("--swarm", required=True)
+    transition_prepare.add_argument("--work", required=True)
+    transition_prepare.add_argument("--to", required=True)
+    transition_prepare.add_argument("--by", required=True)
+
     work_show = work.add_parser("show", help="Show a work item")
     work_show.add_argument("--swarm", required=True)
     work_show.add_argument("--work", required=True)
@@ -441,6 +490,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     session_list = session.add_parser("list", help="List sessions")
     session_list.add_argument("--status")
+    session_authorization = session.add_parser(
+        "authorization", help="Export the canonical payload for a prepared session"
+    )
+    session_authorization.add_argument("--session", required=True)
+    session_authorization.add_argument("--output", required=True)
+    session_authorization.add_argument("--force", action="store_true")
+    session_launch = session.add_parser("launch", help="Launch a prepared session")
+    session_launch.add_argument("--session", required=True)
+    session_launch.add_argument("--signature", help="Raw Ed25519 signature file")
+
+    action = commands.add_parser(
+        "action", help="Authorize and apply durable lifecycle mutations"
+    ).add_subparsers(dest="action_command", required=True)
+    action_authorization = action.add_parser(
+        "authorization", help="Export a prepared action's canonical payload"
+    )
+    action_authorization.add_argument("--action", required=True)
+    action_authorization.add_argument("--output", required=True)
+    action_authorization.add_argument("--force", action="store_true")
+    action_apply = action.add_parser("apply", help="Apply a prepared lifecycle action")
+    action_apply.add_argument("--action", required=True)
+    action_apply.add_argument("--signature", help="Raw Ed25519 signature file")
+    action_list = action.add_parser("list", help="List durable lifecycle actions")
+    action_list.add_argument("--status", choices=("prepared", "applied"))
 
     event = commands.add_parser("event", help="Inspect durable events").add_subparsers(
         dest="event_command", required=True
@@ -481,6 +554,13 @@ def _build_parser() -> argparse.ArgumentParser:
     approval_add.add_argument("--role", required=True)
     approval_add.add_argument("--by", required=True)
     approval_add.add_argument("--note", default="")
+    approval_prepare = approval.add_parser("prepare", help="Prepare a durable approval intent")
+    approval_prepare.add_argument("--id", required=True)
+    approval_prepare.add_argument("--swarm", required=True)
+    approval_prepare.add_argument("--work", required=True)
+    approval_prepare.add_argument("--role", required=True)
+    approval_prepare.add_argument("--by", required=True)
+    approval_prepare.add_argument("--note", default="")
     return parser
 
 
@@ -650,6 +730,21 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         )
     if args.command == "tool" and args.tool_command == "runs":
         return workspace.list_tool_runs(args.status)
+    if args.command == "tool" and args.tool_command == "authorization":
+        return workspace.prepare_tool_authorization(
+            PrepareToolAuthorizationInput(
+                run_id=args.run,
+                output=args.output,
+                force=args.force,
+            )
+        )
+    if args.command == "tool" and args.tool_command == "launch":
+        return workspace.launch_tool_run(
+            LaunchToolRunInput(
+                run_id=args.run,
+                signature=args.signature,
+            )
+        )
     if args.command == "tool" and args.tool_command == "invoke":
         return workspace.invoke_tool(
             InvokeToolInput(
@@ -731,6 +826,8 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 provider=args.provider,
                 model=args.model,
                 represented_swarm=args.represented_swarm,
+                public_key=args.public_key,
+                require_authentication=args.require_authentication,
                 force=args.force,
             )
         )
@@ -744,6 +841,21 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 clear=args.clear,
             )
         )
+    if args.command == "actor" and args.actor_command == "key":
+        if args.actor_key_command == "rotate":
+            return workspace.rotate_actor_key(
+                RotateActorKeyInput(
+                    actor_id=args.actor,
+                    public_key=args.public_key,
+                    reason=args.reason,
+                )
+            )
+        if args.actor_key_command == "revoke":
+            return workspace.revoke_actor_key(
+                RevokeActorKeyInput(actor_id=args.actor, reason=args.reason)
+            )
+        if args.actor_key_command == "list":
+            return workspace.list_actor_keys(args.actor)
     if args.command == "actor" and args.actor_command == "list":
         return workspace.list_actors(args.scope)
     if args.command == "swarm" and args.swarm_command == "create":
@@ -805,6 +917,16 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 target_state=args.to,
             )
         )
+    if args.command == "work" and args.work_command == "transition-prepare":
+        return workspace.prepare_work_transition(
+            PrepareWorkTransitionInput(
+                id=args.id,
+                swarm_id=args.swarm,
+                work_id=args.work,
+                actor_id=args.by,
+                target_state=args.to,
+            )
+        )
     if args.command == "work" and args.work_command in {"block", "resume", "cancel"}:
         change = ChangeWorkStatusInput(
             swarm_id=args.swarm,
@@ -826,6 +948,32 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.list_work(args.swarm, args.state, args.operational_status)
     if args.command == "session" and args.session_command == "list":
         return workspace.list_sessions(args.status)
+    if args.command == "session" and args.session_command == "authorization":
+        return workspace.prepare_session_authorization(
+            PrepareSessionAuthorizationInput(
+                session_id=args.session,
+                output=args.output,
+                force=args.force,
+            )
+        )
+    if args.command == "session" and args.session_command == "launch":
+        return workspace.launch_session(
+            LaunchSessionInput(session_id=args.session, signature=args.signature)
+        )
+    if args.command == "action" and args.action_command == "authorization":
+        return workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=args.action,
+                output=args.output,
+                force=args.force,
+            )
+        )
+    if args.command == "action" and args.action_command == "apply":
+        return workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=args.action, signature=args.signature)
+        )
+    if args.command == "action" and args.action_command == "list":
+        return workspace.list_lifecycle_actions(args.status)
     if args.command == "event" and args.event_command == "list":
         return workspace.list_events(
             swarm_id=args.swarm,
@@ -857,6 +1005,17 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
     if args.command == "approval" and args.approval_command == "add":
         return workspace.add_approval(
             AddApprovalInput(
+                swarm_id=args.swarm,
+                work_id=args.work,
+                actor_id=args.by,
+                role_id=args.role,
+                note=args.note,
+            )
+        )
+    if args.command == "approval" and args.approval_command == "prepare":
+        return workspace.prepare_approval(
+            PrepareApprovalInput(
+                id=args.id,
                 swarm_id=args.swarm,
                 work_id=args.work,
                 actor_id=args.by,

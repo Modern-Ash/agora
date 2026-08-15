@@ -38,6 +38,9 @@ enforces transport and archive limits, verifies SHA-256 and optional Ed25519 sig
 snapshots into temporary directories before the local registry path accepts them.
 `src/agora/trust.py` validates Ed25519 public-key records and durable revocation state without
 handling private signing material.
+`src/agora/identity.py` validates actor public identities, canonicalizes lifecycle, Tool Run, and
+session authorization payloads, and verifies both live and persisted signatures without handling
+private keys.
 
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
@@ -157,6 +160,15 @@ deployment and destructive operations, while provider identity and state remain 
 The observability pack applies the same adapter boundary to health signals and incidents, keeping
 resolution distinct from evidence that recovery actually occurred.
 
+Actor authentication is separate from provider authentication. An actor may require an Ed25519
+signature over a prepared lifecycle action, Tool Run, or agent session before execution. Agora
+stores only the public key and durable proof, revalidates that proof during workspace validation,
+and never signs on the actor's behalf. Lifecycle actions additionally bind authorization to a digest
+of the work policy files and reapply Method Pack rules before mutation. Public key rotation and
+revocation histories live beside the actor record; a revoked current key blocks new signed
+operations while historical evidence remains independently verifiable. External CLIs still
+authenticate independently to GitHub, Jira, cloud, or another provider.
+
 Provider adapters are independently installable Tool Packs. Agora prefers a reviewed native CLI
 when it is already present in the developer environment, then a team wrapper when normalization is
 needed. MCP remains an optional external transport and never replaces Markdown or Git as the source
@@ -203,7 +215,12 @@ metadata is runtime-only Markdown outside the repository; atomic document replac
 readers. This prevents lost updates between local processes and releases automatically after process
 termination.
 
-External commands still run with the caller's operating-system permissions. Agora does not yet
-implement sandboxing, signatures, distributed leases across separate hosts, or actor authentication.
-Those rules must be added without turning chat history or a proprietary service into the source of
-truth.
+External commands still run with the caller's operating-system permissions. Tool Pack manifests
+bound the direct process by elapsed time and captured output; those values are persisted in the Tool
+Run and covered by signed actor authorization. The built-in runner terminates timeout and output
+violations, but does not isolate filesystems, networks, syscalls, resources, credentials, or detached
+descendants. Signed actor authorization currently covers work transitions, approvals, Tool Run
+launch, and agent-session launch; other lifecycle mutations and session preparation are not yet signed. Agora does not yet implement an
+operating-system sandbox, actor key management authorization by a second identity, or distributed
+leases across separate hosts. Those rules must be added without turning chat history or a
+proprietary service into the source of truth.

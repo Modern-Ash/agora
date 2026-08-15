@@ -76,7 +76,32 @@ uv run python scripts/verify_all.py --skip-samples --skip-build
 These flags narrow developer verification only. They do not alter Agora project policy or persisted
 state.
 
-## CI example
+## GitHub Actions CI
+
+The repository includes `.github/workflows/ci.yml`. Pull requests and pushes to `main` run:
+
+1. The test suite against Python 3.11, 3.12, and 3.13 using the locked dependency graph.
+2. Complete verification on Python 3.13, including formatting, lint, documentation, every sample,
+   and both distributions.
+
+The workflow grants only `contents: read`, disables persisted checkout credentials, cancels stale
+runs for the same branch, and pins third-party actions to immutable commit SHAs. A manual
+`workflow_dispatch` trigger is also available. Local development continues to use the same Python
+entry point as CI, so the hosted workflow does not define a second verification contract.
+
+## Tagged releases
+
+Pushing a `vMAJOR.MINOR.PATCH` tag starts `.github/workflows/release.yml`. The workflow runs complete
+verification, requires the tag to match `project.version` in `pyproject.toml`, rebuilds the wheel and
+source distribution, and generates `SHA256SUMS` through `scripts/prepare_release.py`. GitHub CLI then
+creates a release from the existing tag with generated notes and uploads those three artifacts.
+
+The release job receives `contents: write` only because GitHub release creation requires it. Checkout
+credentials remain disabled and all setup actions use immutable SHAs. PyPI publishing is not part of
+this workflow; it should be added only after the project configures PyPI trusted publishing and a
+reviewed release environment.
+
+## Other CI systems
 
 ```bash
 uv sync --extra dev

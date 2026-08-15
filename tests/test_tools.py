@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,34 @@ def test_loads_a_provider_neutral_tool_pack() -> None:
     assert contract.operations["create-branch"].risk == "write"
     assert contract.operations["create-branch"].inputs == ["branch"]
     assert contract.operations["commit"].input_rules == {"message": "conventional-commits/v1.0.0"}
+    assert contract.timeout_seconds == 300
+    assert contract.max_output_bytes == 1048576
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("timeout-seconds", "0"),
+        ("timeout-seconds", "true"),
+        ("timeout-seconds", "3601"),
+        ("max-output-bytes", "0"),
+        ("max-output-bytes", "10485761"),
+    ],
+)
+def test_rejects_invalid_tool_execution_boundaries(
+    tmp_path: Path, attribute: str, value: str
+) -> None:
+    source = template_root() / "tools" / "repository"
+    tool = tmp_path / "repository"
+    shutil.copytree(source, tool)
+    manifest = tool / "TOOL.md"
+    contents = manifest.read_text(encoding="utf-8")
+    default = "300" if attribute == "timeout-seconds" else "1048576"
+    contents = contents.replace(f"{attribute}: {default}", f"{attribute}: {value}")
+    manifest.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=attribute):
+        load_tool_contract(tool)
 
 
 def test_loads_the_bundled_work_management_contract() -> None:

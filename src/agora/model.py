@@ -56,6 +56,26 @@ class ActorRecord:
     provider: str | None = None
     model: str | None = None
     represented_swarm: str | None = None
+    authentication_required: bool = False
+    authentication_algorithm: str | None = None
+    authentication_public_key: str | None = None
+    authentication_fingerprint: str | None = None
+    authentication_revoked_at: str | None = None
+    authentication_revoked_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ActorKeyRecord:
+    actor: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    status: Literal["active", "rotated", "revoked"]
+    path: str
+    created_at: str
+    ended_at: str | None = None
+    reason: str | None = None
+    replaced_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +212,22 @@ class SessionRecord:
     runtime_available: bool
     created_at: str
     exit_code: int | None = None
+    context_sha256: str | None = None
+    authentication_verified: bool = False
+    authentication_fingerprint: str | None = None
+    authentication_public_key: str | None = None
+    authorization_sha256: str | None = None
+    authorization_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionAuthorizationRecord:
+    session_id: str
+    actor: str
+    algorithm: str
+    fingerprint: str
+    payload_sha256: str
+    path: str
 
 
 @dataclass(frozen=True)
@@ -246,6 +282,8 @@ class ToolContract:
     implements_operations: list[str] = field(default_factory=list)
     version_command: list[str] = field(default_factory=list)
     minimum_runtime_version: str | None = None
+    timeout_seconds: int = 300
+    max_output_bytes: int = 1048576
 
 
 @dataclass(frozen=True)
@@ -265,6 +303,8 @@ class ToolPackRecord:
     implements_operations: list[str] = field(default_factory=list)
     version_command: list[str] = field(default_factory=list)
     minimum_runtime_version: str | None = None
+    timeout_seconds: int = 300
+    max_output_bytes: int = 1048576
     source: PackSourceRecord | None = None
     updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
@@ -471,6 +511,23 @@ class ToolRunRecord:
     created_at: str
     result_kind: str | None = None
     exit_code: int | None = None
+    authentication_verified: bool = False
+    authentication_fingerprint: str | None = None
+    authentication_public_key: str | None = None
+    authorization_sha256: str | None = None
+    authorization_signature: str | None = None
+    timeout_seconds: int = 300
+    max_output_bytes: int = 1048576
+
+
+@dataclass(frozen=True)
+class ToolAuthorizationRecord:
+    run_id: str
+    actor: str
+    algorithm: str
+    fingerprint: str
+    payload_sha256: str
+    path: str
 
 
 @dataclass(frozen=True)
@@ -731,7 +788,35 @@ class AddActorInput:
     provider: str | None = None
     model: str | None = None
     represented_swarm: str | None = None
+    public_key: str | None = None
+    require_authentication: bool = False
     force: bool = False
+
+
+@dataclass(frozen=True)
+class RotateActorKeyInput:
+    actor_id: str
+    public_key: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class RevokeActorKeyInput:
+    actor_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepareToolAuthorizationInput:
+    run_id: str
+    output: str
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class LaunchToolRunInput:
+    run_id: str
+    signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -828,6 +913,54 @@ class TransitionWorkInput(WorkActorInput):
 
 
 @dataclass(frozen=True)
+class PrepareWorkTransitionInput(TransitionWorkInput):
+    id: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareLifecycleAuthorizationInput:
+    action_id: str
+    output: str
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class ApplyLifecycleActionInput:
+    action_id: str
+    signature: str | None = None
+
+
+@dataclass(frozen=True)
+class LifecycleActionRecord:
+    id: str
+    action: str
+    actor: str
+    swarm_id: str
+    work_id: str
+    parameters: dict[str, str]
+    precondition_sha256: str
+    status: Literal["prepared", "applied"]
+    path: str
+    created_at: str
+    applied_at: str | None = None
+    authentication_verified: bool = False
+    authentication_fingerprint: str | None = None
+    authentication_public_key: str | None = None
+    authorization_sha256: str | None = None
+    authorization_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class LifecycleAuthorizationRecord:
+    action_id: str
+    actor: str
+    algorithm: str
+    fingerprint: str
+    payload_sha256: str
+    path: str
+
+
+@dataclass(frozen=True)
 class AddArtifactInput(WorkActorInput):
     kind: str = ""
     uri: str = ""
@@ -847,6 +980,11 @@ class AddApprovalInput(WorkActorInput):
 
 
 @dataclass(frozen=True)
+class PrepareApprovalInput(AddApprovalInput):
+    id: str = ""
+
+
+@dataclass(frozen=True)
 class StartSessionInput:
     actor_id: str
     swarm_id: str
@@ -855,6 +993,19 @@ class StartSessionInput:
     runner: str | None = None
     launch: bool = False
     force: bool = False
+
+
+@dataclass(frozen=True)
+class PrepareSessionAuthorizationInput:
+    session_id: str
+    output: str
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class LaunchSessionInput:
+    session_id: str
+    signature: str | None = None
 
 
 @dataclass(frozen=True)

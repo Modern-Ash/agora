@@ -49,6 +49,8 @@ Describe installation, environment, and governance expectations here.
 | `version-command` | Optional structured CLI arguments used only for a local version probe |
 | `minimum-runtime-version` | Optional numeric `MAJOR.MINOR.PATCH`; requires `version-command` |
 | `authentication-reference` | Optional non-secret reference to external authentication |
+| `timeout-seconds` | Optional direct-process timeout from 1 to 3600; defaults to 300 |
+| `max-output-bytes` | Optional combined captured output limit from 1 to 10,485,760; defaults to 1,048,576 |
 | `provider` | Adapter-only provider slug; requires `transport` and `implements` |
 | `transport` | Adapter-only execution transport; currently `cli` |
 | `implements` | Adapter-only id of the provider-neutral Tool Pack contract |
@@ -198,7 +200,13 @@ agora tool invoke \
 The child process inherits its normal environment plus `AGORA_PROJECT`, `AGORA_TOOL_RUN`,
 `AGORA_ACTOR`, `AGORA_SWARM`, and optional `AGORA_WORK`. Agora captures standard output, standard
 error, status, and exit code in `RESULT.md`, and appends project and work events. A non-zero exit is
-recorded before the CLI reports failure.
+recorded before the CLI reports failure. Exit code `124` denotes an Agora timeout and `125` denotes
+an output limit violation. Both limits are copied into `RUN.md` and included in signed actor
+authorizations.
+
+These portable direct-process limits do not restrict filesystem, network, syscalls, credentials,
+memory, CPU, or detached descendants. Use a restricted external runner when those boundaries are
+required. See [Portable Tool execution boundaries](../guides/execution-boundaries.md).
 
 Credentials, tokens, cookies, and cloud identities must remain in the external CLI, keychain,
 workload identity, or secret manager. Do not declare them as Tool Pack inputs because inputs and
