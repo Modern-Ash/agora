@@ -19,6 +19,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
     PrepareApprovalInput,
     PrepareCreateWorkInput,
@@ -308,6 +309,46 @@ def main() -> None:
             signature=str(session_signature),
         )
     )
+
+    replacement_private_key = Ed25519PrivateKey.generate()
+    replacement_public_key = runtime / "developer-replacement-public.pem"
+    replacement_public_key.write_bytes(
+        replacement_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    key_rotation = agora.prepare_actor_key_rotation(
+        PrepareActorKeyRotationInput(
+            action_id="rotate-developer-key",
+            swarm_id="delivery",
+            rotation=RotateActorKeyInput(
+                actor_id="developer",
+                public_key=str(replacement_public_key),
+                reason="Scheduled sample rotation",
+            ),
+        )
+    )
+    key_rotation_payload = runtime / "key-rotation-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=key_rotation.id,
+            output=str(key_rotation_payload),
+        )
+    )
+    key_rotation_signature = runtime / "key-rotation-authorization.sig"
+    key_rotation_signature.write_bytes(private_key.sign(key_rotation_payload.read_bytes()))
+    applied_key_rotation = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=key_rotation.id,
+            signature=str(key_rotation_signature),
+        )
+    )
+    replacement = next(
+        key
+        for key in agora.list_actor_keys("developer")
+        if key.fingerprint == key_rotation.parameters["fingerprint"]
+    )
     prepared_handoff = agora.prepare_handoff(
         HandoffActorInput(
             id="handoff-to-human",
@@ -328,7 +369,7 @@ def main() -> None:
         )
     )
     handoff_signature = runtime / "handoff-authorization.sig"
-    handoff_signature.write_bytes(private_key.sign(handoff_payload.read_bytes()))
+    handoff_signature.write_bytes(replacement_private_key.sign(handoff_payload.read_bytes()))
     applied_handoff = agora.apply_lifecycle_action(
         ApplyLifecycleActionInput(
             action_id=prepared_handoff.id,
@@ -336,21 +377,6 @@ def main() -> None:
         )
     )
 
-    replacement_private_key = Ed25519PrivateKey.generate()
-    replacement_public_key = runtime / "developer-replacement-public.pem"
-    replacement_public_key.write_bytes(
-        replacement_private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-    )
-    replacement = agora.rotate_actor_key(
-        RotateActorKeyInput(
-            actor_id="developer",
-            public_key=str(replacement_public_key),
-            reason="Scheduled sample rotation",
-        )
-    )
     revoked = agora.revoke_actor_key(
         RevokeActorKeyInput(actor_id="developer", reason="Demonstrate emergency revocation")
     )
@@ -361,6 +387,7 @@ def main() -> None:
     assert applied_action.authentication_verified
     assert applied_approval.authentication_verified
     assert applied_runtime.authentication_verified
+    assert applied_key_rotation.authentication_verified
     assert applied_handoff.authentication_verified
     assert replacement.fingerprint == revoked.fingerprint
     assert agora.validate().ok

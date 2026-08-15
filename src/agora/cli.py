@@ -32,6 +32,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
@@ -436,6 +437,14 @@ def _build_parser() -> argparse.ArgumentParser:
     actor_key_rotate.add_argument("--actor", required=True)
     actor_key_rotate.add_argument("--public-key", required=True)
     actor_key_rotate.add_argument("--reason", required=True)
+    actor_key_rotate_prepare = actor_key.add_parser(
+        "rotate-prepare", help="Prepare a signed actor public-key rotation"
+    )
+    actor_key_rotate_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
+    actor_key_rotate_prepare.add_argument("--actor", required=True)
+    actor_key_rotate_prepare.add_argument("--swarm", required=True)
+    actor_key_rotate_prepare.add_argument("--public-key", required=True)
+    actor_key_rotate_prepare.add_argument("--reason", required=True)
     actor_key_revoke = actor_key.add_parser("revoke", help="Revoke an actor public key")
     actor_key_revoke.add_argument("--actor", required=True)
     actor_key_revoke.add_argument("--reason", required=True)
@@ -1030,6 +1039,18 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                     actor_id=args.actor,
                     public_key=args.public_key,
                     reason=args.reason,
+                )
+            )
+        if args.actor_key_command == "rotate-prepare":
+            return workspace.prepare_actor_key_rotation(
+                PrepareActorKeyRotationInput(
+                    action_id=args.id,
+                    swarm_id=args.swarm,
+                    rotation=RotateActorKeyInput(
+                        actor_id=args.actor,
+                        public_key=args.public_key,
+                        reason=args.reason,
+                    ),
                 )
             )
         if args.actor_key_command == "revoke":

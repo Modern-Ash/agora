@@ -26,6 +26,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
@@ -1286,15 +1287,45 @@ def test_rotates_actor_keys_and_rejects_the_previous_signer(tmp_path: Path, monk
     previous_signature.write_bytes(previous_private_key.sign(previous_payload.read_bytes()))
 
     replacement_private_key = Ed25519PrivateKey.generate()
-    replacement = workspace.rotate_actor_key(
-        RotateActorKeyInput(
-            actor_id="developer",
-            public_key=str(
-                _write_public_key(replacement_private_key, tmp_path / "replacement.pem")
-            ),
-            reason="Scheduled credential rotation",
+    replacement_path = _write_public_key(replacement_private_key, tmp_path / "replacement.pem")
+    rotation = RotateActorKeyInput(
+        actor_id="developer",
+        public_key=str(replacement_path),
+        reason="Scheduled credential rotation",
+    )
+    with pytest.raises(PermissionError, match="prepare actor.key.rotate"):
+        workspace.rotate_actor_key(rotation)
+
+    rotation_action = workspace.prepare_actor_key_rotation(
+        PrepareActorKeyRotationInput(
+            action_id="rotate-developer-key",
+            swarm_id="delivery",
+            rotation=rotation,
         )
     )
+    rotation_payload = tmp_path / "rotation.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=rotation_action.id,
+            output=str(rotation_payload),
+        )
+    )
+    rotation_signature = tmp_path / "rotation.sig"
+    rotation_signature.write_bytes(previous_private_key.sign(rotation_payload.read_bytes()))
+    applied_rotation = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=rotation_action.id,
+            signature=str(rotation_signature),
+        )
+    )
+    replacement = next(
+        record
+        for record in workspace.list_actor_keys("developer")
+        if record.fingerprint == rotation_action.parameters["fingerprint"]
+    )
+    assert applied_rotation.authentication_fingerprint == rotation_action.parameters["from"]
+    assert rotation_action.parameters["reason"] == "Scheduled credential rotation"
+    assert rotation_action.parameters["public-key"] == replacement.public_key
     keys = {record.fingerprint: record for record in workspace.list_actor_keys("developer")}
     previous = next(
         record for record in keys.values() if record.fingerprint != replacement.fingerprint
@@ -1382,6 +1413,40 @@ def test_revokes_and_recovers_an_actor_key(tmp_path: Path, monkeypatch) -> None:
     assert keys[revoked.fingerprint].replaced_by == recovered.fingerprint
     assert keys[recovered.fingerprint].status == "active"
     assert workspace.validate().ok
+
+
+def test_cli_prepares_actor_key_rotation(tmp_path: Path, monkeypatch) -> None:
+    root, _, _, _ = _authenticated_project(tmp_path, monkeypatch)
+    replacement_private_key = Ed25519PrivateKey.generate()
+    replacement_path = _write_public_key(replacement_private_key, tmp_path / "cli-replacement.pem")
+    output = StringIO()
+
+    assert (
+        cli_main(
+            [
+                "actor",
+                "key",
+                "rotate-prepare",
+                "--id",
+                "cli-key-rotation",
+                "--actor",
+                "developer",
+                "--swarm",
+                "delivery",
+                "--public-key",
+                str(replacement_path),
+                "--reason",
+                "Exercise the CLI rotation flow",
+            ],
+            cwd=root,
+            stdout=output,
+        )
+        == 0
+    )
+    action = json.loads(output.getvalue())
+    assert action["action"] == "actor.key.rotate"
+    assert action["parameters"]["reason"] == "Exercise the CLI rotation flow"
+    assert len(action["parameters"]["fingerprint"]) == 64
 
 
 def test_signs_session_launch_and_binds_its_materialized_context(

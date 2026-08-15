@@ -11,8 +11,8 @@ current durable state; the runtime update is constrained by the actor's current 
 Session preparation uses the prospective `CONTEXT.md` digest. The separate launch authorization
 binds the exact runtime command and SHA-256 of its materialized `CONTEXT.md`. The resulting
 records retain public verification evidence so `agora validate` can recheck them later. The sample
-then rotates the actor to a second public key and revokes that key while proving the completed work
-remains valid.
+then has the current key sign a planned rotation to a second public key and revokes that key while
+proving the completed work remains valid.
 
 Run it from the repository root:
 

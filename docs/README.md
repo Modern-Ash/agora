@@ -13,11 +13,12 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   and configure bounded contention waits.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
-- [Actor authentication](guides/actor-authentication.md): bind authenticated Tool Run launches to
-  external Ed25519 identities, sign agent-session preparation and launch, and preserve public-key
-  rotation and revocation history without storing private keys.
+- [Actor authentication](guides/actor-authentication.md): bind governed operations to external
+  Ed25519 identities, sign planned key rotation plus agent-session preparation and launch, and
+  preserve public-key rotation and revocation history without storing private keys.
 - [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
-  and audit work creation, material records, transitions, governance, and delegation lifecycles.
+  and audit actor administration, work creation, material records, transitions, governance, and
+  delegation lifecycles.
 - [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct
   process timeouts and captured-output limits without claiming operating-system isolation.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native

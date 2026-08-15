@@ -247,14 +247,23 @@ agora action apply --action update-authenticated-runtime \
   --signature /tmp/update-authenticated-runtime.sig
 ```
 
-Rotate, revoke, and inspect public actor keys without replacing historical evidence:
+Authorize a planned rotation with the active key, or revoke and inspect public actor keys without
+replacing historical evidence:
 
 ```bash
-agora actor key rotate --actor authenticated-developer \
+agora actor key rotate-prepare --id rotate-authenticated-developer \
+  --actor authenticated-developer --swarm payments \
   --public-key developer-next-public.pem --reason "Scheduled rotation"
+agora action authorization --action rotate-authenticated-developer \
+  --output /tmp/rotate-authenticated-developer.json
+agora action apply --action rotate-authenticated-developer \
+  --signature /tmp/rotate-authenticated-developer.sig
 agora actor key revoke --actor authenticated-developer --reason "Credential exposure"
 agora actor key list --actor authenticated-developer
 ```
+
+After revocation, `actor key rotate` is the explicit local recovery operation because the revoked
+key cannot authorize a successor.
 
 In a Git repository, `swarm create` creates `agora/<swarm-id>` by default. Use `--no-branch` to retain
 the current branch. The global `--project <path>` option lets IDEs, runners, and cloud environments
@@ -658,13 +667,14 @@ versioned registry snapshot without persisting a private key.
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
   are implemented.
-- Optional Ed25519 actor authentication protects actor runtime updates, work creation, criteria,
-  artifacts, evidence, transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run
-  launch, and agent-session preparation and launch while leaving private keys external. Public-key rotation and
-  revocation histories are implemented. Tool Packs
+- Optional Ed25519 actor authentication protects planned key rotation, actor runtime updates, work
+  creation, criteria, artifacts, evidence, transitions, interruptions, approvals, handoffs, the
+  complete delegation lifecycle, Tool Run launch, and agent-session preparation and launch while
+  leaving private keys external. Public-key rotation and revocation histories are implemented. Tool Packs
   declare portable direct-process timeouts and captured-output limits. Administrative key-change
   authorization, filesystem/network/syscall isolation,
-  resource quotas, and process-tree containment are not yet covered by that policy.
+  emergency revocation/recovery authorization, resource quotas, and process-tree containment are
+  not yet covered by that policy.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.
 

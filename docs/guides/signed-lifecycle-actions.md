@@ -1,7 +1,7 @@
 # Signed lifecycle actions
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
-current work projection. The supported mutations are `actor.runtime.update`, `work.transition`,
+current work projection. The supported mutations are `actor.key.rotate`, `actor.runtime.update`, `work.transition`,
 `work.block`, `work.resume`, `work.cancel`, `work.create`, `criterion.satisfy`, `artifact.add`,
 `evidence.add`, `approval.add`, `handoff.create`, session preparation, and the complete delegation
 lifecycle. Their durable intents live at
@@ -83,6 +83,23 @@ The `actor.runtime.update` action binds all requested runtime fields and covers 
 same actor remains assigned and that its current Method Pack role still grants
 `actor.runtime.update`. A signed `--clear` action restores project runtime inheritance. The action is
 self-authorized: it cannot modify another actor's runtime.
+
+## Prepare an actor key rotation
+
+A healthy authenticated actor authorizes its next public identity with its current private key:
+
+```bash
+agora actor key rotate-prepare --id rotate-payment-developer \
+  --actor authenticated-developer --swarm payments \
+  --public-key developer-next-public.pem --reason "Scheduled rotation"
+```
+
+`actor.key.rotate` binds the current fingerprint, canonical replacement public key, replacement
+fingerprint, and reason. Its precondition covers the actor record, `SWARM.md`, and complete public
+key history. Apply rechecks assignment and Method Pack authority, verifies the signature with the
+old active key, and only then links and activates the replacement. Revocation and recovery are not
+aliases for planned rotation: a revoked key cannot sign a lifecycle action, so those emergency
+operations retain their separate administrative boundary.
 
 ## Prepare a transition
 
@@ -296,7 +313,7 @@ The stale intent remains on disk for audit and cannot be applied.
 ## Extensibility boundary
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
-parameter map. The current kernel accepts work transitions and interruptions, approvals, handoffs,
-work creation and material records, session preparation, and every delegation lifecycle mutation.
-Administrative mutations remain future action kinds and must keep their existing domain validation
-as the source of authority when added.
+parameter map. The current kernel accepts planned actor key rotation, actor runtime updates, work
+transitions and interruptions, approvals, handoffs, work creation and material records, session
+preparation, and every delegation lifecycle mutation. Emergency revocation, recovery, and future
+administrative action kinds must keep their domain validation as the source of authority when added.

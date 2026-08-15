@@ -124,6 +124,7 @@ Actions currently issued by the CLI are:
 
 | Action | CLI operation |
 | --- | --- |
+| `actor.key.rotate` | Authorize the acting actor's next active public key |
 | `actor.runtime.update` | Change the acting actor's runtime selection |
 | `work.create` | Create a governed work item |
 | `work.transition` | Traverse an allowed transition edge |

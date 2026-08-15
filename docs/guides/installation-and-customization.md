@@ -380,9 +380,11 @@ swarm, then export, externally sign, and apply the resulting Lifecycle Action. T
 role must grant `actor.runtime.update`; the bundled Scrum and Kanban roles grant actors this
 self-service authority.
 
-Add `--public-key <pem> --require-authentication` when Tool Run launches must be signed by an
-external Ed25519 identity. Public keys can then be rotated, revoked, recovered, and inspected through
-`agora actor key`; private keys never enter Agora. See [Actor authentication](actor-authentication.md).
+Add `--public-key <pem> --require-authentication` when governed operations must be signed by an
+external Ed25519 identity. Planned active-key rotation uses `actor key rotate-prepare`; emergency
+revocation and post-revocation recovery retain separate administrative commands. Public history is
+inspected through `agora actor key list`; private keys never enter Agora. See
+[Actor authentication](actor-authentication.md).
 
 Responsibility can move from a human to an AI agent or swarm by registering the receiver and using a
 governed handoff:

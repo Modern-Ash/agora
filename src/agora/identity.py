@@ -106,6 +106,14 @@ def actor_key_from_pem(
     actor: str, public_key_path: Path, key_root: Path, created_at: str
 ) -> ActorKeyRecord:
     public_key, fingerprint = actor_identity_from_pem(public_key_path)
+    return actor_key_from_public_key(actor, public_key, key_root, created_at)
+
+
+def actor_key_from_public_key(
+    actor: str, public_key: str, key_root: Path, created_at: str
+) -> ActorKeyRecord:
+    raw = _decode_public_key(public_key, f"Actor {actor} public key")
+    fingerprint = hashlib.sha256(raw).hexdigest()
     return ActorKeyRecord(
         actor=actor,
         algorithm="ed25519",

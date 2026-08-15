@@ -804,6 +804,13 @@ class RotateActorKeyInput:
 
 
 @dataclass(frozen=True)
+class PrepareActorKeyRotationInput:
+    action_id: str
+    swarm_id: str
+    rotation: RotateActorKeyInput
+
+
+@dataclass(frozen=True)
 class RevokeActorKeyInput:
     actor_id: str
     reason: str

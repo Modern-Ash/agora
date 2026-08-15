@@ -98,7 +98,7 @@ To act, an actor must:
 
 A **Lifecycle Action** is a prepared mutation intent stored independently from current work state.
 Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
-SHA-256 precondition. Supported kinds cover actor runtime updates, work transitions, work
+SHA-256 precondition. Supported kinds cover planned actor key rotations, actor runtime updates, work transitions, work
 interruptions, approvals, handoffs, work creation and material records, session preparation, and the
 complete delegation lifecycle. Existing-work
 mutations cover the work projection, artifacts, evidence, and approvals on which the mutation
@@ -127,6 +127,11 @@ resolved runtime, and exact command.
 A signed actor runtime update is self-authorized through an assigned swarm role. Its precondition
 covers the actor and swarm projections, while apply rechecks current `actor.runtime.update` Method
 Pack authority before updating the actor's optional integration, provider, and model overrides.
+
+A signed actor key rotation binds the old and replacement fingerprints, canonical replacement
+public key, and reason. Its precondition includes the actor, swarm, and complete public key history.
+The old key verifies the action before the replacement becomes active. Revocation and recovery stay
+separate because a revoked key cannot provide continuity evidence.
 
 Applying the action rechecks the precondition, current actor assignment, Method Pack transition,
 role authority, WIP limit, gate, and active public key before changing `WORK.md`. Authenticated
