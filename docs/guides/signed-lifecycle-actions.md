@@ -1,9 +1,10 @@
 # Signed lifecycle actions
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
-current work projection. The supported mutations are `work.transition`, `work.block`, `work.resume`,
-`work.cancel`, `work.create`, `criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`,
-`handoff.create`, and the complete delegation lifecycle. Their durable intents live at
+current work projection. The supported mutations are `actor.runtime.update`, `work.transition`,
+`work.block`, `work.resume`, `work.cancel`, `work.create`, `criterion.satisfy`, `artifact.add`,
+`evidence.add`, `approval.add`, `handoff.create`, session preparation, and the complete delegation
+lifecycle. Their durable intents live at
 `.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
@@ -66,6 +67,22 @@ agora session prepare --id prepare-payment-session \
 handoff, and tool records. Applying the signed action rerenders those inputs, rejects drift, writes
 the session files, and links `SESSION.md` back to the action. Runtime execution remains a separate
 signed `session authorization` and `session launch` boundary.
+
+## Prepare an actor runtime update
+
+An authenticated actor changes its own runtime through an assigned swarm role:
+
+```bash
+agora actor runtime-prepare --id update-payment-runtime \
+  --actor authenticated-developer --swarm payments \
+  --integration generic --provider internal-gateway --model reviewed-model
+```
+
+The `actor.runtime.update` action binds all requested runtime fields and covers the current actor and
+`SWARM.md` records. Authorization export rejects actor or assignment drift. Apply rechecks that the
+same actor remains assigned and that its current Method Pack role still grants
+`actor.runtime.update`. A signed `--clear` action restores project runtime inheritance. The action is
+self-authorized: it cannot modify another actor's runtime.
 
 ## Prepare a transition
 

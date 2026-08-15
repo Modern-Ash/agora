@@ -832,6 +832,13 @@ class SetActorRuntimeInput:
 
 
 @dataclass(frozen=True)
+class PrepareActorRuntimeInput:
+    action_id: str
+    swarm_id: str
+    runtime: SetActorRuntimeInput
+
+
+@dataclass(frozen=True)
 class CreateSwarmInput:
     id: str
     objective: str

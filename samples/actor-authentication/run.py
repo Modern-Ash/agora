@@ -19,6 +19,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorRuntimeInput,
     PrepareApprovalInput,
     PrepareCreateWorkInput,
     PrepareLifecycleAuthorizationInput,
@@ -28,6 +29,7 @@ from agora.model import (
     PrepareWorkTransitionInput,
     RevokeActorKeyInput,
     RotateActorKeyInput,
+    SetActorRuntimeInput,
     StartSessionInput,
 )
 from agora.workspace import AgoraWorkspace
@@ -232,6 +234,34 @@ def main() -> None:
         LaunchToolRunInput(run_id=prepared.id, signature=str(signature))
     )
 
+    runtime_action = agora.prepare_actor_runtime(
+        PrepareActorRuntimeInput(
+            action_id="update-signed-actor-runtime",
+            swarm_id="delivery",
+            runtime=SetActorRuntimeInput(
+                actor_id="developer",
+                integration="generic",
+                provider="sample-gateway",
+                model="sample-reviewed-model",
+            ),
+        )
+    )
+    runtime_payload = runtime / "runtime-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=runtime_action.id,
+            output=str(runtime_payload),
+        )
+    )
+    runtime_signature = runtime / "runtime-authorization.sig"
+    runtime_signature.write_bytes(private_key.sign(runtime_payload.read_bytes()))
+    applied_runtime = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=runtime_action.id,
+            signature=str(runtime_signature),
+        )
+    )
+
     session_action = agora.prepare_session(
         PrepareSessionInput(
             action_id="prepare-signed-agent-session",
@@ -330,6 +360,7 @@ def main() -> None:
     assert applied_work.authentication_verified
     assert applied_action.authentication_verified
     assert applied_approval.authentication_verified
+    assert applied_runtime.authentication_verified
     assert applied_handoff.authentication_verified
     assert replacement.fingerprint == revoked.fingerprint
     assert agora.validate().ok

@@ -32,6 +32,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorRuntimeInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
     PrepareCreateDelegationInput,
@@ -416,6 +417,17 @@ def _build_parser() -> argparse.ArgumentParser:
     actor_runtime.add_argument("--provider")
     actor_runtime.add_argument("--model")
     actor_runtime.add_argument("--clear", action="store_true")
+
+    actor_runtime_prepare = actor.add_parser(
+        "runtime-prepare", help="Prepare a signed actor runtime change"
+    )
+    actor_runtime_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
+    actor_runtime_prepare.add_argument("--actor", required=True)
+    actor_runtime_prepare.add_argument("--swarm", required=True)
+    actor_runtime_prepare.add_argument("--integration", choices=INTEGRATIONS)
+    actor_runtime_prepare.add_argument("--provider")
+    actor_runtime_prepare.add_argument("--model")
+    actor_runtime_prepare.add_argument("--clear", action="store_true")
 
     actor_key = actor.add_parser(
         "key", help="Rotate, revoke, or inspect actor authentication keys"
@@ -995,6 +1007,20 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 provider=args.provider,
                 model=args.model,
                 clear=args.clear,
+            )
+        )
+    if args.command == "actor" and args.actor_command == "runtime-prepare":
+        return workspace.prepare_actor_runtime(
+            PrepareActorRuntimeInput(
+                action_id=args.id,
+                swarm_id=args.swarm,
+                runtime=SetActorRuntimeInput(
+                    actor_id=args.actor,
+                    integration=args.integration,
+                    provider=args.provider,
+                    model=args.model,
+                    clear=args.clear,
+                ),
             )
         )
     if args.command == "actor" and args.actor_command == "key":

@@ -235,6 +235,18 @@ The external signer signs the exact bytes in `/tmp/begin-payment-work.json`. See
 [signed lifecycle actions](docs/guides/signed-lifecycle-actions.md) for signing commands,
 precondition rules, replay protection, and audit behavior.
 
+Authenticated actors use the same boundary to change their own runtime selection:
+
+```bash
+agora actor runtime-prepare --id update-authenticated-runtime \
+  --actor authenticated-developer --swarm payments \
+  --integration generic --provider internal-gateway --model reviewed-model
+agora action authorization --action update-authenticated-runtime \
+  --output /tmp/update-authenticated-runtime.json
+agora action apply --action update-authenticated-runtime \
+  --signature /tmp/update-authenticated-runtime.sig
+```
+
 Rotate, revoke, and inspect public actor keys without replacing historical evidence:
 
 ```bash
@@ -646,8 +658,8 @@ versioned registry snapshot without persisting a private key.
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
   are implemented.
-- Optional Ed25519 actor authentication protects work creation, criteria, artifacts, evidence,
-  transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run
+- Optional Ed25519 actor authentication protects actor runtime updates, work creation, criteria,
+  artifacts, evidence, transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run
   launch, and agent-session preparation and launch while leaving private keys external. Public-key rotation and
   revocation histories are implemented. Tool Packs
   declare portable direct-process timeouts and captured-output limits. Administrative key-change

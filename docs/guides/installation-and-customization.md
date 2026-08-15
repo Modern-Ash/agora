@@ -375,6 +375,11 @@ agora actor runtime --actor delivery-agent \
 agora actor runtime --actor delivery-agent --clear
 ```
 
+For an actor configured with `--require-authentication`, use `actor runtime-prepare` with an assigned
+swarm, then export, externally sign, and apply the resulting Lifecycle Action. The actor's current
+role must grant `actor.runtime.update`; the bundled Scrum and Kanban roles grant actors this
+self-service authority.
+
 Add `--public-key <pem> --require-authentication` when Tool Run launches must be signed by an
 external Ed25519 identity. Public keys can then be rotated, revoked, recovered, and inspected through
 `agora actor key`; private keys never enter Agora. See [Actor authentication](actor-authentication.md).

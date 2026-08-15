@@ -220,8 +220,8 @@ bound the direct process by elapsed time and captured output; those values are p
 Run and covered by signed actor authorization. The built-in runner terminates timeout and output
 violations, but does not isolate filesystems, networks, syscalls, resources, credentials, or detached
 descendants. Signed actor authorization currently covers work creation, criteria, artifacts,
-evidence, transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool
-Run launch, and agent-session preparation and launch. Agora does not yet implement an
+evidence, transitions, interruptions, approvals, handoffs, actor runtime updates, the complete
+delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not yet implement an
 operating-system sandbox, actor key management authorization by a second identity, or distributed
 leases across separate hosts. Those rules must be added without turning chat history or a
 proprietary service into the source of truth.

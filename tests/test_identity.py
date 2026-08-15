@@ -26,6 +26,7 @@ from agora.model import (
     InvokeToolInput,
     LaunchSessionInput,
     LaunchToolRunInput,
+    PrepareActorRuntimeInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
     PrepareCreateDelegationInput,
@@ -40,6 +41,7 @@ from agora.model import (
     PrepareWorkTransitionInput,
     RevokeActorKeyInput,
     RotateActorKeyInput,
+    SetActorRuntimeInput,
     StartSessionInput,
     TransitionWorkInput,
     WorkActorInput,
@@ -207,6 +209,136 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     report = workspace.validate()
     assert not report.ok
     assert any(issue.code == "lifecycle-action.invalid" for issue in report.issues)
+
+
+def test_authenticated_actor_signs_its_runtime_change(tmp_path: Path, monkeypatch) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    runtime = SetActorRuntimeInput(
+        actor_id="developer",
+        integration="generic",
+        provider="internal-gateway",
+        model="reviewed-model",
+    )
+
+    with pytest.raises(PermissionError, match="prepare actor.runtime.update"):
+        workspace.set_actor_runtime(runtime)
+
+    prepared = workspace.prepare_actor_runtime(
+        PrepareActorRuntimeInput(
+            action_id="update-developer-runtime",
+            swarm_id="delivery",
+            runtime=runtime,
+        )
+    )
+    assert prepared.action == "actor.runtime.update"
+    assert prepared.work_id is None
+    assert prepared.parameters == {
+        "integration": "generic",
+        "provider": "internal-gateway",
+        "model": "reviewed-model",
+        "clear": "false",
+    }
+    payload_path = tmp_path / "runtime-authorization.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared.id,
+            output=str(payload_path),
+        )
+    )
+    payload = json.loads(payload_path.read_text(encoding="ascii"))
+    assert payload["kind"] == "actor.runtime.update"
+    assert payload["work"] is None
+    signature_path = tmp_path / "runtime-authorization.sig"
+    signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
+
+    applied = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=prepared.id, signature=str(signature_path))
+    )
+
+    actor = next(
+        item for item in workspace.list_actors("project") if item.reference == "project:developer"
+    )
+    assert applied.authentication_verified is True
+    assert actor.reference == "project:developer"
+    assert actor.integration == "generic"
+    assert actor.provider == "internal-gateway"
+    assert actor.model == "reviewed-model"
+    assert workspace.validate().ok
+    assert "actor.runtime-updated | actor=project:developer" in (
+        root / ".agora" / "events.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_signed_actor_runtime_change_rechecks_actor_and_method_policy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, workspace, _, _ = _authenticated_project(tmp_path, monkeypatch)
+    prepared = workspace.prepare_actor_runtime(
+        PrepareActorRuntimeInput(
+            action_id="stale-runtime-change",
+            swarm_id="delivery",
+            runtime=SetActorRuntimeInput(actor_id="developer", model="reviewed-model"),
+        )
+    )
+    actor_path = root / ".agora" / "actors" / "developer.md"
+    actor_path.write_text(
+        actor_path.read_text(encoding="utf-8").replace(
+            'name: "Authenticated Developer"', 'name: "Renamed Developer"'
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="precondition digest mismatch"):
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=prepared.id,
+                output=str(tmp_path / "stale-runtime.json"),
+            )
+        )
+
+    actor_path.write_text(
+        actor_path.read_text(encoding="utf-8").replace(
+            'name: "Renamed Developer"', 'name: "Authenticated Developer"'
+        ),
+        encoding="utf-8",
+    )
+    role_path = root / ".agora" / "methods" / "scrum" / "roles" / "developer.md"
+    role_path.write_text(
+        role_path.read_text(encoding="utf-8").replace('"actor.runtime.update", ', ""),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PermissionError, match="not allowed to perform actor.runtime.update"):
+        workspace.apply_lifecycle_action(ApplyLifecycleActionInput(action_id=prepared.id))
+
+
+def test_cli_prepares_authenticated_actor_runtime_change(tmp_path: Path, monkeypatch) -> None:
+    root, _, _, _ = _authenticated_project(tmp_path, monkeypatch)
+    output = StringIO()
+
+    assert (
+        cli_main(
+            [
+                "--project",
+                str(root),
+                "actor",
+                "runtime-prepare",
+                "--id",
+                "cli-runtime-change",
+                "--actor",
+                "developer",
+                "--swarm",
+                "delivery",
+                "--model",
+                "reviewed-model",
+            ],
+            stdout=output,
+        )
+        == 0
+    )
+    record = json.loads(output.getvalue())
+    assert record["action"] == "actor.runtime.update"
+    assert record["parameters"]["model"] == "reviewed-model"
 
 
 def test_signs_work_creation_criteria_artifacts_and_evidence(tmp_path: Path, monkeypatch) -> None:

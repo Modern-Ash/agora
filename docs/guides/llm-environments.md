@@ -183,6 +183,23 @@ agora actor runtime --actor ai-facilitator --clear
 `--clear` restores project inheritance. A human, AI agent, swarm, service, or automation can carry
 runtime metadata; actor kind describes accountable identity, not a permanent execution technology.
 
+When the actor requires authentication, prepare and sign the change in a swarm where its role grants
+`actor.runtime.update`:
+
+```bash
+agora actor runtime-prepare --id update-ai-facilitator-runtime \
+  --actor ai-facilitator --swarm payment-idempotency \
+  --integration generic --provider internal-gateway --model security-reviewed-model
+agora action authorization --action update-ai-facilitator-runtime \
+  --output /tmp/update-ai-facilitator-runtime.json
+# Sign the exact exported bytes outside Agora.
+agora action apply --action update-ai-facilitator-runtime \
+  --signature /tmp/update-ai-facilitator-runtime.sig
+```
+
+The signature binds the requested runtime fields to the current actor and swarm documents. Apply
+also rechecks the assignment and current Method Pack permission before changing the actor record.
+
 ## Prepare and launch a session
 
 After the actor has a swarm assignment, prepare a durable execution session:

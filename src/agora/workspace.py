@@ -107,6 +107,7 @@ from agora.model import (
     PackUpdateHistoryRecord,
     PackUpdateResult,
     PackUpdateStep,
+    PrepareActorRuntimeInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
     PrepareCreateDelegationInput,
@@ -1862,11 +1863,44 @@ class AgoraWorkspace:
     @_locked_mutation("actor-runtime")
     def set_actor_runtime(self, data: SetActorRuntimeInput) -> ActorRecord:
         root = self.project_root()
+        actor = self._validate_actor_runtime(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare actor.runtime.update before changing its runtime"
+            )
+        return self._apply_actor_runtime(root, actor, data)
+
+    @_locked_mutation("project")
+    def prepare_actor_runtime(self, data: PrepareActorRuntimeInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._validate_actor_runtime(root, data.runtime)
+        actor = self._require_actor_for_action(root, swarm, actor.reference, "actor.runtime.update")
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="actor.runtime.update",
+            actor=actor,
+            swarm=swarm,
+            work=None,
+            parameters=self._actor_runtime_parameters(data.runtime),
+        )
+
+    def _validate_actor_runtime(self, root: Path, data: SetActorRuntimeInput) -> ActorRecord:
         actor = self._find_actor(root, data.actor_id)
         if not data.clear and not any((data.integration, data.provider, data.model)):
             raise ValueError("Provide an integration, provider, model, or --clear")
         if data.integration is not None:
             self._assert_integration(data.integration)
+        return actor
+
+    def _apply_actor_runtime(
+        self, root: Path, actor: ActorRecord, data: SetActorRuntimeInput
+    ) -> ActorRecord:
         path = Path(actor.path)
         document = read_markdown(path)
         if data.clear:
@@ -1893,6 +1927,15 @@ class AgoraWorkspace:
             f"- {self._timestamp()} | actor.runtime-updated | actor={actor.reference}",
         )
         return self._find_actor(root, actor.reference)
+
+    @staticmethod
+    def _actor_runtime_parameters(data: SetActorRuntimeInput) -> dict[str, str]:
+        return {
+            "integration": data.integration or "",
+            "provider": data.provider or "",
+            "model": data.model or "",
+            "clear": "true" if data.clear else "false",
+        }
 
     def list_actors(self, scope: str = "all") -> list[ActorRecord]:
         if scope not in {"all", "user", "project"}:
@@ -2619,7 +2662,7 @@ class AgoraWorkspace:
             path=str(output),
         )
 
-    @_locked_mutation("project")
+    @_locked_mutation("lifecycle-action")
     def apply_lifecycle_action(self, data: ApplyLifecycleActionInput) -> LifecycleActionRecord:
         assert_slug(data.action_id, "Lifecycle Action id")
         root = self.project_root()
@@ -2722,6 +2765,7 @@ class AgoraWorkspace:
         evidence_context: (
             tuple[PrepareEvidenceInput, SwarmRecord, ActorRecord, WorkRecord] | None
         ) = None
+        actor_runtime_context: tuple[SetActorRuntimeInput, ActorRecord] | None = None
         session_preparation_context: (
             tuple[
                 StartSessionInput,
@@ -2743,7 +2787,26 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
-        if record.action == "session.prepare":
+        if record.action == "actor.runtime.update":
+            runtime = SetActorRuntimeInput(
+                actor_id=record.actor,
+                integration=(
+                    self._integration(record.parameters["integration"])
+                    if record.parameters["integration"]
+                    else None
+                ),
+                provider=record.parameters["provider"] or None,
+                model=record.parameters["model"] or None,
+                clear=record.parameters["clear"] == "true",
+            )
+            swarm = self._load_swarm(root, record.swarm_id)
+            actor = self._validate_actor_runtime(root, runtime)
+            actor = self._require_actor_for_action(
+                root, swarm, actor.reference, "actor.runtime.update"
+            )
+            work = None
+            actor_runtime_context = (runtime, actor)
+        elif record.action == "session.prepare":
             session = StartSessionInput(
                 id=record.parameters["session"],
                 actor_id=record.actor,
@@ -2985,7 +3048,11 @@ class AgoraWorkspace:
                 actor, record, Path(data.signature).expanduser().resolve()
             )
 
-        if record.action == "session.prepare":
+        if record.action == "actor.runtime.update":
+            assert actor_runtime_context is not None
+            runtime, actor = actor_runtime_context
+            self._apply_actor_runtime(root, actor, runtime)
+        elif record.action == "session.prepare":
             assert session_preparation_context is not None
             session, context = session_preparation_context
             self._apply_session_preparation(root, session, context, record.id)
@@ -6437,6 +6504,13 @@ class AgoraWorkspace:
             actor_id = getattr(data, "actor_id", None)
             actor = self._find_actor(root, str(actor_id))
             return (agora_home() if actor.reference.startswith("user:") else root,)
+        if scope == "lifecycle-action":
+            root = self.project_root()
+            action_id = getattr(data, "action_id", None)
+            action = self._load_lifecycle_action(root / ".agora" / "actions" / str(action_id))
+            if action.action == "actor.runtime.update" and action.actor.startswith("user:"):
+                return (root, agora_home())
+            return (root,)
         if scope in {"registry-update", "pack-update"}:
             requested_scope = getattr(data, "scope", None)
             if requested_scope == "user":
@@ -7328,6 +7402,18 @@ class AgoraWorkspace:
             digest.update(swarm_path.read_bytes())
             digest.update(b"\0")
             return digest.hexdigest()
+        if action == "actor.runtime.update":
+            digest = hashlib.sha256()
+            for label, path in (
+                ("actor", Path(actor.path)),
+                ("swarm", Path(swarm.path) / "SWARM.md"),
+            ):
+                if not path.is_file():
+                    raise FileNotFoundError(f"Actor runtime policy document is missing: {path}")
+                digest.update(f"{label}\0".encode("ascii"))
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+            return digest.hexdigest()
         if action == "session.prepare":
             session = StartSessionInput(
                 id=parameters["session"],
@@ -7457,6 +7543,7 @@ class AgoraWorkspace:
         _assert_schema(document, "agora/lifecycle-action/v1", path / "ACTION.md")
         action = string_attribute(document.attributes, "action")
         if action not in {
+            "actor.runtime.update",
             "approval.add",
             "artifact.add",
             "criterion.satisfy",
@@ -7484,6 +7571,7 @@ class AgoraWorkspace:
         if any(not isinstance(value, str) for value in parameters.values()):
             raise ValueError(f"Lifecycle Action parameters must contain string values: {path}")
         expected_parameters = {
+            "actor.runtime.update": {"integration", "provider", "model", "clear"},
             "approval.add": {"role", "note"},
             "artifact.add": {"kind", "uri"},
             "criterion.satisfy": {"criterion"},
@@ -7519,6 +7607,15 @@ class AgoraWorkspace:
         }[action]
         if set(parameters) != expected_parameters:
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
+        if action == "actor.runtime.update":
+            if parameters["integration"] and parameters["integration"] not in INTEGRATIONS:
+                raise ValueError(f"Lifecycle Action has invalid runtime integration: {path}")
+            if parameters["clear"] not in {"true", "false"}:
+                raise ValueError(f"Lifecycle Action has invalid runtime clear flag: {path}")
+            if parameters["clear"] == "false" and not any(
+                parameters[key] for key in ("integration", "provider", "model")
+            ):
+                raise ValueError(f"Lifecycle Action has no runtime change: {path}")
         if action == "handoff.create":
             assert_slug(parameters["role"], "Lifecycle Action handoff role")
             if not parameters["reason"].strip():
@@ -7653,7 +7750,15 @@ class AgoraWorkspace:
         ):
             raise ValueError(f"Lifecycle Action digests must be SHA-256 values: {path}")
         work_id = optional_string_attribute(document.attributes, "work")
-        if action not in {"handoff.create", "session.prepare"} and work_id is None:
+        if (
+            action
+            not in {
+                "actor.runtime.update",
+                "handoff.create",
+                "session.prepare",
+            }
+            and work_id is None
+        ):
             raise ValueError(f"Lifecycle Action {action} requires work: {path}")
         record = LifecycleActionRecord(
             id=string_attribute(document.attributes, "id"),
