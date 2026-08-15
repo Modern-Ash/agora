@@ -14,8 +14,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
 - [Actor authentication](guides/actor-authentication.md): bind authenticated Tool Run launches to
-  external Ed25519 identities, sign agent-session launches, and preserve public-key rotation and
-  revocation history without storing private keys.
+  external Ed25519 identities, sign agent-session preparation and launch, and preserve public-key
+  rotation and revocation history without storing private keys.
 - [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
   and audit work creation, material records, transitions, governance, and delegation lifecycles.
 - [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct

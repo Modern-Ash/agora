@@ -41,6 +41,7 @@ from agora.model import (
     PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
+    PrepareSessionInput,
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
     RefreshPackLockInput,
@@ -570,6 +571,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     session_list = session.add_parser("list", help="List sessions")
     session_list.add_argument("--status")
+    session_prepare = session.add_parser("prepare", help="Prepare a signed session context intent")
+    session_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
+    session_prepare.add_argument("--session", required=True)
+    session_prepare.add_argument("--actor", required=True)
+    session_prepare.add_argument("--swarm", required=True)
+    session_prepare.add_argument("--work")
+    session_prepare.add_argument("--runner")
     session_authorization = session.add_parser(
         "authorization", help="Export the canonical payload for a prepared session"
     )
@@ -1151,6 +1159,19 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.list_work(args.swarm, args.state, args.operational_status)
     if args.command == "session" and args.session_command == "list":
         return workspace.list_sessions(args.status)
+    if args.command == "session" and args.session_command == "prepare":
+        return workspace.prepare_session(
+            PrepareSessionInput(
+                action_id=args.id,
+                session=StartSessionInput(
+                    id=args.session,
+                    actor_id=args.actor,
+                    swarm_id=args.swarm,
+                    work_id=args.work,
+                    runner=args.runner,
+                ),
+            )
+        )
     if args.command == "session" and args.session_command == "authorization":
         return workspace.prepare_session_authorization(
             PrepareSessionAuthorizationInput(

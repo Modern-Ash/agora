@@ -116,6 +116,7 @@ from agora.model import (
     PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
+    PrepareSessionInput,
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
     ProjectConfiguration,
@@ -2575,7 +2576,7 @@ class AgoraWorkspace:
             work_id=work.id if work is not None else work_id,
             parameters=parameters,
             precondition_sha256=self._lifecycle_precondition_sha256(
-                root, action, swarm, work, parameters
+                root, action, actor, swarm, work, parameters
             ),
             status="prepared",
             path=str(action_root),
@@ -2721,7 +2722,41 @@ class AgoraWorkspace:
         evidence_context: (
             tuple[PrepareEvidenceInput, SwarmRecord, ActorRecord, WorkRecord] | None
         ) = None
-        if record.action == "work.create":
+        session_preparation_context: (
+            tuple[
+                StartSessionInput,
+                tuple[
+                    ProjectConfiguration,
+                    SwarmRecord,
+                    ActorRecord,
+                    list[str],
+                    WorkRecord | None,
+                    Integration,
+                    str,
+                    str,
+                    list[str],
+                    bool,
+                    str,
+                    Path,
+                    str,
+                ],
+            ]
+            | None
+        ) = None
+        if record.action == "session.prepare":
+            session = StartSessionInput(
+                id=record.parameters["session"],
+                actor_id=record.actor,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                runner=record.parameters["runner"] or None,
+            )
+            context = self._validate_session_preparation(root, session)
+            _, swarm, actor, _, work, _, _, _, _, _, session_id, _, _ = context
+            if session_id != record.parameters["session"]:
+                raise ValueError(f"Lifecycle Action session context is not canonical: {record.id}")
+            session_preparation_context = (session, context)
+        elif record.action == "work.create":
             creation = self._work_creation_input_from_action(record)
             context = self._validate_create_work(root, creation)
             swarm, actor, _, _, _ = context
@@ -2950,7 +2985,11 @@ class AgoraWorkspace:
                 actor, record, Path(data.signature).expanduser().resolve()
             )
 
-        if record.action == "work.create":
+        if record.action == "session.prepare":
+            assert session_preparation_context is not None
+            session, context = session_preparation_context
+            self._apply_session_preparation(root, session, context, record.id)
+        elif record.action == "work.create":
             assert work_create_context is not None
             creation, context = work_create_context
             self._apply_create_work(creation, context)
@@ -4038,6 +4077,62 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def start_session(self, data: StartSessionInput) -> SessionRecord:
         root = self.project_root()
+        context = self._validate_session_preparation(root, data)
+        actor = context[2]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare session.prepare before materializing its context"
+            )
+        record = self._apply_session_preparation(root, data, context, None)
+        if not data.launch:
+            return record
+        return self._execute_session(root, record, actor, context[1], context[4])
+
+    @_locked_mutation("project")
+    def prepare_session(self, data: PrepareSessionInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if data.session.id is None:
+            raise ValueError("Prepared session.prepare requires an explicit session id")
+        if data.session.launch:
+            raise ValueError("Prepared session.prepare cannot launch the session")
+        if data.session.force:
+            raise ValueError("Prepared session.prepare cannot replace an existing session")
+        root = self.project_root()
+        context = self._validate_session_preparation(root, data.session)
+        _, swarm, actor, _, work, _, _, _, _, _, session_id, _, _ = context
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="session.prepare",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "session": session_id,
+                "runner": data.session.runner or "",
+            },
+        )
+
+    def _validate_session_preparation(
+        self, root: Path, data: StartSessionInput
+    ) -> tuple[
+        ProjectConfiguration,
+        SwarmRecord,
+        ActorRecord,
+        list[str],
+        WorkRecord | None,
+        Integration,
+        str,
+        str,
+        list[str],
+        bool,
+        str,
+        Path,
+        str,
+    ]:
         project = self._load_project_configuration(root)
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"ready", "running"}:
@@ -4045,11 +4140,6 @@ class AgoraWorkspace:
         actor = self._find_actor(root, data.actor_id)
         assert_actor_identity_available(actor)
         self._assert_current_actor_key(actor)
-        if data.launch and actor.authentication_required:
-            raise ValueError(
-                f"Actor {actor.reference} requires signed session launch: prepare the session "
-                "without --launch, export its authorization, then use session launch"
-            )
         self._assert_represented_swarm_operational(root, actor)
         roles = self._actor_roles(swarm, actor.reference)
         if not roles:
@@ -4075,7 +4165,6 @@ class AgoraWorkspace:
             raise FileExistsError(
                 f"Session already exists: {session_id}. Pass --force to replace it."
             )
-        context_path = session_path / "CONTEXT.md"
         context_contents = self._render_session_context(
             root,
             project,
@@ -4087,6 +4176,59 @@ class AgoraWorkspace:
             provider,
             model,
         )
+        return (
+            project,
+            swarm,
+            actor,
+            roles,
+            work,
+            integration,
+            provider,
+            model,
+            command,
+            runtime_available,
+            session_id,
+            session_path,
+            context_contents,
+        )
+
+    def _apply_session_preparation(
+        self,
+        root: Path,
+        data: StartSessionInput,
+        context: tuple[
+            ProjectConfiguration,
+            SwarmRecord,
+            ActorRecord,
+            list[str],
+            WorkRecord | None,
+            Integration,
+            str,
+            str,
+            list[str],
+            bool,
+            str,
+            Path,
+            str,
+        ],
+        preparation_action_id: str | None,
+    ) -> SessionRecord:
+        (
+            _,
+            swarm,
+            actor,
+            roles,
+            work,
+            integration,
+            provider,
+            model,
+            command,
+            runtime_available,
+            session_id,
+            session_path,
+            context_contents,
+        ) = context
+        context_path = session_path / "CONTEXT.md"
         record = SessionRecord(
             id=session_id,
             actor=actor.reference,
@@ -4103,6 +4245,7 @@ class AgoraWorkspace:
             runtime_available=runtime_available,
             created_at=self._timestamp(),
             context_sha256=hashlib.sha256(context_contents.encode()).hexdigest(),
+            preparation_action_id=preparation_action_id,
         )
         write_new(context_path, context_contents, data.force)
         write_new(session_path / "SESSION.md", self._render_session(record), data.force)
@@ -4113,10 +4256,7 @@ class AgoraWorkspace:
                 f"actor={actor.reference} swarm={swarm.id}"
             ),
         )
-        if not data.launch:
-            return record
-
-        return self._execute_session(root, record, actor, swarm, work)
+        return record
 
     def prepare_session_authorization(
         self, data: PrepareSessionAuthorizationInput
@@ -5656,6 +5796,16 @@ class AgoraWorkspace:
             session_actor = resolve_actor(session.actor, path)
             if (
                 session_actor is not None
+                and session_actor.authentication_required
+                and session.preparation_action_id is None
+            ):
+                issue(
+                    "session.preparation-authentication-missing",
+                    path,
+                    f"Actor {session.actor} requires signed session preparation",
+                )
+            if (
+                session_actor is not None
                 and session.status in {"running", "completed", "failed"}
                 and session_actor.authentication_required
                 and not session.authentication_verified
@@ -5792,6 +5942,47 @@ class AgoraWorkspace:
                                 "lifecycle-action.work-mismatch",
                                 Path(work.path) / "WORK.md",
                                 "Work record differs from its applied Lifecycle Action",
+                            )
+            if action.action == "session.prepare":
+                session_id = action.parameters["session"]
+                session_path = root / ".agora" / "sessions" / session_id
+                if action.status == "prepared" and session_path.exists():
+                    issue(
+                        "lifecycle-action.session-conflict",
+                        path,
+                        f"Prepared action already has a Session record: {session_id}",
+                    )
+                elif action.status == "applied" and not (session_path / "SESSION.md").is_file():
+                    issue(
+                        "lifecycle-action.session-missing",
+                        path,
+                        f"Applied action has no Session record: {session_id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        session = self._load_session(session_path)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.session-invalid", session_path, str(error))
+                    else:
+                        expected = (
+                            action.id,
+                            action.actor,
+                            action.swarm_id,
+                            action.work_id,
+                            action.precondition_sha256,
+                        )
+                        actual = (
+                            session.preparation_action_id,
+                            session.actor,
+                            session.swarm_id,
+                            session.work_id,
+                            session.context_sha256,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.session-mismatch",
+                                session_path / "SESSION.md",
+                                "Session record differs from its applied Lifecycle Action",
                             )
             if (
                 action.status == "applied"
@@ -7110,6 +7301,7 @@ class AgoraWorkspace:
         self,
         root: Path,
         action: str,
+        actor: ActorRecord,
         swarm: SwarmRecord,
         work: WorkRecord | None,
         parameters: dict[str, str],
@@ -7136,6 +7328,16 @@ class AgoraWorkspace:
             digest.update(swarm_path.read_bytes())
             digest.update(b"\0")
             return digest.hexdigest()
+        if action == "session.prepare":
+            session = StartSessionInput(
+                id=parameters["session"],
+                actor_id=actor.reference,
+                swarm_id=swarm.id,
+                work_id=work.id if work is not None else None,
+                runner=parameters["runner"] or None,
+            )
+            context = self._validate_session_preparation(root, session)[-1]
+            return hashlib.sha256(context.encode()).hexdigest()
         if action == "handoff.create":
             swarm_path = Path(swarm.path) / "SWARM.md"
             if not swarm_path.is_file():
@@ -7212,8 +7414,9 @@ class AgoraWorkspace:
             if record.work_id is not None and record.action != "work.create"
             else None
         )
+        actor = self._find_actor(root, record.actor)
         actual = self._lifecycle_precondition_sha256(
-            root, record.action, swarm, work, record.parameters
+            root, record.action, actor, swarm, work, record.parameters
         )
         if actual != record.precondition_sha256:
             raise ValueError(f"Lifecycle Action precondition digest mismatch: {record.id}")
@@ -7266,6 +7469,7 @@ class AgoraWorkspace:
             "delegation.resume",
             "evidence.add",
             "handoff.create",
+            "session.prepare",
             "work.block",
             "work.cancel",
             "work.resume",
@@ -7301,6 +7505,7 @@ class AgoraWorkspace:
             "delegation.resume": {"delegation", "reason"},
             "evidence.add": {"type", "result", "artifacts"},
             "handoff.create": {"role", "from", "to", "reason"},
+            "session.prepare": {"session", "runner"},
             "work.block": {"reason"},
             "work.cancel": {"reason"},
             "work.resume": {"reason"},
@@ -7322,6 +7527,8 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Lifecycle Action handoff actors must use scoped references: {path}"
                 )
+        if action == "session.prepare":
+            assert_slug(parameters["session"], "Lifecycle Action session id")
         if action.startswith("delegation."):
             assert_slug(parameters["delegation"], "Lifecycle Action delegation id")
         if action == "delegation.create":
@@ -7446,7 +7653,7 @@ class AgoraWorkspace:
         ):
             raise ValueError(f"Lifecycle Action digests must be SHA-256 values: {path}")
         work_id = optional_string_attribute(document.attributes, "work")
-        if action != "handoff.create" and work_id is None:
+        if action not in {"handoff.create", "session.prepare"} and work_id is None:
             raise ValueError(f"Lifecycle Action {action} requires work: {path}")
         record = LifecycleActionRecord(
             id=string_attribute(document.attributes, "id"),
@@ -7493,6 +7700,7 @@ class AgoraWorkspace:
             "authentication-public-key": record.authentication_public_key,
             "authorization-sha256": record.authorization_sha256,
             "authorization-signature": record.authorization_signature,
+            "preparation-action": record.preparation_action_id,
         }
         return render_markdown(
             MarkdownDocument(
@@ -7544,6 +7752,9 @@ class AgoraWorkspace:
             for value in (context_sha256, authentication_fingerprint, authorization_sha256)
         ):
             raise ValueError(f"Session digests must be SHA-256 values: {path}")
+        preparation_action_id = optional_string_attribute(document.attributes, "preparation-action")
+        if preparation_action_id is not None:
+            assert_slug(preparation_action_id, "Session preparation action id")
         record = SessionRecord(
             id=string_attribute(document.attributes, "id"),
             actor=string_attribute(document.attributes, "actor"),
@@ -7566,6 +7777,7 @@ class AgoraWorkspace:
             authentication_public_key=authentication_public_key,
             authorization_sha256=authorization_sha256,
             authorization_signature=authorization_signature,
+            preparation_action_id=preparation_action_id,
         )
         validate_persisted_session_authorization(record)
         return record

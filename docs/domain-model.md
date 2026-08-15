@@ -22,8 +22,8 @@ and automation. A **Role** declares required capabilities, allowed actor kinds, 
 An **Assignment** temporarily links an actor to a role within a swarm.
 
 An actor may also declare an Ed25519 public identity and require authentication for supported
-lifecycle actions, Tool Run launch, and agent-session launch. Canonical authorizations bind the
-actor to one exact prepared operation. The external signer holds the private key; applied records
+lifecycle actions, Tool Run launch, and agent-session preparation and launch. Canonical
+authorizations bind the actor to one exact prepared operation. The external signer holds the private key; applied records
 retain public key, fingerprint, payload digest, and signature so validation can verify the
 historical proof independently of the actor's current key.
 Each public **Actor Key** has an `active`, `rotated`, or `revoked` lifecycle. Rotation links an old
@@ -117,6 +117,11 @@ child swarm manifests, and linked actor record. Acceptance also binds the curren
 swarm before materializing child work. Collection adds the terminal child work digest before
 recording its reference as parent artifact and evidence. Child `WORK.md` keeps its delegation and
 parent-work links through every subsequent projection rewrite.
+
+Signed session preparation is a Lifecycle Action whose precondition is the prospective
+`CONTEXT.md` digest. The applied action materializes `SESSION.md` and `CONTEXT.md`, and the session
+links back to that action. Launch authorization remains separate and signs the materialized context,
+resolved runtime, and exact command.
 
 Applying the action rechecks the precondition, current actor assignment, Method Pack transition,
 role authority, WIP limit, gate, and active public key before changing `WORK.md`. Authenticated

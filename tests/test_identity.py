@@ -35,6 +35,7 @@ from agora.model import (
     PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
+    PrepareSessionInput,
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
     RevokeActorKeyInput,
@@ -1269,18 +1270,44 @@ def test_signs_session_launch_and_binds_its_materialized_context(
         runner="/bin/true --agent",
         launch=True,
     )
-    with pytest.raises(ValueError, match="requires signed session launch"):
+    with pytest.raises(PermissionError, match="prepare session.prepare"):
         workspace.start_session(immediate)
     assert not (root / ".agora" / "sessions" / "unsigned-session").exists()
 
-    prepared = workspace.start_session(
-        StartSessionInput(
-            id="signed-session",
-            actor_id="developer",
-            swarm_id="delivery",
-            runner="/bin/true --agent",
+    def prepare_signed_session(action_id: str, session_id: str):
+        action = workspace.prepare_session(
+            PrepareSessionInput(
+                action_id=action_id,
+                session=StartSessionInput(
+                    id=session_id,
+                    actor_id="developer",
+                    swarm_id="delivery",
+                    runner="/bin/true --agent",
+                ),
+            )
         )
-    )
+        action_payload = tmp_path / f"{action_id}.json"
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=action.id,
+                output=str(action_payload),
+            )
+        )
+        action_signature = tmp_path / f"{action_id}.sig"
+        action_signature.write_bytes(private_key.sign(action_payload.read_bytes()))
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(
+                action_id=action.id,
+                signature=str(action_signature),
+            )
+        )
+        return next(item for item in workspace.list_sessions() if item.id == session_id)
+
+    prepared = prepare_signed_session("prepare-signed-session", "signed-session")
+    assert prepared.preparation_action_id == "prepare-signed-session"
+    preparation_action = workspace.list_lifecycle_actions("applied")[-1]
+    assert preparation_action.action == "session.prepare"
+    assert preparation_action.precondition_sha256 == prepared.context_sha256
     payload_path = tmp_path / "session-authorization.json"
     authorization = workspace.prepare_session_authorization(
         PrepareSessionAuthorizationInput(
@@ -1303,14 +1330,59 @@ def test_signs_session_launch_and_binds_its_materialized_context(
     assert calls == [["/bin/true", "--agent"]]
     assert workspace.validate().ok
 
-    tampered = workspace.start_session(
-        StartSessionInput(
-            id="tampered-context",
-            actor_id="developer",
-            swarm_id="delivery",
-            runner="/bin/true --agent",
+    completed_path = Path(completed.path) / "SESSION.md"
+    completed_contents = completed_path.read_text(encoding="utf-8")
+    completed_path.write_text(
+        completed_contents.replace(
+            'preparation-action: "prepare-signed-session"',
+            'preparation-action: "unrecorded-preparation"',
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert not report.ok
+    assert any(issue.code == "lifecycle-action.session-mismatch" for issue in report.issues)
+    completed_path.write_text(completed_contents, encoding="utf-8")
+
+    cli_prepare_output = StringIO()
+    assert (
+        cli_main(
+            [
+                "session",
+                "prepare",
+                "--id",
+                "prepare-tampered-context",
+                "--session",
+                "tampered-context",
+                "--actor",
+                "developer",
+                "--swarm",
+                "delivery",
+                "--runner",
+                "/bin/true --agent",
+            ],
+            cwd=root,
+            stdout=cli_prepare_output,
+        )
+        == 0
+    )
+    assert json.loads(cli_prepare_output.getvalue())["action"] == "session.prepare"
+    preparation_payload = tmp_path / "prepare-tampered-context.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id="prepare-tampered-context",
+            output=str(preparation_payload),
         )
     )
+    preparation_signature = tmp_path / "prepare-tampered-context.sig"
+    preparation_signature.write_bytes(private_key.sign(preparation_payload.read_bytes()))
+    workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id="prepare-tampered-context",
+            signature=str(preparation_signature),
+        )
+    )
+    tampered = next(item for item in workspace.list_sessions() if item.id == "tampered-context")
     context_path = Path(tampered.context_path)
     original_context = context_path.read_text(encoding="utf-8")
     context_path.write_text(f"{original_context}\nUnapproved context.\n", encoding="utf-8")

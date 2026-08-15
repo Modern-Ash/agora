@@ -23,6 +23,7 @@ from agora.model import (
     PrepareCreateWorkInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
+    PrepareSessionInput,
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
     RevokeActorKeyInput,
@@ -231,13 +232,36 @@ def main() -> None:
         LaunchToolRunInput(run_id=prepared.id, signature=str(signature))
     )
 
-    prepared_session = agora.start_session(
-        StartSessionInput(
-            id="signed-agent-session",
-            actor_id="developer",
-            swarm_id="delivery",
-            runner="/bin/true --agent",
+    session_action = agora.prepare_session(
+        PrepareSessionInput(
+            action_id="prepare-signed-agent-session",
+            session=StartSessionInput(
+                id="signed-agent-session",
+                actor_id="developer",
+                swarm_id="delivery",
+                runner="/bin/true --agent",
+            ),
         )
+    )
+    session_preparation_payload = runtime / "session-preparation-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=session_action.id,
+            output=str(session_preparation_payload),
+        )
+    )
+    session_preparation_signature = runtime / "session-preparation-authorization.sig"
+    session_preparation_signature.write_bytes(
+        private_key.sign(session_preparation_payload.read_bytes())
+    )
+    agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=session_action.id,
+            signature=str(session_preparation_signature),
+        )
+    )
+    prepared_session = next(
+        session for session in agora.list_sessions() if session.id == "signed-agent-session"
     )
     session_payload = runtime / "session-authorization.json"
     agora.prepare_session_authorization(

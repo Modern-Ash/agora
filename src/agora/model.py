@@ -220,6 +220,7 @@ class SessionRecord:
     authentication_public_key: str | None = None
     authorization_sha256: str | None = None
     authorization_signature: str | None = None
+    preparation_action_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1028,6 +1029,12 @@ class StartSessionInput:
     runner: str | None = None
     launch: bool = False
     force: bool = False
+
+
+@dataclass(frozen=True)
+class PrepareSessionInput:
+    action_id: str
+    session: StartSessionInput
 
 
 @dataclass(frozen=True)

@@ -430,9 +430,10 @@ under `.agora/sessions/delivery-run`. Use `--launch` to run the detected `codex`
 or pass `--runner "your-command" --launch` for another CLI. Without `--launch`, the session remains a
 portable delegation record for an IDE, CI worker, or cloud orchestrator.
 
-For actors requiring authentication, prepare without `--launch`, export the signed payload through
-`agora session authorization`, and execute it through `agora session launch --signature`. Agora binds
-the signature to the resolved runtime, exact command, assignments, and materialized context digest.
+For actors requiring authentication, use `agora session prepare` and apply its signed Lifecycle
+Action before exporting the separate launch payload through `agora session authorization`. Execute
+it through `agora session launch --signature`. Agora binds preparation to the prospective context
+and launch to the resolved runtime, exact command, assignments, and materialized context digest.
 
 Keep environment-specific behavior out of Method Packs. Roles and lifecycle rules must remain usable
 when the project changes model provider, IDE, CLI, or cloud environment.

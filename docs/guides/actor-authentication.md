@@ -98,15 +98,36 @@ before mutation. See [Signed lifecycle actions](signed-lifecycle-actions.md) for
 
 ## Sign an agent session
 
-An authenticated actor uses the same two-phase boundary before launching Codex, Claude, or another
-runner:
+An authenticated actor first authorizes materializing the durable session context:
 
 ```bash
-agora start \
-  --id signed-agent-session \
+agora session prepare \
+  --id prepare-signed-agent-session \
+  --session signed-agent-session \
   --actor developer \
   --swarm delivery \
   --runner "company-agent run"
+
+agora action authorization \
+  --action prepare-signed-agent-session \
+  --output /tmp/prepare-signed-agent-session.json
+
+openssl pkeyutl -sign -inkey developer-private.pem -rawin \
+  -in /tmp/prepare-signed-agent-session.json \
+  -out /tmp/prepare-signed-agent-session.sig
+
+agora action apply \
+  --action prepare-signed-agent-session \
+  --signature /tmp/prepare-signed-agent-session.sig
+```
+
+The preparation action precondition is the SHA-256 of the prospective `CONTEXT.md`. Agora renders it
+again immediately before apply, so changes to assignments, Method Pack files, work, delegations, or
+project protocol invalidate the intent before any session files are written.
+
+The actor then separately authorizes executing the materialized session:
+
+```bash
 
 agora session authorization \
   --session signed-agent-session \
@@ -124,10 +145,10 @@ agora session launch \
   --signature /tmp/signed-agent-session.sig
 ```
 
-The authorization binds actor, swarm, work, roles, integration, provider, model, exact launch
+The launch authorization binds actor, swarm, work, roles, integration, provider, model, exact launch
 command, creation time, and the SHA-256 digest of the materialized `CONTEXT.md`. Runtime changes,
 assignment changes, context edits, signature replay, and revoked keys are rejected before the runner
-starts. Completed `SESSION.md` files retain the same public signature evidence as Tool Runs.
+starts. `SESSION.md` links to its applied preparation action and retains the launch signature evidence.
 
 ## Rotate a key
 
@@ -174,7 +195,7 @@ current actor state, and replacement references.
 
 This authentication policy protects work creation, criteria, artifacts, evidence, transitions,
 interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and
-agent-session launch. It does not yet sign session preparation or authenticate the operating-system
-account running Agora. External CLIs still perform their own provider authentication. Rotation and
-revocation are local administrative mutations recorded in Markdown and Git; they are not themselves
-authorized by a second actor or remote identity authority.
+agent-session preparation and launch. It does not authenticate the operating-system account running
+Agora. External CLIs still perform their own provider authentication. Rotation and revocation are
+local administrative mutations recorded in Markdown and Git; they are not themselves authorized by
+a second actor or remote identity authority.

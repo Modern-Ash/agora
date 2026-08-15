@@ -51,6 +51,22 @@ references. Their precondition covers `WORK.md`, `approvals.md`, `artifacts.md`,
 Apply rechecks Method Pack authority and work mutability before updating the same Markdown records
 used by unauthenticated actors.
 
+## Prepare an agent session context
+
+Authenticated actors authorize context materialization before authorizing runtime launch:
+
+```bash
+agora session prepare --id prepare-payment-session \
+  --session payment-session --actor authenticated-developer \
+  --swarm payments --work payment-retry --runner "company-agent run"
+```
+
+`session.prepare` binds the session id and runner. Its precondition is the prospective
+`CONTEXT.md` digest, compiled from the current project, Method Pack, role, swarm, work, delegation,
+handoff, and tool records. Applying the signed action rerenders those inputs, rejects drift, writes
+the session files, and links `SESSION.md` back to the action. Runtime execution remains a separate
+signed `session authorization` and `session launch` boundary.
+
 ## Prepare a transition
 
 Create the work and assign the actor normally, then prepare rather than immediately apply its edge:
@@ -264,6 +280,6 @@ The stale intent remains on disk for audit and cannot be applied.
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
 parameter map. The current kernel accepts work transitions and interruptions, approvals, handoffs,
-work creation and material records, and every delegation lifecycle mutation. Administrative
-mutations remain future action kinds and must keep their existing domain validation as the source of
-authority when added.
+work creation and material records, session preparation, and every delegation lifecycle mutation.
+Administrative mutations remain future action kinds and must keep their existing domain validation
+as the source of authority when added.
