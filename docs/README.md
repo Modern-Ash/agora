@@ -66,6 +66,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   enforce parent-child closure.
 - [Granular Gate Waivers](guides/gate-waivers.md): accept exact residual-risk exceptions without
   bypassing transition, role, WIP, or work-status policy.
+- [Approval Delegation](guides/approval-delegation.md): grant one compatible actor a single-use,
+  work-scoped role approval without handing off the role.
 - [Operations and validation](guides/operations-and-validation.md): query active state, inspect
   events, and audit every durable record.
 - [Complete verification](guides/verification.md): validate all command Markdown, generated agent
@@ -86,6 +88,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 
 - [Actor authentication](../samples/actor-authentication/README.md): sign a lifecycle action, Tool
   Run, and agent session externally, then rotate and revoke the public key without losing evidence.
+- [Approval Delegation](../samples/approval-delegation/README.md): consume one scoped delegated
+  approval, revoke another, and preserve the original role assignment.
 - [Basic Scrum swarm](../samples/basic-swarm/README.md): a human Product Owner, AI Scrum Master, and
   nested delivery swarm complete a governed increment.
 - [LLM environments](../samples/llm-environments/README.md): materialize Codex, Claude, and
@@ -148,8 +152,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 ## MVP boundaries
 
 Agora currently validates transition graphs, role capabilities and actions, WIP limits, gates,
-required artifacts, acceptance criteria, successful evidence, approvals, Gate Waivers, handoffs,
-work and
+required artifacts, acceptance criteria, successful evidence, direct and delegated approvals, Gate
+Waivers, handoffs, work and
 delegation interruption histories, delegated work, Tool Pack operations, cross-record integrity,
 and event syntax. It can launch local LLM and tool CLIs with durable context, but does not call
 provider APIs directly, manage credentials, implement a remote scheduler or distributed lease

@@ -69,6 +69,7 @@ from agora.model import (
     AddEvidenceInput,
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
+    ApprovalDelegationRecord,
     AssignActorInput,
     CatalogPackRecord,
     ChangeDelegationStatusInput,
@@ -78,6 +79,7 @@ from agora.model import (
     CreateSwarmInput,
     CreateWorkInput,
     DecomposeWorkInput,
+    DelegateApprovalInput,
     DelegationActorInput,
     DelegationRecord,
     DoctorCheck,
@@ -116,6 +118,7 @@ from agora.model import (
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
+    PrepareApprovalDelegationInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
     PrepareCreateDelegationInput,
@@ -139,6 +142,7 @@ from agora.model import (
     RegistryUpdateResult,
     RemovePackInput,
     RevokeActorKeyInput,
+    RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
     RotateActorKeyInput,
     SessionAuthorizationRecord,
@@ -2323,6 +2327,21 @@ class AgoraWorkspace:
             raise ValueError("Handoff destination must differ from the current actor")
         self._assert_actor_role_compatibility(root, swarm.method, data.role_id, incoming)
         self._assert_swarm_actor_delegation(root, swarm, data.role_id, incoming)
+        active_approval_delegations = [
+            delegation.id
+            for work_path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
+            for delegation in self._load_approval_delegations(
+                self._load_work(swarm, work_path.parent.name)
+            )
+            if delegation.role_id == data.role_id
+            and delegation.from_actor == outgoing.reference
+            and delegation.status == "active"
+        ]
+        if active_approval_delegations:
+            raise ValueError(
+                f"Revoke or consume active Approval Delegations before handing off "
+                f"{data.role_id}: {', '.join(active_approval_delegations)}"
+            )
 
         authorizer = self._find_actor(root, data.authorized_by)
         authorizer_roles = self._actor_roles(swarm, authorizer.reference)
@@ -3015,21 +3034,229 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def delegate_approval(self, data: DelegateApprovalInput) -> ApprovalDelegationRecord:
+        root = self.project_root()
+        delegation, swarm, actor, target, work = self._validate_delegate_approval(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare approval.delegate before applying it"
+            )
+        return self._apply_delegate_approval(delegation, swarm, actor, target, work)
+
+    @_locked_mutation("project")
+    def prepare_approval_delegation(
+        self, data: PrepareApprovalDelegationInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        delegation, swarm, actor, target, work = self._validate_delegate_approval(
+            root, data.delegation
+        )
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="approval.delegate",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "delegation": delegation.id,
+                "role": delegation.role_id,
+                "target": target.reference,
+                "reason": delegation.reason,
+            },
+        )
+
+    def _validate_delegate_approval(
+        self, root: Path, data: DelegateApprovalInput
+    ) -> tuple[DelegateApprovalInput, SwarmRecord, ActorRecord, ActorRecord, WorkRecord]:
+        assert_slug(data.id, "Approval Delegation id")
+        assert_slug(data.role_id, "Approval role id")
+        if not data.reason.strip():
+            raise ValueError("Approval Delegation reason cannot be empty")
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, "approval.delegate")
+        if data.role_id not in self._actor_roles(swarm, actor.reference):
+            raise PermissionError(
+                f"Actor {actor.reference} is not assigned to delegated role {data.role_id}"
+            )
+        if not self._role_allows_action(root, swarm.method, data.role_id, "approval.add"):
+            raise PermissionError(f"Role {data.role_id} cannot issue work approvals")
+        target = self._find_actor(root, data.to_actor_id)
+        if target.reference == actor.reference:
+            raise ValueError("Approval Delegation target must differ from its grantor")
+        self._assert_represented_swarm_operational(root, target)
+        self._assert_actor_role_compatibility(root, swarm.method, data.role_id, target)
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        if data.role_id in work.approval_roles:
+            raise ValueError(f"Work already has approval for role {data.role_id}")
+        path = Path(work.path) / "approval-delegations" / data.id
+        if path.exists():
+            raise FileExistsError(f"Approval Delegation already exists: {data.id}")
+        active_for_role = [
+            item.id
+            for item in self._load_approval_delegations(work)
+            if item.role_id == data.role_id and item.status == "active"
+        ]
+        if active_for_role:
+            raise ValueError(
+                f"Work already has an active Approval Delegation for {data.role_id}: "
+                + ", ".join(active_for_role)
+            )
+        normalized = DelegateApprovalInput(
+            id=data.id,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            role_id=data.role_id,
+            actor_id=actor.reference,
+            to_actor_id=target.reference,
+            reason=data.reason.strip(),
+        )
+        return normalized, swarm, actor, target, work
+
+    def _apply_delegate_approval(
+        self,
+        data: DelegateApprovalInput,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        target: ActorRecord,
+        work: WorkRecord,
+        action_id: str | None = None,
+    ) -> ApprovalDelegationRecord:
+        path = Path(work.path) / "approval-delegations" / data.id / "DELEGATION.md"
+        record = ApprovalDelegationRecord(
+            id=data.id,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            role_id=data.role_id,
+            from_actor=actor.reference,
+            to_actor=target.reference,
+            reason=data.reason,
+            status="active",
+            created_at=self._timestamp(),
+            path=str(path),
+            action_id=action_id,
+        )
+        write_new(path, self._render_approval_delegation(record))
+        self._append_work_event(
+            work,
+            "approval.delegated",
+            f"delegation={record.id} role={record.role_id} "
+            f"from={record.from_actor} to={record.to_actor}",
+        )
+        return record
+
+    @_locked_mutation("project")
+    def revoke_approval_delegation(
+        self, data: RevokeApprovalDelegationInput
+    ) -> ApprovalDelegationRecord:
+        root = self.project_root()
+        delegation, swarm, actor, work = self._validate_revoke_approval_delegation(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare approval.delegation.revoke before applying it"
+            )
+        return self._apply_revoke_approval_delegation(delegation, actor, work, data.reason.strip())
+
+    @_locked_mutation("project")
+    def prepare_revoke_approval_delegation(
+        self, data: RevokeApprovalDelegationInput
+    ) -> LifecycleActionRecord:
+        if data.action_id is None:
+            raise ValueError("Approval Delegation revocation requires a Lifecycle Action id")
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        delegation, swarm, actor, work = self._validate_revoke_approval_delegation(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="approval.delegation.revoke",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"delegation": delegation.id, "reason": data.reason.strip()},
+        )
+
+    def _validate_revoke_approval_delegation(
+        self, root: Path, data: RevokeApprovalDelegationInput
+    ) -> tuple[ApprovalDelegationRecord, SwarmRecord, ActorRecord, WorkRecord]:
+        assert_slug(data.delegation_id, "Approval Delegation id")
+        if not data.reason.strip():
+            raise ValueError("Approval Delegation revocation reason cannot be empty")
+        swarm = self._load_swarm(root, data.swarm_id)
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        delegation = self._load_approval_delegation(work, data.delegation_id)
+        actor = self._require_actor_for_action(
+            root, swarm, data.actor_id, "approval.delegation.revoke"
+        )
+        if actor.reference != delegation.from_actor:
+            raise PermissionError("Only the Approval Delegation grantor may revoke it")
+        if delegation.status != "active":
+            raise ValueError(
+                f"Approval Delegation must be active before revocation: {delegation.id}"
+            )
+        return delegation, swarm, actor, work
+
+    def _apply_revoke_approval_delegation(
+        self,
+        delegation: ApprovalDelegationRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        reason: str,
+        action_id: str | None = None,
+    ) -> ApprovalDelegationRecord:
+        revoked = ApprovalDelegationRecord(
+            **{
+                **delegation.__dict__,
+                "status": "revoked",
+                "revoked_by": actor.reference,
+                "revoked_at": self._timestamp(),
+                "revoked_reason": reason,
+                "revocation_action_id": action_id,
+            }
+        )
+        atomic_write(Path(delegation.path), self._render_approval_delegation(revoked))
+        self._append_work_event(
+            work,
+            "approval-delegation.revoked",
+            f"delegation={delegation.id} actor={actor.reference}",
+        )
+        return revoked
+
+    def list_approval_delegations(
+        self, swarm_id: str, work_id: str, status: str | None = None
+    ) -> list[ApprovalDelegationRecord]:
+        swarm = self._load_swarm(self.project_root(), swarm_id)
+        work = self._load_work(swarm, work_id)
+        records = self._load_approval_delegations(work)
+        return [record for record in records if status is None or record.status == status]
+
+    @_locked_mutation("project")
     def add_approval(self, data: AddApprovalInput) -> WorkRecord:
         root = self.project_root()
-        swarm, actor, work = self._validate_approval(root, data)
+        swarm, actor, work, delegation = self._validate_approval(root, data)
         if actor.authentication_required:
             raise PermissionError(
                 f"Actor {actor.reference} requires a signed lifecycle action; "
                 "prepare the approval before applying it"
             )
-        return self._apply_approval(swarm, actor, work, data.role_id, data.note)
+        return self._apply_approval(
+            swarm, actor, work, data.role_id, data.note, delegation=delegation
+        )
 
     @_locked_mutation("project")
     def prepare_approval(self, data: PrepareApprovalInput) -> LifecycleActionRecord:
         assert_slug(data.id, "Lifecycle Action id")
         root = self.project_root()
-        swarm, actor, work = self._validate_approval(root, data)
+        swarm, actor, work, _ = self._validate_approval(root, data)
         assert_actor_identity_available(actor)
         self._assert_current_actor_key(actor)
         return self._prepare_lifecycle_action(
@@ -3039,23 +3266,59 @@ class AgoraWorkspace:
             actor=actor,
             swarm=swarm,
             work=work,
-            parameters={"role": data.role_id, "note": data.note},
+            parameters={
+                "role": data.role_id,
+                "note": data.note,
+                "delegation": data.delegation_id or "",
+            },
         )
 
     def _validate_approval(
         self, root: Path, data: AddApprovalInput
-    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, ApprovalDelegationRecord | None]:
         assert_slug(data.role_id, "Approval role id")
         swarm = self._load_swarm(root, data.swarm_id)
-        actor = self._require_actor_for_action(root, swarm, data.actor_id, "approval.add")
-        roles = self._actor_roles(swarm, actor.reference)
-        if data.role_id not in roles:
-            raise PermissionError(
-                f"Actor {actor.reference} is not assigned to approval role {data.role_id}"
-            )
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
-        return swarm, actor, work
+        if data.delegation_id is None:
+            active_for_role = [
+                item.id
+                for item in self._load_approval_delegations(work)
+                if item.role_id == data.role_id and item.status == "active"
+            ]
+            if active_for_role:
+                raise ValueError(
+                    "Revoke the active Approval Delegation before direct approval: "
+                    + ", ".join(active_for_role)
+                )
+            actor = self._require_actor_for_action(root, swarm, data.actor_id, "approval.add")
+            roles = self._actor_roles(swarm, actor.reference)
+            if data.role_id not in roles:
+                raise PermissionError(
+                    f"Actor {actor.reference} is not assigned to approval role {data.role_id}"
+                )
+            return swarm, actor, work, None
+
+        assert_slug(data.delegation_id, "Approval Delegation id")
+        actor = self._find_actor(root, data.actor_id)
+        self._assert_represented_swarm_operational(root, actor)
+        delegation = self._load_approval_delegation(work, data.delegation_id)
+        if delegation.status != "active":
+            raise ValueError(f"Approval Delegation is not active: {delegation.id}")
+        if delegation.to_actor != actor.reference:
+            raise PermissionError(
+                f"Approval Delegation {delegation.id} belongs to {delegation.to_actor}"
+            )
+        if delegation.role_id != data.role_id:
+            raise ValueError(
+                f"Approval Delegation {delegation.id} is for role {delegation.role_id}"
+            )
+        if data.role_id in work.approval_roles:
+            raise ValueError(f"Work already has approval for role {data.role_id}")
+        if not self._role_allows_action(root, swarm.method, data.role_id, "approval.add"):
+            raise PermissionError(f"Delegated role {data.role_id} can no longer issue approvals")
+        self._assert_actor_role_compatibility(root, swarm.method, data.role_id, actor)
+        return swarm, actor, work, delegation
 
     def _apply_approval(
         self,
@@ -3064,21 +3327,44 @@ class AgoraWorkspace:
         work: WorkRecord,
         role_id: str,
         note_value: str,
+        delegation: ApprovalDelegationRecord | None = None,
+        action_id: str | None = None,
     ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
+        original = path.read_text(encoding="utf-8")
         approval_roles = strings_attribute(document.attributes, "approval-roles")
         document.attributes["approval-roles"] = list(dict.fromkeys([*approval_roles, role_id]))
         note = note_value.replace("|", "\\|") or "Approved"
+        authority = (
+            f"{actor.reference} via approval-delegation:{delegation.id}"
+            if delegation is not None
+            else actor.reference
+        )
         document.body = (
-            f"{document.body.rstrip()}\n| {role_id} | {actor.reference} | {note} | "
-            f"{self._timestamp()} |"
+            f"{document.body.rstrip()}\n| {role_id} | {authority} | {note} | {self._timestamp()} |"
         )
         atomic_write(path, render_markdown(document))
+        if delegation is not None:
+            used = ApprovalDelegationRecord(
+                **{
+                    **delegation.__dict__,
+                    "status": "used",
+                    "used_by": actor.reference,
+                    "used_at": self._timestamp(),
+                    "used_action_id": action_id,
+                }
+            )
+            try:
+                atomic_write(Path(delegation.path), self._render_approval_delegation(used))
+            except Exception:
+                atomic_write(path, original)
+                raise
         self._append_work_event(
             work,
             "approval.added",
-            f"role={role_id} actor={actor.reference}",
+            f"role={role_id} actor={actor.reference} "
+            f"delegation={delegation.id if delegation is not None else 'none'}",
         )
         return self._load_work(swarm, work.id)
 
@@ -3290,6 +3576,29 @@ class AgoraWorkspace:
         evidence_context: (
             tuple[PrepareEvidenceInput, SwarmRecord, ActorRecord, WorkRecord] | None
         ) = None
+        approval_context: (
+            tuple[
+                AddApprovalInput,
+                SwarmRecord,
+                ActorRecord,
+                WorkRecord,
+                ApprovalDelegationRecord | None,
+            ]
+            | None
+        ) = None
+        approval_delegation_context: (
+            tuple[
+                DelegateApprovalInput,
+                SwarmRecord,
+                ActorRecord,
+                ActorRecord,
+                WorkRecord,
+            ]
+            | None
+        ) = None
+        approval_delegation_revocation_context: (
+            tuple[ApprovalDelegationRecord, SwarmRecord, ActorRecord, WorkRecord, str] | None
+        ) = None
         actor_key_rotation_context: (
             tuple[ActorRecord, ActorKeyRecord, ActorKeyRecord, str] | None
         ) = None
@@ -3492,6 +3801,49 @@ class AgoraWorkspace:
             )
             swarm, actor, work = self._validate_add_evidence(root, evidence)
             evidence_context = (evidence, swarm, actor, work)
+        elif record.action == "approval.delegate":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no Approval Delegation work: {record.id}")
+            delegation_input = DelegateApprovalInput(
+                id=record.parameters["delegation"],
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                role_id=record.parameters["role"],
+                actor_id=record.actor,
+                to_actor_id=record.parameters["target"],
+                reason=record.parameters["reason"],
+            )
+            delegation_input, swarm, actor, target, work = self._validate_delegate_approval(
+                root, delegation_input
+            )
+            approval_delegation_context = (
+                delegation_input,
+                swarm,
+                actor,
+                target,
+                work,
+            )
+        elif record.action == "approval.delegation.revoke":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no Approval Delegation work: {record.id}")
+            revocation = RevokeApprovalDelegationInput(
+                delegation_id=record.parameters["delegation"],
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                reason=record.parameters["reason"],
+                action_id=record.id,
+            )
+            delegation, swarm, actor, work = self._validate_revoke_approval_delegation(
+                root, revocation
+            )
+            approval_delegation_revocation_context = (
+                delegation,
+                swarm,
+                actor,
+                work,
+                revocation.reason,
+            )
         elif record.action == "work.transition":
             if set(record.parameters) != {"to"}:
                 raise ValueError(f"Lifecycle Action has invalid transition parameters: {record.id}")
@@ -3505,8 +3857,6 @@ class AgoraWorkspace:
             )
             swarm, actor, work = self._validate_work_transition(root, transition)
         elif record.action == "approval.add":
-            if set(record.parameters) != {"role", "note"}:
-                raise ValueError(f"Lifecycle Action has invalid approval parameters: {record.id}")
             if record.work_id is None:
                 raise ValueError(f"Lifecycle Action has no approval work: {record.id}")
             approval = AddApprovalInput(
@@ -3515,8 +3865,10 @@ class AgoraWorkspace:
                 actor_id=record.actor,
                 role_id=record.parameters["role"],
                 note=record.parameters["note"],
+                delegation_id=record.parameters.get("delegation") or None,
             )
-            swarm, actor, work = self._validate_approval(root, approval)
+            swarm, actor, work, delegation = self._validate_approval(root, approval)
+            approval_context = (approval, swarm, actor, work, delegation)
         elif record.action == "handoff.create":
             if set(record.parameters) != {"role", "from", "to", "reason"}:
                 raise ValueError(f"Lifecycle Action has invalid handoff parameters: {record.id}")
@@ -3720,15 +4072,27 @@ class AgoraWorkspace:
             assert evidence_context is not None
             evidence, swarm, actor, work = evidence_context
             self._apply_add_evidence(swarm, actor, work, evidence)
+        elif record.action == "approval.delegate":
+            assert approval_delegation_context is not None
+            delegation_input, swarm, actor, target, work = approval_delegation_context
+            self._apply_delegate_approval(delegation_input, swarm, actor, target, work, record.id)
+        elif record.action == "approval.delegation.revoke":
+            assert approval_delegation_revocation_context is not None
+            delegation, _, actor, work, reason = approval_delegation_revocation_context
+            self._apply_revoke_approval_delegation(delegation, actor, work, reason, record.id)
         elif record.action == "work.transition":
             self._apply_work_transition(root, swarm, actor, work, record.parameters["to"])
         elif record.action == "approval.add":
+            assert approval_context is not None
+            approval, swarm, actor, work, delegation = approval_context
             self._apply_approval(
                 swarm,
                 actor,
                 work,
-                record.parameters["role"],
-                record.parameters["note"],
+                approval.role_id,
+                approval.note,
+                delegation=delegation,
+                action_id=record.id,
             )
         elif record.action == "handoff.create":
             assert handoff_context is not None
@@ -4009,6 +4373,7 @@ class AgoraWorkspace:
             )
         if data.target_state == contract.terminal_state:
             self._assert_child_work_closed(root, swarm, work)
+            self._assert_no_active_approval_delegations(work)
         self._assert_wip_limit(swarm, work, data.target_state, contract.wip_limits)
         if transition.gate is not None:
             self._assert_work_gate(work, contract.gates[transition.gate], transition.gate)
@@ -4157,6 +4522,7 @@ class AgoraWorkspace:
             )
         if target_status == "cancelled":
             self._assert_child_work_closed(root, swarm, work)
+            self._assert_no_active_approval_delegations(work)
             open_delegations = [
                 item.id
                 for item in self.list_delegations()
@@ -4189,6 +4555,18 @@ class AgoraWorkspace:
             raise ValueError(
                 f"Work {swarm.id}/{parent.id} has open child work; close it first: "
                 f"{', '.join(open_children)}"
+            )
+
+    def _assert_no_active_approval_delegations(self, work: WorkRecord) -> None:
+        active = [
+            delegation.id
+            for delegation in self._load_approval_delegations(work)
+            if delegation.status == "active"
+        ]
+        if active:
+            raise ValueError(
+                f"Work {work.swarm_id}/{work.id} has active Approval Delegations; "
+                f"consume or revoke them first: {', '.join(active)}"
             )
 
     def _apply_work_status_change(
@@ -5778,6 +6156,7 @@ class AgoraWorkspace:
             "actor-keys": 0,
             "swarms": 0,
             "work": 0,
+            "approval-delegations": 0,
             "gate-waivers": 0,
             "handoffs": 0,
             "delegations": 0,
@@ -6357,6 +6736,7 @@ class AgoraWorkspace:
                 )
 
         work_records: dict[tuple[str, str], WorkRecord] = {}
+        approval_delegation_records: dict[tuple[str, str, str], ApprovalDelegationRecord] = {}
         gate_waiver_records: dict[tuple[str, str, str], GateWaiverRecord] = {}
         for swarm in swarms.values():
             contract = methods.get(swarm.method)
@@ -6510,6 +6890,111 @@ class AgoraWorkspace:
                             waiver_path,
                             "Waived approvals are not obligations of this gate: "
                             + ", ".join(invalid_approvals),
+                        )
+                active_delegation_roles: set[str] = set()
+                for delegation_directory in _child_directories(
+                    Path(work.path) / "approval-delegations"
+                ):
+                    delegation_path = delegation_directory / "DELEGATION.md"
+                    delegation = inspect(
+                        "approval-delegations",
+                        "approval-delegation.invalid",
+                        delegation_path,
+                        lambda work=work, delegation_directory=delegation_directory: (
+                            self._load_approval_delegation(work, delegation_directory.name)
+                        ),
+                    )
+                    if not isinstance(delegation, ApprovalDelegationRecord):
+                        continue
+                    approval_delegation_records[(swarm.id, work.id, delegation.id)] = delegation
+                    if delegation.id != delegation_directory.name:
+                        issue(
+                            "approval-delegation.id-mismatch",
+                            delegation_path,
+                            "Approval Delegation id does not match its directory",
+                        )
+                    if delegation.swarm_id != swarm.id or delegation.work_id != work.id:
+                        issue(
+                            "approval-delegation.owner-mismatch",
+                            delegation_path,
+                            "Approval Delegation does not belong to its filesystem owner",
+                        )
+                    grantor = resolve_actor(delegation.from_actor, delegation_path)
+                    target = resolve_actor(delegation.to_actor, delegation_path)
+                    if contract is None or delegation.role_id not in contract.required_roles:
+                        issue(
+                            "approval-delegation.role-invalid",
+                            delegation_path,
+                            f"Approval Delegation uses unknown role: {delegation.role_id}",
+                        )
+                    elif not self._role_allows_action(
+                        root, swarm.method, delegation.role_id, "approval.add"
+                    ):
+                        issue(
+                            "approval-delegation.authority-invalid",
+                            delegation_path,
+                            f"Delegated role cannot approve work: {delegation.role_id}",
+                        )
+                    elif target is not None:
+                        try:
+                            self._assert_actor_role_compatibility(
+                                root, swarm.method, delegation.role_id, target
+                            )
+                        except Exception as error:
+                            issue(
+                                "approval-delegation.target-incompatible",
+                                delegation_path,
+                                str(error),
+                            )
+                    if delegation.status == "active":
+                        if work.operational_status == "cancelled" or (
+                            contract is not None and work.state == contract.terminal_state
+                        ):
+                            issue(
+                                "approval-delegation.active-on-closed-work",
+                                delegation_path,
+                                "Closed work retains an active Approval Delegation",
+                            )
+                        if swarm.assignments.get(delegation.role_id) != delegation.from_actor:
+                            issue(
+                                "approval-delegation.grantor-unassigned",
+                                delegation_path,
+                                "Active Approval Delegation grantor no longer holds the role",
+                            )
+                        if delegation.role_id in active_delegation_roles:
+                            issue(
+                                "approval-delegation.active-conflict",
+                                delegation_path,
+                                f"Multiple active delegations exist for {delegation.role_id}",
+                            )
+                        active_delegation_roles.add(delegation.role_id)
+                        if delegation.role_id in work.approval_roles:
+                            issue(
+                                "approval-delegation.active-after-approval",
+                                delegation_path,
+                                "Active Approval Delegation remains after role approval",
+                            )
+                    if delegation.status == "used":
+                        authority = f"{delegation.to_actor} via approval-delegation:{delegation.id}"
+                        approval_contents = (Path(work.path) / "approvals.md").read_text(
+                            encoding="utf-8"
+                        )
+                        if (
+                            delegation.role_id not in work.approval_roles
+                            or authority not in approval_contents
+                        ):
+                            issue(
+                                "approval-delegation.use-missing",
+                                delegation_path,
+                                "Used Approval Delegation has no matching approval row",
+                            )
+                    if delegation.status == "revoked" and (
+                        grantor is not None and delegation.revoked_by != grantor.reference
+                    ):
+                        issue(
+                            "approval-delegation.revoker-invalid",
+                            delegation_path,
+                            "Approval Delegation was not revoked by its grantor",
                         )
             if contract is not None:
                 for state, limit in contract.wip_limits.items():
@@ -7152,6 +7637,108 @@ class AgoraWorkspace:
                                 Path(waiver.path),
                                 "Gate Waiver differs from its applied Lifecycle Action",
                             )
+            if action.action == "approval.delegate" and action.work_id is not None:
+                delegation_key = (
+                    action.swarm_id,
+                    action.work_id,
+                    action.parameters["delegation"],
+                )
+                approval_delegation = approval_delegation_records.get(delegation_key)
+                if action.status == "prepared" and approval_delegation is not None:
+                    issue(
+                        "lifecycle-action.approval-delegation-conflict",
+                        path,
+                        "Prepared action already has an Approval Delegation record",
+                    )
+                elif action.status == "applied" and approval_delegation is None:
+                    issue(
+                        "lifecycle-action.approval-delegation-missing",
+                        path,
+                        "Applied action has no Approval Delegation record",
+                    )
+                elif action.status == "applied" and approval_delegation is not None:
+                    expected = (
+                        action.id,
+                        action.swarm_id,
+                        action.work_id,
+                        action.parameters["role"],
+                        action.actor,
+                        action.parameters["target"],
+                        action.parameters["reason"],
+                    )
+                    actual = (
+                        approval_delegation.action_id,
+                        approval_delegation.swarm_id,
+                        approval_delegation.work_id,
+                        approval_delegation.role_id,
+                        approval_delegation.from_actor,
+                        approval_delegation.to_actor,
+                        approval_delegation.reason,
+                    )
+                    if actual != expected:
+                        issue(
+                            "lifecycle-action.approval-delegation-mismatch",
+                            Path(approval_delegation.path),
+                            "Approval Delegation differs from its applied Lifecycle Action",
+                        )
+            if action.action == "approval.delegation.revoke" and action.work_id is not None:
+                delegation_key = (
+                    action.swarm_id,
+                    action.work_id,
+                    action.parameters["delegation"],
+                )
+                approval_delegation = approval_delegation_records.get(delegation_key)
+                if approval_delegation is None:
+                    issue(
+                        "lifecycle-action.approval-delegation-missing",
+                        path,
+                        "Revocation action references a missing Approval Delegation",
+                    )
+                elif action.status == "applied" and (
+                    approval_delegation.status != "revoked"
+                    or approval_delegation.revoked_by != action.actor
+                    or approval_delegation.revoked_reason != action.parameters["reason"]
+                    or approval_delegation.revocation_action_id != action.id
+                ):
+                    issue(
+                        "lifecycle-action.approval-delegation-revocation-mismatch",
+                        Path(approval_delegation.path),
+                        "Approval Delegation revocation differs from its Lifecycle Action",
+                    )
+            if (
+                action.action == "approval.add"
+                and action.status == "applied"
+                and action.work_id is not None
+                and (action.swarm_id, action.work_id) in work_records
+            ):
+                approved_work = work_records[(action.swarm_id, action.work_id)]
+                delegation_id = action.parameters.get("delegation")
+                authority = action.actor
+                if delegation_id:
+                    approval_delegation = approval_delegation_records.get(
+                        (action.swarm_id, action.work_id, delegation_id)
+                    )
+                    if approval_delegation is None or (
+                        approval_delegation.status != "used"
+                        or approval_delegation.used_action_id != action.id
+                        or approval_delegation.used_by != action.actor
+                    ):
+                        issue(
+                            "lifecycle-action.approval-delegation-use-mismatch",
+                            path,
+                            "Applied approval did not consume its bound Approval Delegation",
+                        )
+                    authority = f"{action.actor} via approval-delegation:{delegation_id}"
+                note = action.parameters["note"].replace("|", "\\|") or "Approved"
+                approval_line = f"| {action.parameters['role']} | {authority} | {note} |"
+                if approval_line not in (Path(approved_work.path) / "approvals.md").read_text(
+                    encoding="utf-8"
+                ):
+                    issue(
+                        "lifecycle-action.approval-mismatch",
+                        Path(approved_work.path) / "approvals.md",
+                        "Approval row is missing from its applied Lifecycle Action",
+                    )
             if action.action in {"actor.key.recover", "actor.key.rotate"}:
                 target_reference = action.parameters.get("target", action.actor)
                 target_actor = resolve_actor(target_reference, path)
@@ -8663,6 +9250,104 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _render_approval_delegation(record: ApprovalDelegationRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/approval-delegation/v1",
+                    "id": record.id,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "role": record.role_id,
+                    "from": record.from_actor,
+                    "to": record.to_actor,
+                    "reason": record.reason,
+                    "status": record.status,
+                    "created-at": record.created_at,
+                    "action": record.action_id,
+                    "used-by": record.used_by,
+                    "used-at": record.used_at,
+                    "used-action": record.used_action_id,
+                    "revoked-by": record.revoked_by,
+                    "revoked-at": record.revoked_at,
+                    "revoked-reason": record.revoked_reason,
+                    "revocation-action": record.revocation_action_id,
+                },
+                body=(
+                    f"# Approval Delegation {record.id}\n\n"
+                    "This single-use authority is limited to the named work item and role."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_approval_delegation(work: WorkRecord, delegation_id: str) -> ApprovalDelegationRecord:
+        assert_slug(delegation_id, "Approval Delegation id")
+        path = Path(work.path) / "approval-delegations" / delegation_id / "DELEGATION.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/approval-delegation/v1", path)
+        status = string_attribute(document.attributes, "status")
+        if status not in {"active", "used", "revoked"}:
+            raise ValueError(f"Unsupported Approval Delegation status: {status}")
+        record = ApprovalDelegationRecord(
+            id=string_attribute(document.attributes, "id"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            role_id=string_attribute(document.attributes, "role"),
+            from_actor=string_attribute(document.attributes, "from"),
+            to_actor=string_attribute(document.attributes, "to"),
+            reason=string_attribute(document.attributes, "reason"),
+            status=status,  # type: ignore[arg-type]
+            created_at=string_attribute(document.attributes, "created-at"),
+            path=str(path),
+            action_id=optional_string_attribute(document.attributes, "action"),
+            used_by=optional_string_attribute(document.attributes, "used-by"),
+            used_at=optional_string_attribute(document.attributes, "used-at"),
+            used_action_id=optional_string_attribute(document.attributes, "used-action"),
+            revoked_by=optional_string_attribute(document.attributes, "revoked-by"),
+            revoked_at=optional_string_attribute(document.attributes, "revoked-at"),
+            revoked_reason=optional_string_attribute(document.attributes, "revoked-reason"),
+            revocation_action_id=optional_string_attribute(
+                document.attributes, "revocation-action"
+            ),
+        )
+        assert_slug(record.id, "Approval Delegation id")
+        assert_slug(record.role_id, "Approval Delegation role id")
+        if not record.reason.strip():
+            raise ValueError(f"Approval Delegation reason cannot be empty: {path}")
+        if record.from_actor == record.to_actor or any(
+            ":" not in actor for actor in (record.from_actor, record.to_actor)
+        ):
+            raise ValueError(f"Approval Delegation actors are invalid: {path}")
+        used_required = (record.used_by, record.used_at)
+        used_all = (*used_required, record.used_action_id)
+        revoked_required = (record.revoked_by, record.revoked_at, record.revoked_reason)
+        revoked_all = (*revoked_required, record.revocation_action_id)
+        if status == "active" and any(value is not None for value in (*used_all, *revoked_all)):
+            raise ValueError(f"Active Approval Delegation has terminal attribution: {path}")
+        if status == "used" and (
+            any(value is None for value in used_required)
+            or any(value is not None for value in revoked_all)
+        ):
+            raise ValueError(f"Used Approval Delegation attribution is invalid: {path}")
+        if status == "revoked" and (
+            any(value is None for value in revoked_required)
+            or any(value is not None for value in used_all)
+        ):
+            raise ValueError(f"Revoked Approval Delegation attribution is invalid: {path}")
+        if record.used_by is not None and record.used_by != record.to_actor:
+            raise ValueError(f"Approval Delegation was used by the wrong actor: {path}")
+        if record.revoked_reason is not None and not record.revoked_reason.strip():
+            raise ValueError(f"Approval Delegation revocation reason cannot be empty: {path}")
+        return record
+
+    def _load_approval_delegations(self, work: WorkRecord) -> list[ApprovalDelegationRecord]:
+        return [
+            self._load_approval_delegation(work, path.parent.name)
+            for path in sorted((Path(work.path) / "approval-delegations").glob("*/DELEGATION.md"))
+        ]
+
+    @staticmethod
     def _runtime_command(integration: Integration, runner: str | None) -> list[str]:
         if runner is not None:
             command = shlex.split(runner)
@@ -8693,6 +9378,12 @@ class AgoraWorkspace:
             digest.update(b"\0")
             digest.update(path.read_bytes())
             digest.update(b"\0")
+        for path in sorted((work_root / "approval-delegations").glob("*/DELEGATION.md")):
+            digest.update(b"approval-delegation\0")
+            digest.update(path.parent.name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
         return digest.hexdigest()
 
     def _lifecycle_precondition_sha256(
@@ -8706,6 +9397,8 @@ class AgoraWorkspace:
     ) -> str:
         if action in {
             "approval.add",
+            "approval.delegate",
+            "approval.delegation.revoke",
             "artifact.add",
             "criterion.satisfy",
             "evidence.add",
@@ -8908,6 +9601,8 @@ class AgoraWorkspace:
             "actor.key.rotate",
             "actor.runtime.update",
             "approval.add",
+            "approval.delegate",
+            "approval.delegation.revoke",
             "artifact.add",
             "criterion.satisfy",
             "delegation.accept",
@@ -8947,7 +9642,9 @@ class AgoraWorkspace:
             "actor.key.revoke": {"target", "fingerprint", "reason"},
             "actor.key.rotate": {"from", "public-key", "fingerprint", "reason"},
             "actor.runtime.update": {"integration", "provider", "model", "clear"},
-            "approval.add": {"role", "note"},
+            "approval.add": {"role", "note", "delegation"},
+            "approval.delegate": {"delegation", "role", "target", "reason"},
+            "approval.delegation.revoke": {"delegation", "reason"},
             "artifact.add": {"kind", "uri"},
             "criterion.satisfy": {"criterion"},
             "delegation.accept": {"delegation"},
@@ -9007,7 +9704,12 @@ class AgoraWorkspace:
             and (expected_parameters - parameter_keys).issubset(optional_delegation_parameters)
             and parameter_keys.issubset(expected_parameters)
         )
-        if parameter_keys != expected_parameters and not legacy_delegation_parameters:
+        legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
+        if (
+            parameter_keys != expected_parameters
+            and not legacy_delegation_parameters
+            and not legacy_approval_parameters
+        ):
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
         if action in {"actor.key.recover", "actor.key.revoke", "actor.key.rotate"}:
             fingerprint_keys = (
@@ -9055,6 +9757,22 @@ class AgoraWorkspace:
             assert_slug(parameters["role"], "Lifecycle Action assignment role")
             if ":" not in parameters["target"]:
                 raise ValueError(f"Lifecycle Action target actor must be scoped: {path}")
+        if action in {"approval.delegate", "approval.delegation.revoke"}:
+            assert_slug(parameters["delegation"], "Lifecycle Action Approval Delegation id")
+            if not parameters["reason"].strip():
+                raise ValueError(
+                    f"Lifecycle Action Approval Delegation reason cannot be empty: {path}"
+                )
+        if action == "approval.delegate":
+            assert_slug(parameters["role"], "Lifecycle Action delegated approval role")
+            if ":" not in parameters["target"]:
+                raise ValueError(
+                    f"Lifecycle Action Approval Delegation target must be scoped: {path}"
+                )
+        if action == "approval.add" and parameters.get("delegation"):
+            assert_slug(
+                parameters["delegation"], "Lifecycle Action consumed Approval Delegation id"
+            )
         if action.startswith("delegation."):
             assert_slug(parameters["delegation"], "Lifecycle Action delegation id")
         if action == "delegation.create":
@@ -9442,6 +10160,7 @@ class AgoraWorkspace:
                     Path(work.path) / "evidence.md",
                     Path(work.path) / "approvals.md",
                     *sorted((Path(work.path) / "waivers").glob("*/WAIVER.md")),
+                    *sorted((Path(work.path) / "approval-delegations").glob("*/DELEGATION.md")),
                 ]
             )
         reading = "\n".join(

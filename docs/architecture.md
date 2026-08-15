@@ -23,7 +23,8 @@ Python CLI + templates
 `src/agora/cli.py` translates shell commands into workspace operations. It does not maintain a server
 or database, invoke an LLM, inspect project source languages, or impose a development methodology.
 `src/agora/workspace.py` materializes and validates documents, capabilities, actions, workflows,
-gates, granular waivers, approvals, handoffs, interruptions, delegations, sessions, and tool runs.
+gates, granular waivers, direct and delegated approvals, handoffs, interruptions, work delegations,
+sessions, and tool runs.
 `src/agora/methods.py` loads
 transition graphs, WIP limits, and gate policies. `src/agora/tools.py` validates provider-neutral
 Tool Packs and structured external operations. `src/agora/markdown.py` implements the

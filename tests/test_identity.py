@@ -21,6 +21,7 @@ from agora.model import (
     CreateSwarmInput,
     CreateWorkInput,
     DecomposeWorkInput,
+    DelegateApprovalInput,
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
@@ -31,6 +32,7 @@ from agora.model import (
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
+    PrepareApprovalDelegationInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
     PrepareCreateDelegationInput,
@@ -46,6 +48,7 @@ from agora.model import (
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
     RevokeActorKeyInput,
+    RevokeApprovalDelegationInput,
     RotateActorKeyInput,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -741,6 +744,7 @@ def test_applies_a_signed_approval_with_role_and_note_bound_to_the_action(
     payload = json.loads(payload_path.read_text(encoding="ascii"))
     assert payload["kind"] == "approval.add"
     assert payload["parameters"] == {
+        "delegation": "",
         "note": "Accepted | externally signed",
         "role": "product-owner",
     }
@@ -756,6 +760,120 @@ def test_applies_a_signed_approval_with_role_and_note_bound_to_the_action(
     assert workspace.show_work("delivery", "signed-work").approval_roles == ["product-owner"]
     approval_path = root / ".agora" / "swarms" / "delivery" / "work" / "signed-work"
     assert "Accepted \\| externally signed" in (approval_path / "approvals.md").read_text()
+    assert workspace.validate().ok
+
+
+def test_signs_approval_delegation_use_and_revocation(tmp_path: Path, monkeypatch) -> None:
+    _, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    workspace.add_actor(
+        AddActorInput(
+            id="alternate-owner",
+            name="Authenticated Alternate Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+            public_key=str(tmp_path / "developer.pem"),
+            require_authentication=True,
+        )
+    )
+    for work_id, action_id in (
+        ("delegated-decision", "create-delegated-decision"),
+        ("revoked-decision", "create-revoked-decision"),
+    ):
+        _create_authenticated_work(
+            workspace,
+            private_key,
+            tmp_path,
+            CreateWorkInput(
+                swarm_id="delivery",
+                id=work_id,
+                title=f"Exercise {work_id}",
+                actor_id="owner",
+            ),
+            action_id=action_id,
+        )
+
+    def authorize(action_id: str) -> None:
+        payload_path = tmp_path / f"{action_id}.json"
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=action_id,
+                output=str(payload_path),
+            )
+        )
+        signature_path = tmp_path / f"{action_id}.sig"
+        signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(
+                action_id=action_id,
+                signature=str(signature_path),
+            )
+        )
+
+    grant = DelegateApprovalInput(
+        id="signed-delegation",
+        swarm_id="delivery",
+        work_id="delegated-decision",
+        role_id="product-owner",
+        actor_id="owner",
+        to_actor_id="alternate-owner",
+        reason="Authorize an alternate signer for this decision",
+    )
+    with pytest.raises(PermissionError, match="prepare approval.delegate"):
+        workspace.delegate_approval(grant)
+    prepared_grant = workspace.prepare_approval_delegation(
+        PrepareApprovalDelegationInput(
+            action_id="grant-signed-approval",
+            delegation=grant,
+        )
+    )
+    authorize(prepared_grant.id)
+
+    approval = PrepareApprovalInput(
+        id="use-signed-delegation",
+        swarm_id="delivery",
+        work_id="delegated-decision",
+        actor_id="alternate-owner",
+        role_id="product-owner",
+        note="Accepted under delegated authority",
+        delegation_id="signed-delegation",
+    )
+    prepared_approval = workspace.prepare_approval(approval)
+    authorize(prepared_approval.id)
+    used = workspace.list_approval_delegations("delivery", "delegated-decision", "used")[0]
+    assert used.action_id == prepared_grant.id
+    assert used.used_action_id == prepared_approval.id
+
+    revoke_grant = DelegateApprovalInput(
+        id="revocable-delegation",
+        swarm_id="delivery",
+        work_id="revoked-decision",
+        role_id="product-owner",
+        actor_id="owner",
+        to_actor_id="alternate-owner",
+        reason="Temporary approval coverage",
+    )
+    prepared_revoke_grant = workspace.prepare_approval_delegation(
+        PrepareApprovalDelegationInput(
+            action_id="grant-revocable-approval",
+            delegation=revoke_grant,
+        )
+    )
+    authorize(prepared_revoke_grant.id)
+    revocation = workspace.prepare_revoke_approval_delegation(
+        RevokeApprovalDelegationInput(
+            delegation_id="revocable-delegation",
+            swarm_id="delivery",
+            work_id="revoked-decision",
+            actor_id="owner",
+            reason="Coverage is no longer needed",
+            action_id="revoke-signed-approval",
+        )
+    )
+    authorize(revocation.id)
+    revoked = workspace.list_approval_delegations("delivery", "revoked-decision", "revoked")[0]
+    assert revoked.revocation_action_id == revocation.id
+    assert revoked.revoked_reason == "Coverage is no longer needed"
     assert workspace.validate().ok
 
 

@@ -22,6 +22,7 @@ from agora.model import (
     CreateSwarmInput,
     CreateWorkInput,
     DecomposeWorkInput,
+    DelegateApprovalInput,
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
@@ -38,6 +39,7 @@ from agora.model import (
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
+    PrepareApprovalDelegationInput,
     PrepareApprovalInput,
     PrepareArtifactInput,
     PrepareCreateDelegationInput,
@@ -55,6 +57,7 @@ from agora.model import (
     RefreshPackLockInput,
     RemovePackInput,
     RevokeActorKeyInput,
+    RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
     RotateActorKeyInput,
     SetActorRuntimeInput,
@@ -779,6 +782,7 @@ def _build_parser() -> argparse.ArgumentParser:
     approval_add.add_argument("--role", required=True)
     approval_add.add_argument("--by", required=True)
     approval_add.add_argument("--note", default="")
+    approval_add.add_argument("--delegation")
     approval_prepare = approval.add_parser("prepare", help="Prepare a durable approval intent")
     approval_prepare.add_argument("--id", required=True)
     approval_prepare.add_argument("--swarm", required=True)
@@ -786,6 +790,39 @@ def _build_parser() -> argparse.ArgumentParser:
     approval_prepare.add_argument("--role", required=True)
     approval_prepare.add_argument("--by", required=True)
     approval_prepare.add_argument("--note", default="")
+    approval_prepare.add_argument("--delegation")
+    for command, help_text in (
+        ("delegate", "Delegate one work-scoped role approval"),
+        ("delegate-prepare", "Prepare a signed approval delegation"),
+    ):
+        delegation = approval.add_parser(command, help=help_text)
+        if command == "delegate-prepare":
+            delegation.add_argument("--action-id", required=True)
+        delegation.add_argument("--id", required=True, help="Approval Delegation id")
+        delegation.add_argument("--swarm", required=True)
+        delegation.add_argument("--work", required=True)
+        delegation.add_argument("--role", required=True)
+        delegation.add_argument("--to", required=True, help="Delegated approver")
+        delegation.add_argument("--by", required=True, help="Current role holder")
+        delegation.add_argument("--reason", required=True)
+    for command, help_text in (
+        ("delegation-revoke", "Revoke an unused Approval Delegation"),
+        ("delegation-revoke-prepare", "Prepare a signed delegation revocation"),
+    ):
+        revocation = approval.add_parser(command, help=help_text)
+        if command == "delegation-revoke-prepare":
+            revocation.add_argument("--action-id", required=True)
+        revocation.add_argument("--delegation", required=True)
+        revocation.add_argument("--swarm", required=True)
+        revocation.add_argument("--work", required=True)
+        revocation.add_argument("--by", required=True)
+        revocation.add_argument("--reason", required=True)
+    delegation_list = approval.add_parser(
+        "delegations", help="List work-scoped Approval Delegations"
+    )
+    delegation_list.add_argument("--swarm", required=True)
+    delegation_list.add_argument("--work", required=True)
+    delegation_list.add_argument("--status", choices=("active", "used", "revoked"))
     return parser
 
 
@@ -1492,6 +1529,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 actor_id=args.by,
                 role_id=args.role,
                 note=args.note,
+                delegation_id=args.delegation,
             )
         )
     if args.command == "approval" and args.approval_command == "prepare":
@@ -1503,8 +1541,49 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 actor_id=args.by,
                 role_id=args.role,
                 note=args.note,
+                delegation_id=args.delegation,
             )
         )
+    if args.command == "approval" and args.approval_command in {
+        "delegate",
+        "delegate-prepare",
+    }:
+        delegation = DelegateApprovalInput(
+            id=args.id,
+            swarm_id=args.swarm,
+            work_id=args.work,
+            role_id=args.role,
+            actor_id=args.by,
+            to_actor_id=args.to,
+            reason=args.reason,
+        )
+        if args.approval_command == "delegate-prepare":
+            return workspace.prepare_approval_delegation(
+                PrepareApprovalDelegationInput(
+                    action_id=args.action_id,
+                    delegation=delegation,
+                )
+            )
+        return workspace.delegate_approval(delegation)
+    if args.command == "approval" and args.approval_command in {
+        "delegation-revoke",
+        "delegation-revoke-prepare",
+    }:
+        revocation = RevokeApprovalDelegationInput(
+            delegation_id=args.delegation,
+            swarm_id=args.swarm,
+            work_id=args.work,
+            actor_id=args.by,
+            reason=args.reason,
+            action_id=(
+                args.action_id if args.approval_command == "delegation-revoke-prepare" else None
+            ),
+        )
+        if args.approval_command == "delegation-revoke-prepare":
+            return workspace.prepare_revoke_approval_delegation(revocation)
+        return workspace.revoke_approval_delegation(revocation)
+    if args.command == "approval" and args.approval_command == "delegations":
+        return workspace.list_approval_delegations(args.swarm, args.work, args.status)
     raise ValueError("Unsupported command")
 
 

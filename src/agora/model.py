@@ -218,6 +218,28 @@ class GateWaiverRecord:
 
 
 @dataclass(frozen=True)
+class ApprovalDelegationRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    role_id: str
+    from_actor: str
+    to_actor: str
+    reason: str
+    status: Literal["active", "used", "revoked"]
+    created_at: str
+    path: str
+    action_id: str | None = None
+    used_by: str | None = None
+    used_at: str | None = None
+    used_action_id: str | None = None
+    revoked_by: str | None = None
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
+    revocation_action_id: str | None = None
+
+
+@dataclass(frozen=True)
 class SessionRecord:
     id: str
     actor: str
@@ -1116,11 +1138,39 @@ class PrepareEvidenceInput(AddEvidenceInput):
 class AddApprovalInput(WorkActorInput):
     role_id: str = ""
     note: str = ""
+    delegation_id: str | None = None
 
 
 @dataclass(frozen=True)
 class PrepareApprovalInput(AddApprovalInput):
     id: str = ""
+
+
+@dataclass(frozen=True)
+class DelegateApprovalInput:
+    id: str
+    swarm_id: str
+    work_id: str
+    role_id: str
+    actor_id: str
+    to_actor_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepareApprovalDelegationInput:
+    action_id: str
+    delegation: DelegateApprovalInput
+
+
+@dataclass(frozen=True)
+class RevokeApprovalDelegationInput:
+    delegation_id: str
+    swarm_id: str
+    work_id: str
+    actor_id: str
+    reason: str
+    action_id: str | None = None
 
 
 @dataclass(frozen=True)

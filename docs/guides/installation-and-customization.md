@@ -285,6 +285,9 @@ closure then remains blocked until every child is terminal or cancelled; see
 Grant `gate.waive` only to roles allowed to accept residual delivery risk. Waivers remain granular,
 evidence-backed records and do not relax transition, WIP, assignment, child closure, or work-status
 rules; see [Granular Gate Waivers](gate-waivers.md).
+Grant `approval.delegate` and `approval.delegation.revoke` only to roles whose approval authority
+may be temporarily exercised by another compatible actor. The authority remains single-use and
+work-scoped; see [Approval Delegation](approval-delegation.md).
 
 ## Customize developer tool integrations
 

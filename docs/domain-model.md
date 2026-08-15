@@ -121,8 +121,9 @@ Its common envelope binds an id, action kind, actor, swarm, work, structured par
 SHA-256 precondition. Supported kinds cover planned actor key rotations, independently authorized
 revocation and recovery, actor runtime updates, work transitions, work interruptions, approvals,
 handoffs, work creation, same-swarm decomposition and material records, session preparation, the
-complete delegation lifecycle, and granular Gate Waivers. Existing-work mutations cover the work
-projection, artifacts, evidence, and approvals on which the mutation
+complete delegation lifecycle, Approval Delegation, and granular Gate Waivers. Existing-work
+mutations cover the work projection, artifacts, evidence, approvals, and scoped approval authority
+on which the mutation
 depends. Work creation instead covers the swarm projection and binds the complete initial work
 definition. Criterion, artifact, and evidence parameters bind their exact durable values.
 Interruption reasons are signed and successful actions link exactly to their `STATUS.md`. Approval
@@ -133,6 +134,15 @@ and reason.
 Signed work decomposition binds the parent work precondition and the complete initial child
 contract. Applying it rechecks `work.decompose` authority, parent mutability, and child path
 availability. The child links to its parent and the parent retains the inverse child reference.
+
+## Approval Delegation
+
+An **Approval Delegation** grants one compatible actor the authority to record one named role's
+approval for one work item without changing the swarm assignment. The assigned role holder is the
+grantor. The record begins `active` and terminates as `used` by its exact target or `revoked` by its
+grantor. Only one active delegation may exist per work and role, and direct approval is blocked
+until that authority is consumed or revoked. Authenticated grants, uses, and revocations link their
+records to exact Lifecycle Actions.
 
 ## Gate Waiver
 

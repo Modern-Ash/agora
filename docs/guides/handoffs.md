@@ -40,6 +40,10 @@ identity and reason cannot disappear from history.
 When the receiver is linked through `represented-swarm`, Agora also checks child readiness, graph
 cycles, and project delegation depth before completing the handoff.
 
+A role with an active Approval Delegation cannot be handed off. Consume or revoke the scoped
+authority first so the outgoing actor does not leave behind a live approval grant. See
+[Approval Delegation](approval-delegation.md).
+
 ## Self-initiated handoff
 
 Assume `human-developer` currently holds the Developer role and `ai-developer` is a compatible

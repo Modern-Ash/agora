@@ -17,6 +17,7 @@ from agora.model import (
     CreateSwarmInput,
     CreateWorkInput,
     DecomposeWorkInput,
+    DelegateApprovalInput,
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
@@ -24,6 +25,7 @@ from agora.model import (
     InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
+    RevokeApprovalDelegationInput,
     SetActorRuntimeInput,
     StartSessionInput,
     ToolRuntimeProbe,
@@ -572,6 +574,164 @@ def test_waives_only_named_outstanding_gate_obligations(
     waiver_path.write_text(waiver_path.read_text().replace('gate: "completion"', 'gate: "unknown"'))
     report = workspace.validate()
     assert any(issue.code == "gate-waiver.gate-missing" for issue in report.issues)
+
+
+def test_delegates_one_work_scoped_approval_and_supports_revocation(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.add_actor(
+        AddActorInput(
+            id="alternate-owner",
+            name="Alternate Product Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+        )
+    )
+    for work_id in ("delegated-approval", "revoked-approval"):
+        workspace.create_work(
+            CreateWorkInput(
+                swarm_id="delivery",
+                id=work_id,
+                title=f"Exercise {work_id}",
+                actor_id="owner",
+            )
+        )
+
+    delegated = workspace.delegate_approval(
+        DelegateApprovalInput(
+            id="release-approval",
+            swarm_id="delivery",
+            work_id="delegated-approval",
+            role_id="product-owner",
+            actor_id="owner",
+            to_actor_id="alternate-owner",
+            reason="The primary owner is unavailable for this decision",
+        )
+    )
+    assert delegated.status == "active"
+    with pytest.raises(ValueError, match="active Approval Delegations"):
+        workspace.cancel_work(
+            ChangeWorkStatusInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="owner",
+                reason="Attempt closure while approval authority remains active",
+            )
+        )
+    with pytest.raises(ValueError, match="active Approval Delegations"):
+        workspace.handoff_actor(
+            HandoffActorInput(
+                swarm_id="delivery",
+                role_id="product-owner",
+                from_actor_id="owner",
+                to_actor_id="alternate-owner",
+                authorized_by="owner",
+                reason="Attempt a role transfer while authority remains active",
+            )
+        )
+    with pytest.raises(ValueError, match="Revoke the active Approval Delegation"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="owner",
+                role_id="product-owner",
+            )
+        )
+    with pytest.raises(PermissionError, match="belongs to project:alternate-owner"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="developer",
+                role_id="product-owner",
+                delegation_id="release-approval",
+            )
+        )
+
+    approved = workspace.add_approval(
+        AddApprovalInput(
+            swarm_id="delivery",
+            work_id="delegated-approval",
+            actor_id="alternate-owner",
+            role_id="product-owner",
+            note="Approved under delegated authority",
+            delegation_id="release-approval",
+        )
+    )
+    used = workspace.list_approval_delegations("delivery", "delegated-approval", "used")[0]
+    assert approved.approval_roles == ["product-owner"]
+    assert used.status == "used"
+    assert used.used_by == "project:alternate-owner"
+    approval_path = Path(approved.path) / "approvals.md"
+    assert "project:alternate-owner via approval-delegation:release-approval" in (
+        approval_path.read_text()
+    )
+    with pytest.raises(ValueError, match="is not active"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="alternate-owner",
+                role_id="product-owner",
+                delegation_id="release-approval",
+            )
+        )
+
+    workspace.delegate_approval(
+        DelegateApprovalInput(
+            id="withdrawn-approval",
+            swarm_id="delivery",
+            work_id="revoked-approval",
+            role_id="product-owner",
+            actor_id="owner",
+            to_actor_id="alternate-owner",
+            reason="Temporary coverage",
+        )
+    )
+    revoked = workspace.revoke_approval_delegation(
+        RevokeApprovalDelegationInput(
+            delegation_id="withdrawn-approval",
+            swarm_id="delivery",
+            work_id="revoked-approval",
+            actor_id="owner",
+            reason="The primary owner resumed the decision",
+        )
+    )
+    assert revoked.status == "revoked"
+    assert revoked.revoked_by == "project:owner"
+    assert revoked.revoked_reason == "The primary owner resumed the decision"
+    with pytest.raises(ValueError, match="is not active"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="revoked-approval",
+                actor_id="alternate-owner",
+                role_id="product-owner",
+                delegation_id="withdrawn-approval",
+            )
+        )
+    assert workspace.validate().ok
+    delegation_path = (
+        root
+        / ".agora"
+        / "swarms"
+        / "delivery"
+        / "work"
+        / "revoked-approval"
+        / "approval-delegations"
+        / "withdrawn-approval"
+        / "DELEGATION.md"
+    )
+    assert delegation_path.is_file()
+    delegation_path.write_text(
+        delegation_path.read_text().replace('status: "revoked"', 'status: "used"')
+    )
+    report = workspace.validate()
+    assert any(issue.code == "approval-delegation.invalid" for issue in report.issues)
 
 
 def test_prepares_and_launches_a_session_with_actor_runtime_override(

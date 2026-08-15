@@ -3,8 +3,9 @@
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
 current work projection. The supported mutations are `actor.key.rotate`, `actor.runtime.update`,
 `work.transition`, `work.block`, `work.resume`, `work.cancel`, `work.create`, `work.decompose`,
-`criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`, `gate.waive`, `swarm.assign`,
-`handoff.create`, session preparation, and the complete delegation lifecycle. Their durable intents
+`criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`, `approval.delegate`,
+`approval.delegation.revoke`, `gate.waive`, `swarm.assign`, `handoff.create`, session preparation,
+and the complete delegation lifecycle. Their durable intents
 live at `.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
@@ -152,9 +153,13 @@ agora approval prepare \
   --note "Accepted for release"
 ```
 
-The structured parameters bind both `role` and `note` to the signature. Agora verifies that the
-actor still holds that exact role and retains `approval.add` authority when the action is applied.
-The ordinary `approvals.md` row and `approval.added` event remain the resulting domain records.
+The structured parameters bind `role`, `note`, and an optional Approval Delegation id to the
+signature. Without delegation, Agora verifies that the actor still holds the exact role and retains
+`approval.add`. With delegation, it verifies the target, role, work scope, compatibility, and active
+single-use authority before consuming the delegation. Signed grants and revocations use
+`approval delegate-prepare` and `approval delegation-revoke-prepare`; see
+[Approval Delegation](approval-delegation.md). The ordinary `approvals.md` row and `approval.added`
+event remain the resulting decision records.
 
 ## Prepare a handoff
 
@@ -345,8 +350,8 @@ The stale intent remains on disk for audit and cannot be applied.
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
 parameter map. The current kernel accepts planned actor key rotation, independent revocation and
 recovery, actor runtime updates, governed vacant-role assignment, work transitions and
-interruptions, approvals, handoffs, work creation, decomposition and material records, session
-preparation, and every delegation lifecycle mutation. Future
+interruptions, direct and delegated approvals, Gate Waivers, handoffs, work creation, decomposition
+and material records, session preparation, and every work-delegation lifecycle mutation. Future
 administrative action kinds must keep their domain validation as the source of authority when added.
 
 Signed `delegation.create` parameters include the complete provider-neutral `budget-limits` map.

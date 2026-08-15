@@ -247,6 +247,8 @@ The resulting work directory contains current state and append-only operational 
   artifacts.md
   evidence.md
   approvals.md
+  approval-delegations/<delegation-id>/DELEGATION.md
+  waivers/<waiver-id>/WAIVER.md
   events.md
   interactions.md
 ```

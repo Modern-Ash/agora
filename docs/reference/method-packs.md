@@ -139,6 +139,8 @@ Actions currently issued by the CLI are:
 | `artifact.add` | Register a durable output or reference |
 | `evidence.add` | Register a successful or failed result |
 | `approval.add` | Record approval for a named role |
+| `approval.delegate` | Grant one compatible actor a work-scoped, single-use role approval |
+| `approval.delegation.revoke` | Revoke an unused approval delegation as its grantor |
 | `gate.waive` | Waive exact outstanding gate obligations with reason and risk evidence |
 | `handoff.create` | Transfer the role held by the acting actor |
 | `handoff.manage` | Transfer another role under governance authority |
@@ -179,8 +181,11 @@ Explain what this policy protects and what evidence reviewers should inspect.
 ```
 
 The three Boolean requirements may be enabled independently. Each role in
-`required-approval-roles` must have an approval recorded by an actor currently assigned to that role.
-The approving role needs the `approval.add` action. A gate runs only on transition edges that name it.
+`required-approval-roles` must have an approval recorded by its assigned actor or the target of a
+valid single-use Approval Delegation. The approving role needs `approval.add`; the grantor
+additionally needs `approval.delegate` and `approval.delegation.revoke`. See
+[Approval Delegation](../guides/approval-delegation.md). A gate runs only on transition edges that
+name it.
 
 For backward compatibility, a legacy pack that has no gate files receives a strict `completion` gate
 requiring all criteria, required artifacts, and at least one successful evidence record. The derived

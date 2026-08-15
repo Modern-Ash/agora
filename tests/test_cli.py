@@ -680,6 +680,7 @@ def test_creates_and_lists_a_granular_gate_waiver_from_the_cli(tmp_path: Path, m
     workspace.initialize(InitInput(integration="generic"))
     for actor_id, name, capabilities in (
         ("owner", "Owner", ["backlog-management", "acceptance"]),
+        ("alternate-owner", "Alternate Owner", ["backlog-management", "acceptance"]),
         ("facilitator", "Facilitator", ["facilitation", "governance"]),
         ("developer", "Developer", ["implementation"]),
     ):
@@ -752,6 +753,74 @@ def test_creates_and_lists_a_granular_gate_waiver_from_the_cli(tmp_path: Path, m
         )
         == 0
     )
+    assert (
+        main(
+            [
+                "approval",
+                "delegate",
+                "--id",
+                "alternate-release-approval",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--role",
+                "product-owner",
+                "--to",
+                "alternate-owner",
+                "--by",
+                "owner",
+                "--reason",
+                "Alternate review requested",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "approval",
+                "add",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--role",
+                "product-owner",
+                "--by",
+                "alternate-owner",
+                "--delegation",
+                "alternate-release-approval",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "approval",
+                "delegations",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--status",
+                "used",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
 
     assert errors.getvalue() == ""
     assert '"id": "accepted-risk"' in output.getvalue()
+    assert '"id": "alternate-release-approval"' in output.getvalue()
+    assert '"status": "used"' in output.getvalue()
