@@ -4,7 +4,8 @@ This sample creates a parent Scrum swarm and a linked specialist swarm, signs wo
 proposal, governance interruption, acceptance, criteria, evidence, and collection externally,
 completes the work under the child's own lifecycle, and collects the result into the parent work
 item. The signed proposal also assigns provider-neutral `effort` and `tokens` budgets that the
-accepted child work inherits.
+accepted child work inherits and promotes the required child result as a typed parent artifact
+reference during collection.
 
 Run it from the repository root:
 
@@ -18,3 +19,5 @@ protocol.
 
 See [Delegated work](../../docs/guides/delegated-work.md) for the lifecycle and CLI reference and
 [Delegation budgets](../../docs/guides/delegation-budgets.md) for propagation rules.
+Artifact reference semantics are described in
+[Delegated artifact promotion](../../docs/guides/delegated-artifacts.md).

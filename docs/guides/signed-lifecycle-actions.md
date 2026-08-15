@@ -346,3 +346,5 @@ administrative action kinds must keep their domain validation as the source of a
 
 Signed `delegation.create` parameters include the complete provider-neutral `budget-limits` map.
 Apply rechecks inherited dimensions and current sibling reservations before persisting the proposal.
+The same action binds `artifact-promotions`, ensuring collection can expose only child artifact
+kinds promised by the signed contract.

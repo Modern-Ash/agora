@@ -80,6 +80,7 @@ agora delegation create \
   --description "Return a result that the parent can integrate." \
   --criterion usable:"The result can be integrated" \
   --required-artifact child-result \
+  --promote-artifact child-result=specialist-result \
   --budget effort=8 \
   --budget tokens=50000 \
   --result-kind delegated-result \
@@ -91,6 +92,8 @@ child identities, criteria, required child artifacts, and the artifact kind expe
 The child work id must not already exist. Optional provider-neutral budgets are persisted in the
 proposal and inherited by accepted child work. Nested sibling allocations cannot exceed that map;
 see [Delegation budgets](delegation-budgets.md).
+Promoted artifacts must be required by the child gate and become typed parent references during
+collection; see [Delegated artifact promotion](delegated-artifacts.md).
 
 When the requester requires authentication, use `create-prepare` with a distinct `--action-id`,
 export its authorization, sign it outside Agora, and apply it. The signature binds every field shown
@@ -135,9 +138,10 @@ Collection adds two records to the parent work:
   `agora://swarms/<child-swarm>/work/<child-work>`.
 - Successful `delegated-work` evidence referring to the same URI.
 
-The URI points to the authoritative child work. Agora does not copy or merge child artifacts, and it
-does not automatically satisfy parent acceptance criteria or approvals. Parent gates therefore
-remain independently enforceable.
+The URI points to the authoritative child work. Explicit `artifact-promotions` add typed references
+to promised child kinds, but Agora does not copy or merge opaque artifact contents. Collection does
+not automatically satisfy parent acceptance criteria or approvals. Parent gates therefore remain
+independently enforceable.
 
 The child swarm may already be `completed` when collection occurs. Agora permits this narrow action
 because completing all child work is the condition that makes the result collectible; it does not

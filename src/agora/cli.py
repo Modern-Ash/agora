@@ -314,6 +314,12 @@ def _build_parser() -> argparse.ArgumentParser:
     delegation_create.add_argument(
         "--budget", action="append", default=[], help="Delegated budget dimension=limit"
     )
+    delegation_create.add_argument(
+        "--promote-artifact",
+        action="append",
+        default=[],
+        help="Promote a child artifact as source-kind=parent-kind on collection",
+    )
 
     delegation_create_prepare = delegation.add_parser(
         "create-prepare", help="Prepare a signed delegation proposal intent"
@@ -332,6 +338,12 @@ def _build_parser() -> argparse.ArgumentParser:
     delegation_create_prepare.add_argument("--result-kind", default="delegated-result")
     delegation_create_prepare.add_argument(
         "--budget", action="append", default=[], help="Delegated budget dimension=limit"
+    )
+    delegation_create_prepare.add_argument(
+        "--promote-artifact",
+        action="append",
+        default=[],
+        help="Promote a child artifact as source-kind=parent-kind on collection",
     )
 
     delegation_accept = delegation.add_parser(
@@ -959,6 +971,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 required_artifacts=args.required_artifact,
                 result_kind=args.result_kind,
                 budget_limits=_parse_budget_limits(args.budget),
+                artifact_promotions=_parse_artifact_promotions(args.promote_artifact),
             )
         )
     if args.command == "delegation" and args.delegation_command == "create-prepare":
@@ -978,6 +991,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                     required_artifacts=args.required_artifact,
                     result_kind=args.result_kind,
                     budget_limits=_parse_budget_limits(args.budget),
+                    artifact_promotions=_parse_artifact_promotions(args.promote_artifact),
                 ),
             )
         )
@@ -1500,6 +1514,24 @@ def _parse_budget_limits(values: list[str]) -> dict[str, int] | None:
             raise ValueError(f'Delegation budget limit cannot be negative: "{value}"')
         limits[dimension] = limit
     return limits
+
+
+def _parse_artifact_promotions(values: list[str]) -> dict[str, str]:
+    promotions: dict[str, str] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(
+                f'Invalid artifact promotion "{value}"; expected source-kind=parent-kind'
+            )
+        source, target = value.split("=", 1)
+        if not source or not target:
+            raise ValueError(
+                f'Invalid artifact promotion "{value}"; expected source-kind=parent-kind'
+            )
+        if source in promotions:
+            raise ValueError(f"Duplicate promoted child artifact kind: {source}")
+        promotions[source] = target
+    return promotions
 
 
 def _print_json(output: TextIO, value: Any) -> None:

@@ -417,6 +417,8 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
                 "specialist-result",
                 "--budget",
                 "effort=8",
+                "--promote-artifact",
+                "specialist-result=promoted-specialist-result",
                 "--by",
                 "specialist-swarm",
             ],
@@ -507,6 +509,9 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
     assert '"action": "delegation.block"' in output.getvalue()
     assert '"action": "delegation.resume"' in output.getvalue()
     assert workspace.show_work("specialists", "specialist-work").budget_limits == {"effort": 8}
+    assert workspace.show_delegation("cli-delegation").artifact_promotions == {
+        "specialist-result": "promoted-specialist-result"
+    }
     assert (
         root / ".agora" / "swarms" / "specialists" / "work" / "specialist-work" / "WORK.md"
     ).exists()

@@ -665,6 +665,7 @@ versioned registry snapshot without persisting a private key.
 - [Recursive swarms](docs/guides/recursive-swarms.md)
 - [Delegated work](docs/guides/delegated-work.md)
 - [Delegation budgets](docs/guides/delegation-budgets.md)
+- [Delegated artifact promotion](docs/guides/delegated-artifacts.md)
 - [Work decomposition](docs/guides/work-decomposition.md)
 - [Operations and validation](docs/guides/operations-and-validation.md)
 - [Complete verification](docs/guides/verification.md)
@@ -700,10 +701,11 @@ versioned registry snapshot without persisting a private key.
   plus partial AWS and Google Cloud inventory adapters.
 - Governed same-swarm work decomposition and provider-neutral delegation budgets are implemented;
   the selected human, agent, or swarm remains responsible for proposing useful child contracts and
-  external runtimes remain responsible for usage metering. Artifact copying, gate waivers,
-  distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
-  explicit child work acceptance, interruption, cancellation, and reference-based result
-  collection are implemented.
+  external runtimes remain responsible for usage metering. Opt-in typed child artifact promotion is
+  implemented as a reference to the authoritative child record; Agora deliberately does not copy
+  opaque external bytes. Gate waivers, distributed leases, and remote concurrency remain future
+  work. Local cross-process writer locks, explicit child work acceptance, interruption,
+  cancellation, and reference-based result collection are implemented.
 - Optional Ed25519 actor authentication protects key rotation, independently authorized revocation
   and recovery, actor runtime updates, vacant-role assignment, work creation and decomposition,
   criteria, artifacts, evidence, transitions, interruptions, approvals, handoffs, the complete

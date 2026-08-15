@@ -67,6 +67,11 @@ the child work. Nested delegations may allocate only inherited dimensions, and n
 allocations cannot exceed the parent work limit. Agora validates declared capacity; consumption
 evidence remains the responsibility of the selected runtime or external adapter.
 
+The delegation contract may also map required child artifact kinds to parent kinds. Collection
+materializes typed `agora://` references to those child records. The reference is copied into parent
+governance state while the underlying repository file, cloud object, page, or other content remains
+owned by its provider.
+
 ## Swarm
 
 A swarm is a temporary team associated with an objective, Method Pack, and branch. It starts as

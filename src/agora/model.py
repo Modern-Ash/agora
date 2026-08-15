@@ -567,6 +567,7 @@ class DelegationRecord:
     created_at: str
     path: str
     budget_limits: dict[str, int] | None = None
+    artifact_promotions: dict[str, str] = field(default_factory=dict)
     accepted_by: str | None = None
     accepted_at: str | None = None
     collected_by: str | None = None
@@ -916,6 +917,7 @@ class CreateDelegationInput:
     description: str = ""
     id: str | None = None
     budget_limits: dict[str, int] | None = None
+    artifact_promotions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

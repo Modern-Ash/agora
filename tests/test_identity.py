@@ -1117,6 +1117,7 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
         required_artifacts=["child-result"],
         result_kind="delegated-result",
         budget_limits={"effort": 5},
+        artifact_promotions={"child-result": "promoted-child-result"},
     )
     with pytest.raises(PermissionError, match="prepare delegation.create"):
         workspace.create_delegation(proposal)
@@ -1126,6 +1127,9 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
     create_payload = sign_and_apply("propose-signed-contract")
     assert create_payload["parameters"]["delegation"] == "signed-contract"
     assert create_payload["parameters"]["budget-limits"] == '{"effort":5}'
+    assert create_payload["parameters"]["artifact-promotions"] == (
+        '{"child-result":"promoted-child-result"}'
+    )
     assert workspace.show_delegation("signed-contract").status == "proposed"
 
     acceptance = DelegationActorInput(delegation_id="signed-contract", actor_id="owner")
@@ -1240,6 +1244,10 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
     )
     sign_and_apply("collect-signed-contract")
     assert workspace.show_delegation("signed-contract").status == "collected"
+    assert (
+        "promoted-child-result"
+        in workspace.show_work("signed-parent", "parent-contract").artifact_kinds
+    )
     report = workspace.validate()
     assert {issue.code for issue in report.issues} == {"lifecycle-action.precondition-stale"}
 

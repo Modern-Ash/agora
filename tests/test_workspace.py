@@ -1796,6 +1796,20 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
             )
         )
 
+    with pytest.raises(ValueError, match="must also be required artifacts"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="invalid-promotion",
+                parent_swarm_id="delivery",
+                parent_work_id="parent-slice",
+                child_actor_id="specialist-swarm",
+                child_work_id="invalid-promotion-child",
+                actor_id="specialist-swarm",
+                title="Promote an optional artifact",
+                artifact_promotions={"release-note": "specialist-result"},
+            )
+        )
+
     proposed = workspace.create_delegation(
         CreateDelegationInput(
             id="specialist-task",
@@ -1809,6 +1823,7 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
             acceptance_criteria=[("usable", "The output can be integrated")],
             required_artifacts=["child-result"],
             result_kind="delegated-result",
+            artifact_promotions={"child-result": "specialist-result"},
         )
     )
     assert proposed.status == "proposed"
@@ -1906,11 +1921,15 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
     assert collected.status == "collected"
     assert collected.collected_by == "project:specialist-swarm"
     parent = workspace.show_work("delivery", "parent-slice")
-    assert parent.artifact_kinds == ["delegated-result"]
+    assert parent.artifact_kinds == ["delegated-result", "specialist-result"]
     assert parent.evidence_results == ["success"]
     parent_root = root / ".agora" / "swarms" / "delivery" / "work" / "parent-slice"
     assert (
         "agora://swarms/specialists/work/child-slice" in (parent_root / "artifacts.md").read_text()
+    )
+    assert (
+        "agora://swarms/specialists/work/child-slice/artifacts/child-result"
+        in (parent_root / "artifacts.md").read_text()
     )
     assert "delegation.collected" in (parent_root / "events.md").read_text()
     assert (

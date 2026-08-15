@@ -3640,6 +3640,25 @@ class AgoraWorkspace:
         return cls._normalize_budget_limits(value)
 
     @classmethod
+    def _artifact_promotions_parameter(cls, record: LifecycleActionRecord) -> dict[str, str]:
+        if "artifact-promotions" not in record.parameters:
+            return {}
+        try:
+            value = json.loads(record.parameters["artifact-promotions"])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid artifact promotions: {record.id}"
+            ) from error
+        if not isinstance(value, dict) or any(
+            not isinstance(source, str) or not isinstance(target, str)
+            for source, target in value.items()
+        ):
+            raise ValueError(
+                f"Lifecycle Action artifact promotions must be a string map: {record.id}"
+            )
+        return cls._normalize_artifact_promotions(value)
+
+    @classmethod
     def _work_creation_input_from_action(cls, record: LifecycleActionRecord) -> CreateWorkInput:
         if record.work_id is None:
             raise ValueError(f"Lifecycle Action has no created work id: {record.id}")
@@ -3739,6 +3758,7 @@ class AgoraWorkspace:
             required_artifacts=raw_artifacts,
             result_kind=record.parameters["result-kind"],
             budget_limits=AgoraWorkspace._budget_limits_parameter(record),
+            artifact_promotions=AgoraWorkspace._artifact_promotions_parameter(record),
         )
 
     def list_lifecycle_actions(self, status: str | None = None) -> list[LifecycleActionRecord]:
@@ -4022,6 +4042,9 @@ class AgoraWorkspace:
         context = self._validate_create_delegation(root, data.delegation)
         parent, parent_work, child_actor, requester, _, criteria, delegation_id, _ = context
         budget_limits = self._validate_delegation_budget(root, parent_work, data.delegation)
+        artifact_promotions = self._normalize_artifact_promotions(
+            data.delegation.artifact_promotions
+        )
         assert_actor_identity_available(requester)
         self._assert_current_actor_key(requester)
         return self._prepare_lifecycle_action(
@@ -4048,6 +4071,9 @@ class AgoraWorkspace:
                 "result-kind": data.delegation.result_kind,
                 "budget-limits": json.dumps(
                     budget_limits, ensure_ascii=True, separators=(",", ":")
+                ),
+                "artifact-promotions": json.dumps(
+                    artifact_promotions, ensure_ascii=True, separators=(",", ":")
                 ),
             },
         )
@@ -4100,6 +4126,15 @@ class AgoraWorkspace:
         for criterion_id in criteria:
             assert_slug(criterion_id, "Delegated criterion id")
         self._validate_delegation_budget(root, parent_work, data)
+        artifact_promotions = self._normalize_artifact_promotions(data.artifact_promotions)
+        missing_required_promotions = sorted(
+            set(artifact_promotions) - set(data.required_artifacts)
+        )
+        if missing_required_promotions:
+            raise ValueError(
+                "Promoted child artifacts must also be required artifacts: "
+                f"{', '.join(missing_required_promotions)}"
+            )
         delegation_id = data.id or self._now().astimezone(UTC).strftime("delegation-%Y%m%dt%H%M%sz")
         assert_slug(delegation_id, "Delegation id")
         path = root / ".agora" / "delegations" / delegation_id / "DELEGATION.md"
@@ -4163,6 +4198,15 @@ class AgoraWorkspace:
             normalized[dimension] = limit
         return normalized
 
+    @staticmethod
+    def _normalize_artifact_promotions(promotions: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for source, target in sorted(promotions.items()):
+            assert_slug(source, "Promoted child artifact kind")
+            assert_slug(target, "Promoted parent artifact kind")
+            normalized[source] = target
+        return normalized
+
     def _apply_create_delegation(
         self,
         root: Path,
@@ -4180,6 +4224,7 @@ class AgoraWorkspace:
     ) -> DelegationRecord:
         parent, parent_work, child_actor, requester, child, criteria, delegation_id, path = context
         budget_limits = self._validate_delegation_budget(root, parent_work, data)
+        artifact_promotions = self._normalize_artifact_promotions(data.artifact_promotions)
         record = DelegationRecord(
             id=delegation_id,
             parent_swarm_id=parent.id,
@@ -4197,6 +4242,7 @@ class AgoraWorkspace:
             created_at=self._timestamp(),
             path=str(path),
             budget_limits=budget_limits,
+            artifact_promotions=artifact_promotions,
         )
         write_new(path, self._render_delegation(record))
         detail = (
@@ -4398,6 +4444,14 @@ class AgoraWorkspace:
                 f"Delegated work {child.id}/{child_work.id} is not complete; "
                 f"state={child_work.state}"
             )
+        missing_promotions = sorted(
+            set(delegation.artifact_promotions) - set(child_work.artifact_kinds)
+        )
+        if missing_promotions:
+            raise ValueError(
+                "Delegated work is missing promoted child artifacts: "
+                f"{', '.join(missing_promotions)}"
+            )
         parent_work = self._load_work(parent, delegation.parent_work_id)
         self._assert_work_mutable(root, parent, parent_work)
         parent_contract = load_method_contract(root / ".agora" / "methods" / parent.method)
@@ -4430,6 +4484,13 @@ class AgoraWorkspace:
             result_uri,
             actor.reference,
         )
+        for source_kind, parent_kind in delegation.artifact_promotions.items():
+            self._record_artifact(
+                parent_work,
+                parent_kind,
+                f"{result_uri}/artifacts/{source_kind}",
+                actor.reference,
+            )
         self._record_evidence(
             parent_work,
             "delegated-work",
@@ -6290,8 +6351,9 @@ class AgoraWorkspace:
             delegation_records[delegation.id] = delegation
             try:
                 self._normalize_budget_limits(delegation.budget_limits)
+                self._normalize_artifact_promotions(delegation.artifact_promotions)
             except ValueError as error:
-                issue("delegation.budget-invalid", path, str(error))
+                issue("delegation.contract-invalid", path, str(error))
             if delegation.id != path.parent.name:
                 issue(
                     "delegation.id-mismatch",
@@ -6500,6 +6562,19 @@ class AgoraWorkspace:
                             evidence_path,
                             "Collected result evidence is missing from parent work",
                         )
+                    artifact_contents = artifact_path.read_text(encoding="utf-8")
+                    for source_kind, parent_kind in delegation.artifact_promotions.items():
+                        promotion_uri = f"{result_uri}/artifacts/{source_kind}"
+                        if (
+                            source_kind not in child_work.artifact_kinds
+                            or parent_kind not in parent_work.artifact_kinds
+                            or promotion_uri not in artifact_contents
+                        ):
+                            issue(
+                                "delegation.promoted-artifact-missing",
+                                artifact_path,
+                                f"Promoted artifact is missing: {source_kind} -> {parent_kind}",
+                            )
 
         allocated_budgets: dict[tuple[str, str], dict[str, int]] = {}
         for delegation in delegation_records.values():
@@ -7021,6 +7096,7 @@ class AgoraWorkspace:
                             list(dict.fromkeys(creation.required_artifacts)),
                             creation.result_kind,
                             creation.budget_limits,
+                            creation.artifact_promotions,
                         )
                         actual = (
                             delegation.parent_swarm_id,
@@ -7035,6 +7111,7 @@ class AgoraWorkspace:
                             delegation.required_artifacts,
                             delegation.result_kind,
                             delegation.budget_limits,
+                            delegation.artifact_promotions,
                         )
                         if actual != expected:
                             issue(
@@ -8012,6 +8089,7 @@ class AgoraWorkspace:
                     "required-artifacts": record.required_artifacts,
                     "result-kind": record.result_kind,
                     "budget-limits": record.budget_limits,
+                    "artifact-promotions": record.artifact_promotions,
                     "status": record.status,
                     "created-at": record.created_at,
                     "accepted-by": record.accepted_by,
@@ -8073,6 +8151,11 @@ class AgoraWorkspace:
             status_at=optional_string_attribute(document.attributes, "status-at"),
             path=str(path),
             budget_limits=optional_integer_record_attribute(document.attributes, "budget-limits"),
+            artifact_promotions=(
+                record_attribute(document.attributes, "artifact-promotions")
+                if "artifact-promotions" in document.attributes
+                else {}
+            ),
         )
 
     def _load_work(self, swarm: SwarmRecord, work_id: str) -> WorkRecord:
@@ -8452,6 +8535,7 @@ class AgoraWorkspace:
                 "required-artifacts",
                 "result-kind",
                 "budget-limits",
+                "artifact-promotions",
             },
             "delegation.reject": {"delegation", "reason"},
             "delegation.resume": {"delegation", "reason"},
@@ -8478,9 +8562,11 @@ class AgoraWorkspace:
             },
         }[action]
         parameter_keys = set(parameters)
+        optional_delegation_parameters = {"budget-limits", "artifact-promotions"}
         legacy_delegation_parameters = (
             action == "delegation.create"
-            and parameter_keys == expected_parameters - {"budget-limits"}
+            and (expected_parameters - parameter_keys).issubset(optional_delegation_parameters)
+            and parameter_keys.issubset(expected_parameters)
         )
         if parameter_keys != expected_parameters and not legacy_delegation_parameters:
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
@@ -8547,6 +8633,11 @@ class AgoraWorkspace:
                     if "budget-limits" in parameters
                     else None
                 )
+                promotions = (
+                    json.loads(parameters["artifact-promotions"])
+                    if "artifact-promotions" in parameters
+                    else {}
+                )
             except json.JSONDecodeError as error:
                 raise ValueError(
                     f"Lifecycle Action has invalid delegation JSON parameters: {path}"
@@ -8579,6 +8670,14 @@ class AgoraWorkspace:
                 raise ValueError(f"Lifecycle Action has invalid delegation budgets: {path}")
             for dimension in budgets or {}:
                 assert_slug(dimension, "Lifecycle Action delegation budget dimension")
+            if not isinstance(promotions, dict) or any(
+                not isinstance(source, str) or not isinstance(target, str)
+                for source, target in promotions.items()
+            ):
+                raise ValueError(
+                    f"Lifecycle Action has invalid delegation artifact promotions: {path}"
+                )
+            AgoraWorkspace._normalize_artifact_promotions(promotions)
         if action in {"work.create", "work.decompose"}:
             if action == "work.decompose":
                 assert_slug(parameters["child-work"], "Lifecycle Action child work id")

@@ -60,6 +60,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   result into its parent.
 - [Delegation budgets](guides/delegation-budgets.md): propagate provider-neutral integer limits and
   prevent sibling allocations from exceeding their parent work budget.
+- [Delegated artifact promotion](guides/delegated-artifacts.md): promote promised child artifact
+  kinds as typed parent references without copying opaque external content.
 - [Work decomposition](guides/work-decomposition.md): materialize same-swarm child contracts and
   enforce parent-child closure.
 - [Operations and validation](guides/operations-and-validation.md): query active state, inspect

@@ -140,6 +140,7 @@ def main() -> None:
         required_artifacts=["child-result"],
         result_kind="delegated-result",
         budget_limits={"effort": 8, "tokens": 50000},
+        artifact_promotions={"child-result": "specialist-result"},
     )
     created = agora.prepare_create_delegation(
         PrepareCreateDelegationInput(
