@@ -490,6 +490,14 @@ def _build_parser() -> argparse.ArgumentParser:
         change.add_argument("--by", required=True)
         change.add_argument("--reason", required=True)
         change.add_argument("--id")
+        prepared_change = work.add_parser(
+            f"{command}-prepare", help=f"Prepare a durable {command} intent"
+        )
+        prepared_change.add_argument("--swarm", required=True)
+        prepared_change.add_argument("--work", required=True)
+        prepared_change.add_argument("--by", required=True)
+        prepared_change.add_argument("--reason", required=True)
+        prepared_change.add_argument("--id", required=True)
 
     work_changes = work.add_parser(
         "status-changes", help="List a work item's durable status history"
@@ -964,6 +972,23 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
             "block": workspace.block_work,
             "resume": workspace.resume_work,
             "cancel": workspace.cancel_work,
+        }[args.work_command](change)
+    if args.command == "work" and args.work_command in {
+        "block-prepare",
+        "resume-prepare",
+        "cancel-prepare",
+    }:
+        change = ChangeWorkStatusInput(
+            swarm_id=args.swarm,
+            work_id=args.work,
+            actor_id=args.by,
+            reason=args.reason,
+            id=args.id,
+        )
+        return {
+            "block-prepare": workspace.prepare_block_work,
+            "resume-prepare": workspace.prepare_resume_work,
+            "cancel-prepare": workspace.prepare_cancel_work,
         }[args.work_command](change)
     if args.command == "work" and args.work_command == "status-changes":
         return workspace.list_work_status_changes(args.swarm, args.work)

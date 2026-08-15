@@ -1,8 +1,8 @@
 # Signed lifecycle actions
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
-current work projection. The supported mutations are `work.transition`, `approval.add`, and
-`handoff.create`. Their durable intents live
+current work projection. The supported mutations are `work.transition`, `work.block`, `work.resume`,
+`work.cancel`, `approval.add`, and `handoff.create`. Their durable intents live
 at `.agora/actions/<id>/ACTION.md`, separate from the resulting `WORK.md` state.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
@@ -72,6 +72,29 @@ reason. Its precondition covers `SWARM.md`, where assignments live, plus the wor
 `--work` is present. Agora rechecks actor compatibility, represented-swarm constraints, current
 assignment, and either `handoff.create` or `handoff.manage` authority before changing the role.
 
+## Prepare a work interruption
+
+Blocking, resuming, and cancelling work use action-specific prepare commands:
+
+```bash
+agora work block-prepare --id pause-payment-retry \
+  --swarm payments --work payment-retry --by authenticated-developer \
+  --reason "Dependency is unavailable"
+
+agora work resume-prepare --id resume-payment-retry \
+  --swarm payments --work payment-retry --by authenticated-developer \
+  --reason "Dependency recovered"
+
+agora work cancel-prepare --id cancel-payment-retry \
+  --swarm payments --work payment-retry --by authenticated-owner \
+  --reason "Outcome is no longer required"
+```
+
+The action kind binds the target operational status and the payload binds its non-empty reason.
+Applying it rechecks the current operational state, role authority, terminal Method state, and open
+delegations. A successful action writes the ordinary `STATUS.md`, updates `WORK.md`, and appends the
+work event. The action id is also the Status Change id, enabling exact offline cross-validation.
+
 ## Export and sign the authorization
 
 Export the canonical JSON bytes:
@@ -111,10 +134,9 @@ or rotated signer, changed assignment, lost permission, invalid transition, exce
 failed gate. Only after those checks and signature verification does it update `WORK.md`, append the
 ordinary work transition event, and mark `ACTION.md` as `applied`.
 
-Actors registered with `--require-authentication` cannot use immediate `agora work transition`,
-`agora approval add`, or `agora swarm handoff`. Actors without that requirement retain the immediate
-commands for compatibility, and may also use a prepared action without a signature when a durable
-intent is useful.
+Actors registered with `--require-authentication` cannot use immediate lifecycle commands covered by
+this guide. Actors without that requirement retain the immediate commands for compatibility, and
+may also use a prepared action without a signature when a durable intent is useful.
 
 ## Audit pending and applied actions
 
@@ -133,6 +155,6 @@ The stale intent remains on disk for audit and cannot be applied.
 ## Extensibility boundary
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
-parameter map. The current kernel accepts `work.transition`, `approval.add`, and `handoff.create`;
-delegation changes, work interruption, and administrative mutations remain future action kinds. They must keep
+parameter map. The current kernel accepts work transitions and interruptions, approvals, and
+handoffs. Delegation changes and administrative mutations remain future action kinds. They must keep
 their existing domain validation as the source of authority when added.

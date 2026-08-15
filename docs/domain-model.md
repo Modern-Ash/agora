@@ -98,9 +98,10 @@ To act, an actor must:
 
 A **Lifecycle Action** is a prepared mutation intent stored independently from current work state.
 Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
-SHA-256 precondition. `work.transition`, `approval.add`, and `handoff.create` are the supported kinds.
-Work mutations cover the work projection, artifacts, evidence, and approvals on which the mutation
-depends. Approval parameters bind both the asserted role and durable note. A handoff instead covers
+SHA-256 precondition. Supported kinds cover work transitions, work interruptions, approvals, and
+handoffs. Work mutations cover the work projection, artifacts, evidence, and approvals on which the
+mutation depends. Interruption reasons are signed and successful actions link exactly to their
+`STATUS.md`. Approval parameters bind both the asserted role and durable note. A handoff instead covers
 the swarm assignment projection and optional referenced work while binding both actor identities,
 the role, and reason.
 

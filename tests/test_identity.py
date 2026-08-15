@@ -13,6 +13,7 @@ from agora.model import (
     AddApprovalInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
+    ChangeWorkStatusInput,
     CreateSwarmInput,
     CreateWorkInput,
     HandoffActorInput,
@@ -343,6 +344,106 @@ def test_applies_a_signed_handoff_and_rejects_a_stale_assignment_precondition(
     report = workspace.validate()
     assert not report.ok
     assert any(issue.code == "lifecycle-action.handoff-mismatch" for issue in report.issues)
+
+
+def test_applies_signed_work_interruptions_with_durable_status_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    _create_authenticated_work(workspace)
+
+    def sign_and_apply(action_id: str) -> tuple[dict[str, object], object]:
+        payload_path = tmp_path / f"{action_id}.json"
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=action_id,
+                output=str(payload_path),
+            )
+        )
+        signature_path = tmp_path / f"{action_id}.sig"
+        signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
+        return (
+            json.loads(payload_path.read_text(encoding="ascii")),
+            workspace.apply_lifecycle_action(
+                ApplyLifecycleActionInput(
+                    action_id=action_id,
+                    signature=str(signature_path),
+                )
+            ),
+        )
+
+    blocked = ChangeWorkStatusInput(
+        id="pause-signed-work",
+        swarm_id="delivery",
+        work_id="signed-work",
+        actor_id="developer",
+        reason="Dependency is unavailable",
+    )
+    with pytest.raises(PermissionError, match="prepare work.block"):
+        workspace.block_work(blocked)
+    workspace.prepare_block_work(blocked)
+    block_payload, block_action = sign_and_apply(blocked.id or "")
+    assert block_payload["kind"] == "work.block"
+    assert block_payload["parameters"] == {"reason": "Dependency is unavailable"}
+    assert block_action.status == "applied"
+    assert workspace.show_work("delivery", "signed-work").operational_status == "blocked"
+
+    resumed = ChangeWorkStatusInput(
+        id="resume-signed-work",
+        swarm_id="delivery",
+        work_id="signed-work",
+        actor_id="developer",
+        reason="Dependency recovered",
+    )
+    with pytest.raises(PermissionError, match="prepare work.resume"):
+        workspace.resume_work(resumed)
+    workspace.prepare_resume_work(resumed)
+    sign_and_apply(resumed.id or "")
+    assert workspace.show_work("delivery", "signed-work").operational_status == "active"
+
+    cancelled = ChangeWorkStatusInput(
+        id="cancel-signed-work",
+        swarm_id="delivery",
+        work_id="signed-work",
+        actor_id="owner",
+        reason="Outcome is no longer required",
+    )
+    with pytest.raises(PermissionError, match="prepare work.cancel"):
+        workspace.cancel_work(cancelled)
+    workspace.prepare_cancel_work(cancelled)
+    sign_and_apply(cancelled.id or "")
+
+    assert workspace.show_work("delivery", "signed-work").operational_status == "cancelled"
+    assert [
+        item.action for item in workspace.list_work_status_changes("delivery", "signed-work")
+    ] == [
+        "work.block",
+        "work.resume",
+        "work.cancel",
+    ]
+    assert workspace.validate().ok
+
+    status_path = (
+        root
+        / ".agora"
+        / "swarms"
+        / "delivery"
+        / "work"
+        / "signed-work"
+        / "status-changes"
+        / "cancel-signed-work"
+        / "STATUS.md"
+    )
+    status_path.write_text(
+        status_path.read_text(encoding="utf-8").replace(
+            "Outcome is no longer required",
+            "Unrecorded cancellation reason",
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert not report.ok
+    assert any(issue.code == "lifecycle-action.status-change-mismatch" for issue in report.issues)
 
 
 def test_launches_an_authenticated_actor_run_with_external_signature(

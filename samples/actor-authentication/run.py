@@ -11,6 +11,7 @@ from agora.model import (
     AddApprovalInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
+    ChangeWorkStatusInput,
     CreateSwarmInput,
     CreateWorkInput,
     HandoffActorInput,
@@ -114,6 +115,34 @@ def main() -> None:
             actor_id="owner",
         )
     )
+    for action_id, reason, prepare in (
+        ("pause-signed-work", "Dependency is unavailable", agora.prepare_block_work),
+        ("resume-signed-work", "Dependency recovered", agora.prepare_resume_work),
+    ):
+        prepared_status = prepare(
+            ChangeWorkStatusInput(
+                id=action_id,
+                swarm_id="delivery",
+                work_id="signed-work",
+                actor_id="developer",
+                reason=reason,
+            )
+        )
+        status_payload = runtime / f"{action_id}.json"
+        agora.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(
+                action_id=prepared_status.id,
+                output=str(status_payload),
+            )
+        )
+        status_signature = runtime / f"{action_id}.sig"
+        status_signature.write_bytes(private_key.sign(status_payload.read_bytes()))
+        agora.apply_lifecycle_action(
+            ApplyLifecycleActionInput(
+                action_id=prepared_status.id,
+                signature=str(status_signature),
+            )
+        )
     prepared_action = agora.prepare_work_transition(
         PrepareWorkTransitionInput(
             id="plan-signed-work",

@@ -2462,6 +2462,17 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
+        work_status_context: (
+            tuple[
+                ChangeWorkStatusInput,
+                str,
+                SwarmRecord,
+                ActorRecord,
+                WorkRecord,
+                str,
+            ]
+            | None
+        ) = None
         if record.action == "work.transition":
             if set(record.parameters) != {"to"}:
                 raise ValueError(f"Lifecycle Action has invalid transition parameters: {record.id}")
@@ -2502,6 +2513,32 @@ class AgoraWorkspace:
             )
             handoff_context = self._validate_handoff(root, handoff)
             swarm, _, _, actor, work, _, _, _, _ = handoff_context
+        elif record.action in {"work.block", "work.cancel", "work.resume"}:
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no status-change work: {record.id}")
+            target_status = {
+                "work.block": "blocked",
+                "work.cancel": "cancelled",
+                "work.resume": "active",
+            }[record.action]
+            change = ChangeWorkStatusInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                reason=record.parameters["reason"],
+            )
+            swarm, actor, work, previous = self._validate_work_status_change(
+                root, change, target_status, record.action
+            )
+            work_status_context = (
+                change,
+                target_status,
+                swarm,
+                actor,
+                work,
+                previous,
+            )
         else:
             raise ValueError(f"Unsupported Lifecycle Action kind: {record.action}")
         assert_actor_identity_available(actor)
@@ -2530,9 +2567,22 @@ class AgoraWorkspace:
                 record.parameters["role"],
                 record.parameters["note"],
             )
-        else:
+        elif record.action == "handoff.create":
             assert handoff_context is not None
             self._apply_handoff(root, *handoff_context)
+        else:
+            assert work_status_context is not None
+            change, target_status, swarm, actor, work, previous = work_status_context
+            self._apply_work_status_change(
+                root,
+                change,
+                target_status,
+                record.action,
+                swarm,
+                actor,
+                work,
+                previous,
+            )
         applied = LifecycleActionRecord(
             **{
                 **record.__dict__,
@@ -2642,12 +2692,24 @@ class AgoraWorkspace:
         return self._change_work_status(data, "blocked", "work.block")
 
     @_locked_mutation("project")
+    def prepare_block_work(self, data: ChangeWorkStatusInput) -> LifecycleActionRecord:
+        return self._prepare_work_status_change(data, "blocked", "work.block")
+
+    @_locked_mutation("project")
     def resume_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
         return self._change_work_status(data, "active", "work.resume")
 
     @_locked_mutation("project")
+    def prepare_resume_work(self, data: ChangeWorkStatusInput) -> LifecycleActionRecord:
+        return self._prepare_work_status_change(data, "active", "work.resume")
+
+    @_locked_mutation("project")
     def cancel_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
         return self._change_work_status(data, "cancelled", "work.cancel")
+
+    @_locked_mutation("project")
+    def prepare_cancel_work(self, data: ChangeWorkStatusInput) -> LifecycleActionRecord:
+        return self._prepare_work_status_change(data, "cancelled", "work.cancel")
 
     def list_work_status_changes(self, swarm_id: str, work_id: str) -> list[StatusChangeRecord]:
         work = self.show_work(swarm_id, work_id)
@@ -2663,9 +2725,50 @@ class AgoraWorkspace:
         target_status: str,
         action: str,
     ) -> StatusChangeRecord:
+        root = self.project_root()
+        swarm, actor, work, previous = self._validate_work_status_change(
+            root, data, target_status, action
+        )
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                f"prepare {action} before applying it"
+            )
+        return self._apply_work_status_change(
+            root, data, target_status, action, swarm, actor, work, previous
+        )
+
+    def _prepare_work_status_change(
+        self,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+    ) -> LifecycleActionRecord:
+        if data.id is None:
+            raise ValueError(f"Prepared {action} requires an explicit id")
+        root = self.project_root()
+        swarm, actor, work, _ = self._validate_work_status_change(root, data, target_status, action)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action=action,
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"reason": data.reason.strip()},
+        )
+
+    def _validate_work_status_change(
+        self,
+        root: Path,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, str]:
         if not data.reason.strip():
             raise ValueError("Work status change reason cannot be empty")
-        root = self.project_root()
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
         work = self._load_work(swarm, data.work_id)
@@ -2698,6 +2801,20 @@ class AgoraWorkspace:
                 )
         change_root = Path(work.path) / "status-changes"
         self._assert_status_change_id_available(change_root, data.id)
+        return swarm, actor, work, previous
+
+    def _apply_work_status_change(
+        self,
+        root: Path,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        previous: str,
+    ) -> StatusChangeRecord:
+        change_root = Path(work.path) / "status-changes"
         work.operational_status = _work_operational_status(target_status)
         work.status_reason = data.reason.strip()
         work.status_by = actor.reference
@@ -4837,6 +4954,61 @@ class AgoraWorkspace:
                                 handoff_path,
                                 "Handoff record differs from its applied Lifecycle Action",
                             )
+            if (
+                action.action in {"work.block", "work.cancel", "work.resume"}
+                and (
+                    action.swarm_id,
+                    action.work_id,
+                )
+                in work_records
+            ):
+                work = work_records[(action.swarm_id, action.work_id)]
+                status_path = Path(work.path) / "status-changes" / action.id / "STATUS.md"
+                if action.status == "prepared" and status_path.exists():
+                    issue(
+                        "lifecycle-action.status-change-conflict",
+                        path,
+                        f"Prepared action already has a Status Change: {action.id}",
+                    )
+                elif action.status == "applied" and not status_path.is_file():
+                    issue(
+                        "lifecycle-action.status-change-missing",
+                        path,
+                        f"Applied action has no Status Change: {action.id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        change = self._load_status_change(status_path.parent)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.status-change-invalid", status_path, str(error))
+                    else:
+                        target_status = {
+                            "work.block": "blocked",
+                            "work.cancel": "cancelled",
+                            "work.resume": "active",
+                        }[action.action]
+                        expected = (
+                            "work",
+                            f"{action.swarm_id}/{action.work_id}",
+                            action.action,
+                            target_status,
+                            action.actor,
+                            action.parameters["reason"],
+                        )
+                        actual = (
+                            change.subject_type,
+                            change.subject,
+                            change.action,
+                            change.target_status,
+                            change.actor,
+                            change.reason,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.status-change-mismatch",
+                                status_path,
+                                "Status Change differs from its applied Lifecycle Action",
+                            )
 
         for directory in _child_directories(root / ".agora" / "tool-runs"):
             path = directory / "RUN.md"
@@ -5877,7 +6049,13 @@ class AgoraWorkspace:
         swarm: SwarmRecord,
         work: WorkRecord | None,
     ) -> str:
-        if action in {"approval.add", "work.transition"}:
+        if action in {
+            "approval.add",
+            "work.block",
+            "work.cancel",
+            "work.resume",
+            "work.transition",
+        }:
             if work is None:
                 raise ValueError(f"Lifecycle Action {action} requires work")
             return self._work_precondition_sha256(work)
@@ -5938,7 +6116,14 @@ class AgoraWorkspace:
         document = read_markdown(path / "ACTION.md")
         _assert_schema(document, "agora/lifecycle-action/v1", path / "ACTION.md")
         action = string_attribute(document.attributes, "action")
-        if action not in {"approval.add", "handoff.create", "work.transition"}:
+        if action not in {
+            "approval.add",
+            "handoff.create",
+            "work.block",
+            "work.cancel",
+            "work.resume",
+            "work.transition",
+        }:
             raise ValueError(f"Unsupported Lifecycle Action kind: {action}")
         status = string_attribute(document.attributes, "status")
         if status not in {"prepared", "applied"}:
@@ -5949,6 +6134,9 @@ class AgoraWorkspace:
         expected_parameters = {
             "approval.add": {"role", "note"},
             "handoff.create": {"role", "from", "to", "reason"},
+            "work.block": {"reason"},
+            "work.cancel": {"reason"},
+            "work.resume": {"reason"},
             "work.transition": {"to"},
         }[action]
         if set(parameters) != expected_parameters:
@@ -5961,6 +6149,11 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Lifecycle Action handoff actors must use scoped references: {path}"
                 )
+        if (
+            action in {"work.block", "work.cancel", "work.resume"}
+            and not parameters["reason"].strip()
+        ):
+            raise ValueError(f"Lifecycle Action status reason cannot be empty: {path}")
         precondition_sha256 = string_attribute(document.attributes, "precondition-sha256")
         authentication_verified = _boolean_attribute_default(
             document.attributes, "authentication-verified", False
@@ -6011,7 +6204,7 @@ class AgoraWorkspace:
         ):
             raise ValueError(f"Lifecycle Action digests must be SHA-256 values: {path}")
         work_id = optional_string_attribute(document.attributes, "work")
-        if action in {"approval.add", "work.transition"} and work_id is None:
+        if action != "handoff.create" and work_id is None:
             raise ValueError(f"Lifecycle Action {action} requires work: {path}")
         record = LifecycleActionRecord(
             id=string_attribute(document.attributes, "id"),
