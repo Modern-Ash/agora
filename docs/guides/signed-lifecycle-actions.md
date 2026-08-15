@@ -1,7 +1,8 @@
 # Signed lifecycle actions
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
-current work projection. The supported mutations are `work.transition` and `approval.add`. Their durable intents live
+current work projection. The supported mutations are `work.transition`, `approval.add`, and
+`handoff.create`. Their durable intents live
 at `.agora/actions/<id>/ACTION.md`, separate from the resulting `WORK.md` state.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
@@ -25,7 +26,7 @@ Preparation checks the current role assignment, `work.transition` authority, Met
 limit, work operational status, and gate. It writes a `prepared` action containing:
 
 - The action id and `work.transition` kind.
-- The canonical actor, swarm, and work references.
+- The canonical actor, swarm, and optional work references.
 - The target state in a structured parameter map.
 - A SHA-256 precondition over `WORK.md`, `approvals.md`, `artifacts.md`, and `evidence.md`.
 - Its creation time and empty authentication evidence fields.
@@ -49,6 +50,27 @@ agora approval prepare \
 The structured parameters bind both `role` and `note` to the signature. Agora verifies that the
 actor still holds that exact role and retains `approval.add` authority when the action is applied.
 The ordinary `approvals.md` row and `approval.added` event remain the resulting domain records.
+
+## Prepare a handoff
+
+An authenticated role holder or governance actor can prepare an identity-preserving role transfer:
+
+```bash
+agora swarm handoff-prepare \
+  --id handoff-payment-work \
+  --swarm payments \
+  --role developer \
+  --from authenticated-developer \
+  --to human-developer \
+  --by authenticated-developer \
+  --reason "Human judgment is required" \
+  --work payment-retry
+```
+
+Handoff parameters bind the role, canonical outgoing and incoming actor references, authorizer, and
+reason. Its precondition covers `SWARM.md`, where assignments live, plus the work policy digest when
+`--work` is present. Agora rechecks actor compatibility, represented-swarm constraints, current
+assignment, and either `handoff.create` or `handoff.manage` authority before changing the role.
 
 ## Export and sign the authorization
 
@@ -89,10 +111,10 @@ or rotated signer, changed assignment, lost permission, invalid transition, exce
 failed gate. Only after those checks and signature verification does it update `WORK.md`, append the
 ordinary work transition event, and mark `ACTION.md` as `applied`.
 
-Actors registered with `--require-authentication` cannot use immediate `agora work transition` or
-`agora approval add`. Actors without that requirement retain the immediate commands for
-compatibility, and may also use a prepared action without a signature when a durable intent is
-useful.
+Actors registered with `--require-authentication` cannot use immediate `agora work transition`,
+`agora approval add`, or `agora swarm handoff`. Actors without that requirement retain the immediate
+commands for compatibility, and may also use a prepared action without a signature when a durable
+intent is useful.
 
 ## Audit pending and applied actions
 
@@ -111,6 +133,6 @@ The stale intent remains on disk for audit and cannot be applied.
 ## Extensibility boundary
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
-parameter map. The current kernel accepts `work.transition` and `approval.add`; handoffs, delegation
-changes, work interruption, and administrative mutations remain future action kinds. They must keep
+parameter map. The current kernel accepts `work.transition`, `approval.add`, and `handoff.create`;
+delegation changes, work interruption, and administrative mutations remain future action kinds. They must keep
 their existing domain validation as the source of authority when added.

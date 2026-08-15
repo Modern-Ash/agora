@@ -4,8 +4,9 @@ This sample registers an AI actor with an Ed25519 public key and requires signed
 before that actor may apply a lifecycle mutation or launch a prepared Tool Run. The temporary private key is used only by the
 sample's external signer and is never stored in `.agora`.
 
-The flow signs and applies a work transition and Product Owner approval, then signs and launches both
-a repository Tool Run and an agent session. Lifecycle authorization binds the requested mutation to a digest of the current
+The flow signs and applies a work transition, Product Owner approval, and developer handoff, then
+signs and launches both a repository Tool Run and an agent session. Lifecycle authorization binds
+the requested mutation to a digest of the current
 work policy files. Session authorization
 also binds the exact runtime command and SHA-256 of its materialized `CONTEXT.md`. The resulting
 records retain public verification evidence so `agora validate` can recheck them later. The sample

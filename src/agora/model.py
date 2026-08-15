@@ -936,7 +936,7 @@ class LifecycleActionRecord:
     action: str
     actor: str
     swarm_id: str
-    work_id: str
+    work_id: str | None
     parameters: dict[str, str]
     precondition_sha256: str
     status: Literal["prepared", "applied"]

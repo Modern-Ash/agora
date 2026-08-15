@@ -416,6 +416,18 @@ def _build_parser() -> argparse.ArgumentParser:
     swarm_handoff.add_argument("--reason", required=True)
     swarm_handoff.add_argument("--work")
 
+    swarm_handoff_prepare = swarm.add_parser(
+        "handoff-prepare", help="Prepare a durable role handoff intent"
+    )
+    swarm_handoff_prepare.add_argument("--id", required=True)
+    swarm_handoff_prepare.add_argument("--swarm", required=True)
+    swarm_handoff_prepare.add_argument("--role", required=True)
+    swarm_handoff_prepare.add_argument("--from", dest="from_actor", required=True)
+    swarm_handoff_prepare.add_argument("--to", dest="to_actor", required=True)
+    swarm_handoff_prepare.add_argument("--by", required=True)
+    swarm_handoff_prepare.add_argument("--reason", required=True)
+    swarm_handoff_prepare.add_argument("--work")
+
     swarm_show = swarm.add_parser("show", help="Show a swarm")
     swarm_show.add_argument("--swarm", required=True)
 
@@ -874,6 +886,19 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         )
     if args.command == "swarm" and args.swarm_command == "handoff":
         return workspace.handoff_actor(
+            HandoffActorInput(
+                id=args.id,
+                swarm_id=args.swarm,
+                role_id=args.role,
+                from_actor_id=args.from_actor,
+                to_actor_id=args.to_actor,
+                authorized_by=args.by,
+                reason=args.reason,
+                work_id=args.work,
+            )
+        )
+    if args.command == "swarm" and args.swarm_command == "handoff-prepare":
+        return workspace.prepare_handoff(
             HandoffActorInput(
                 id=args.id,
                 swarm_id=args.swarm,

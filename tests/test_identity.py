@@ -15,6 +15,7 @@ from agora.model import (
     AssignActorInput,
     CreateSwarmInput,
     CreateWorkInput,
+    HandoffActorInput,
     InitInput,
     InvokeToolInput,
     LaunchSessionInput,
@@ -218,7 +219,7 @@ def test_rejects_lifecycle_signature_replay_and_stale_work_state(
             ApplyLifecycleActionInput(action_id=second.id, signature=str(signature_path))
         )
     report = workspace.validate()
-    assert report.ok
+    assert report.ok, report.issues
     assert any(issue.code == "lifecycle-action.precondition-stale" for issue in report.issues)
 
 
@@ -267,6 +268,81 @@ def test_applies_a_signed_approval_with_role_and_note_bound_to_the_action(
     approval_path = root / ".agora" / "swarms" / "delivery" / "work" / "signed-work"
     assert "Accepted \\| externally signed" in (approval_path / "approvals.md").read_text()
     assert workspace.validate().ok
+
+
+def test_applies_a_signed_handoff_and_rejects_a_stale_assignment_precondition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    workspace.add_actor(
+        AddActorInput(
+            id="human-developer",
+            name="Human Developer",
+            kind="human",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    handoff = HandoffActorInput(
+        id="handoff-to-human",
+        swarm_id="delivery",
+        role_id="developer",
+        from_actor_id="developer",
+        to_actor_id="human-developer",
+        authorized_by="developer",
+        reason="Human judgment is required",
+    )
+
+    with pytest.raises(PermissionError, match="prepare the handoff"):
+        workspace.handoff_actor(handoff)
+
+    prepared = workspace.prepare_handoff(handoff)
+    stale = workspace.prepare_handoff(
+        HandoffActorInput(**{**handoff.__dict__, "id": "stale-handoff-to-human"})
+    )
+    payload_path = tmp_path / "handoff-authorization.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared.id,
+            output=str(payload_path),
+        )
+    )
+    payload = json.loads(payload_path.read_text(encoding="ascii"))
+    assert payload["kind"] == "handoff.create"
+    assert payload["work"] is None
+    assert payload["parameters"] == {
+        "from": "project:developer",
+        "reason": "Human judgment is required",
+        "role": "developer",
+        "to": "project:human-developer",
+    }
+    signature_path = tmp_path / "handoff-authorization.sig"
+    signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
+
+    applied = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=prepared.id, signature=str(signature_path))
+    )
+
+    assert applied.status == "applied"
+    assert workspace.show_swarm("delivery").assignments["developer"] == ("project:human-developer")
+    assert workspace.list_handoffs("delivery")[0].id == prepared.id
+    with pytest.raises(ValueError, match="precondition digest mismatch"):
+        workspace.apply_lifecycle_action(ApplyLifecycleActionInput(action_id=stale.id))
+    report = workspace.validate()
+    assert report.ok, report.issues
+    assert any(issue.code == "lifecycle-action.precondition-stale" for issue in report.issues)
+
+    handoff_path = root / ".agora" / "swarms" / "delivery" / "handoffs" / prepared.id / "HANDOFF.md"
+    handoff_path.write_text(
+        handoff_path.read_text(encoding="utf-8").replace(
+            "Human judgment is required",
+            "Unrecorded reason change",
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert not report.ok
+    assert any(issue.code == "lifecycle-action.handoff-mismatch" for issue in report.issues)
 
 
 def test_launches_an_authenticated_actor_run_with_external_signature(

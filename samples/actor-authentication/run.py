@@ -13,6 +13,7 @@ from agora.model import (
     AssignActorInput,
     CreateSwarmInput,
     CreateWorkInput,
+    HandoffActorInput,
     InitInput,
     InvokeToolInput,
     LaunchSessionInput,
@@ -85,6 +86,13 @@ def main() -> None:
             scope="project",
             public_key=str(public_key),
             require_authentication=True,
+        ),
+        AddActorInput(
+            id="human-developer",
+            name="Human Developer",
+            kind="human",
+            capabilities=["implementation"],
+            scope="project",
         ),
     ):
         agora.add_actor(actor)
@@ -198,6 +206,33 @@ def main() -> None:
             signature=str(session_signature),
         )
     )
+    prepared_handoff = agora.prepare_handoff(
+        HandoffActorInput(
+            id="handoff-to-human",
+            swarm_id="delivery",
+            role_id="developer",
+            from_actor_id="developer",
+            to_actor_id="human-developer",
+            authorized_by="developer",
+            reason="Continue with human judgment",
+            work_id="signed-work",
+        )
+    )
+    handoff_payload = runtime / "handoff-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared_handoff.id,
+            output=str(handoff_payload),
+        )
+    )
+    handoff_signature = runtime / "handoff-authorization.sig"
+    handoff_signature.write_bytes(private_key.sign(handoff_payload.read_bytes()))
+    applied_handoff = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=prepared_handoff.id,
+            signature=str(handoff_signature),
+        )
+    )
 
     replacement_private_key = Ed25519PrivateKey.generate()
     replacement_public_key = runtime / "developer-replacement-public.pem"
@@ -222,6 +257,7 @@ def main() -> None:
     assert completed_session.authentication_verified
     assert applied_action.authentication_verified
     assert applied_approval.authentication_verified
+    assert applied_handoff.authentication_verified
     assert replacement.fingerprint == revoked.fingerprint
     assert agora.validate().ok
     print(f"Project: {project}")
