@@ -43,6 +43,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: remote-registry",
         "sample: terraform-cli",
         "sample: tool-integration",
+        "sample: work-decomposition",
         "sample: work-management",
     ]
     assert not {"node", "npm", "npx"}.intersection(executables)

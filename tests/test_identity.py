@@ -20,6 +20,7 @@ from agora.model import (
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecomposeWorkInput,
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
@@ -35,6 +36,7 @@ from agora.model import (
     PrepareCreateDelegationInput,
     PrepareCreateWorkInput,
     PrepareCriterionInput,
+    PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
     PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
@@ -212,6 +214,69 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     report = workspace.validate()
     assert not report.ok
     assert any(issue.code == "lifecycle-action.invalid" for issue in report.issues)
+
+
+def test_applies_a_signed_work_decomposition(tmp_path: Path, monkeypatch) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    _create_authenticated_work(
+        workspace,
+        private_key,
+        tmp_path,
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="parent-work",
+            title="Deliver a governed outcome",
+            actor_id="owner",
+        ),
+        "create-parent-work",
+    )
+    decomposition = DecomposeWorkInput(
+        swarm_id="delivery",
+        parent_work_id="parent-work",
+        child_work_id="child-work",
+        title="Implement a signed child slice",
+        actor_id="owner",
+        acceptance_criteria=[("reviewed", "The slice is reviewed")],
+        required_artifacts=["source-code"],
+    )
+
+    with pytest.raises(PermissionError, match="requires a signed lifecycle action"):
+        workspace.decompose_work(decomposition)
+
+    prepared = workspace.prepare_decompose_work(
+        PrepareDecomposeWorkInput(
+            action_id="decompose-parent-work",
+            decomposition=decomposition,
+        )
+    )
+    payload_path = tmp_path / "decompose-parent-work.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared.id,
+            output=str(payload_path),
+        )
+    )
+    payload = json.loads(payload_path.read_text(encoding="ascii"))
+    assert payload["kind"] == "work.decompose"
+    assert payload["work"] == "parent-work"
+    assert payload["parameters"]["child-work"] == "child-work"
+    signature_path = tmp_path / "decompose-parent-work.sig"
+    signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
+
+    applied = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=prepared.id, signature=str(signature_path))
+    )
+
+    assert applied.status == "applied"
+    assert workspace.show_work("delivery", "parent-work").child_work_refs == ["delivery/child-work"]
+    assert workspace.show_work("delivery", "child-work").parent_work_ref == ("delivery/parent-work")
+    assert workspace.validate().ok
+    assert (
+        "work.decomposed"
+        in (
+            root / ".agora" / "swarms" / "delivery" / "work" / "parent-work" / "events.md"
+        ).read_text()
+    )
 
 
 def test_authenticated_actor_signs_its_runtime_change(tmp_path: Path, monkeypatch) -> None:

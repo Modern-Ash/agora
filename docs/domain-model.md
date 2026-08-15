@@ -75,6 +75,11 @@ is blocked and `cancelled` when every item is cancelled.
 A work item is a Markdown directory containing description, state, criteria, artifacts, and evidence.
 Its workflow comes from `METHOD.md`; it is not hard-coded into an LLM integration.
 
+Local decomposition creates child work under the same swarm and Method Pack. The child stores a
+`parent-work` reference and the parent stores the inverse `child-work-refs` list. Parent completion
+or cancellation requires every direct child to be terminal or explicitly cancelled. Cross-swarm
+child ownership uses a Delegation instead.
+
 Work also has an orthogonal operational status: `active`, `blocked`, or `cancelled`. Blocking
 preserves method state while suspending mutations. Resumption restores activity without traversing a
 method edge. Cancellation is terminal for the item but does not claim that its Method Pack gate was
@@ -105,8 +110,8 @@ A **Lifecycle Action** is a prepared mutation intent stored independently from c
 Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
 SHA-256 precondition. Supported kinds cover planned actor key rotations, independently authorized
 revocation and recovery, actor runtime updates, work transitions, work interruptions, approvals,
-handoffs, work creation and material records, session preparation, and the complete delegation
-lifecycle. Existing-work
+handoffs, work creation, same-swarm decomposition and material records, session preparation, and the
+complete delegation lifecycle. Existing-work
 mutations cover the work projection, artifacts, evidence, and approvals on which the mutation
 depends. Work creation instead covers the swarm projection and binds the complete initial work
 definition. Criterion, artifact, and evidence parameters bind their exact durable values.
@@ -114,6 +119,10 @@ Interruption reasons are signed and successful actions link exactly to their `ST
 parameters bind both the asserted role and durable note. A handoff instead covers the swarm
 assignment projection and optional referenced work while binding both actor identities, the role,
 and reason.
+
+Signed work decomposition binds the parent work precondition and the complete initial child
+contract. Applying it rechecks `work.decompose` authority, parent mutability, and child path
+availability. The child links to its parent and the parent retains the inverse child reference.
 
 A signed delegation status decision binds its delegation id and reason to both `DELEGATION.md` and
 the parent work digest. Parent governance authorizes block, resume, and cancel; child authority

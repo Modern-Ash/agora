@@ -16,6 +16,7 @@ from agora.model import (
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecomposeWorkInput,
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
@@ -2280,6 +2281,127 @@ def test_validation_reports_corrupt_status_change_semantics(
     assert report.ok is False
     assert "status-change.transition-invalid" in codes
     assert "status-change.sequence-invalid" in codes
+
+
+def test_decomposes_work_and_requires_children_to_close(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="parent-work",
+            title="Deliver the parent outcome",
+            actor_id="owner",
+        )
+    )
+    decomposition = DecomposeWorkInput(
+        swarm_id="delivery",
+        parent_work_id="parent-work",
+        child_work_id="child-work",
+        title="Implement the child slice",
+        actor_id="owner",
+        acceptance_criteria=[("reviewed", "The child slice is reviewed")],
+        required_artifacts=["source-code"],
+    )
+
+    with pytest.raises(PermissionError, match="not allowed to perform work.decompose"):
+        workspace.decompose_work(
+            DecomposeWorkInput(**{**decomposition.__dict__, "actor_id": "developer"})
+        )
+    with pytest.raises(ValueError, match="must differ"):
+        workspace.decompose_work(
+            DecomposeWorkInput(
+                **{
+                    **decomposition.__dict__,
+                    "child_work_id": "parent-work",
+                }
+            )
+        )
+
+    child = workspace.decompose_work(decomposition)
+    parent = workspace.show_work("delivery", "parent-work")
+
+    assert child.parent_work_ref == "delivery/parent-work"
+    assert parent.child_work_refs == ["delivery/child-work"]
+    assert (
+        'parent-work: "delivery/parent-work"'
+        in (root / ".agora" / "swarms" / "delivery" / "work" / "child-work" / "WORK.md").read_text()
+    )
+    with pytest.raises(FileExistsError, match="Work already exists"):
+        workspace.decompose_work(decomposition)
+
+    for state, actor in (
+        ("planned", "developer"),
+        ("implementing", "developer"),
+        ("reviewing", "developer"),
+        ("verifying", "facilitator"),
+    ):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="parent-work",
+                actor_id=actor,
+                target_state=state,
+            )
+        )
+    with pytest.raises(ValueError, match="has open child work"):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="parent-work",
+                actor_id="owner",
+                target_state="completed",
+            )
+        )
+    with pytest.raises(ValueError, match="has open child work"):
+        workspace.cancel_work(
+            ChangeWorkStatusInput(
+                swarm_id="delivery",
+                work_id="parent-work",
+                actor_id="owner",
+                reason="Cancel the parent",
+            )
+        )
+
+    workspace.cancel_work(
+        ChangeWorkStatusInput(
+            swarm_id="delivery",
+            work_id="child-work",
+            actor_id="owner",
+            reason="The child is no longer required",
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="parent-work",
+            actor_id="facilitator",
+            type="review",
+            result="success",
+        )
+    )
+    workspace.add_approval(
+        AddApprovalInput(
+            swarm_id="delivery",
+            work_id="parent-work",
+            actor_id="owner",
+            role_id="product-owner",
+            note="Child closure reviewed",
+        )
+    )
+    completed = workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery",
+            work_id="parent-work",
+            actor_id="owner",
+            target_state="completed",
+        )
+    )
+
+    assert completed.state == "completed"
+    assert workspace.validate().ok
 
 
 def _prepare_scrum_team(workspace: AgoraWorkspace) -> None:

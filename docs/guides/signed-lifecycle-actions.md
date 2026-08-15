@@ -1,10 +1,10 @@
 # Signed lifecycle actions
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
-current work projection. The supported mutations are `actor.key.rotate`, `actor.runtime.update`, `work.transition`,
-`work.block`, `work.resume`, `work.cancel`, `work.create`, `criterion.satisfy`, `artifact.add`,
-`evidence.add`, `approval.add`, `swarm.assign`, `handoff.create`, session preparation, and the
-complete delegation lifecycle. Their durable intents live at
+current work projection. The supported mutations are `actor.key.rotate`, `actor.runtime.update`,
+`work.transition`, `work.block`, `work.resume`, `work.cancel`, `work.create`, `work.decompose`,
+`criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`, `swarm.assign`,
+`handoff.create`, session preparation, and the complete delegation lifecycle. Their durable intents live at
 `.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
@@ -29,6 +29,10 @@ agora work create-prepare \
 The action work reference is the future work id. Its precondition covers `SWARM.md`; apply rechecks
 swarm readiness, assignment, `work.create` authority, Method Pack availability, criterion ids, and
 path availability before writing the ordinary work documents.
+
+Authenticated same-swarm decomposition uses `work decompose-prepare`. Its action references the
+existing parent while the parameters bind the future child id and complete initial child contract.
+See [Work decomposition](work-decomposition.md).
 
 Authenticated participants prepare criteria, artifacts, and evidence against an existing work
 projection:
@@ -336,6 +340,6 @@ The stale intent remains on disk for audit and cannot be applied.
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
 parameter map. The current kernel accepts planned actor key rotation, independent revocation and
 recovery, actor runtime updates, governed vacant-role assignment, work transitions and
-interruptions, approvals, handoffs, work
-creation and material records, session preparation, and every delegation lifecycle mutation. Future
+interruptions, approvals, handoffs, work creation, decomposition and material records, session
+preparation, and every delegation lifecycle mutation. Future
 administrative action kinds must keep their domain validation as the source of authority when added.

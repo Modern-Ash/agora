@@ -559,6 +559,33 @@ def test_blocks_resumes_and_lists_work_status_from_the_cli(tmp_path: Path, monke
     output = io.StringIO()
     errors = io.StringIO()
 
+    assert (
+        main(
+            [
+                "work",
+                "decompose",
+                "--swarm",
+                "delivery",
+                "--work",
+                "cli-work",
+                "--child",
+                "cli-child",
+                "--title",
+                "Implement the child slice",
+                "--criterion",
+                "reviewed:The slice is reviewed",
+                "--required-artifact",
+                "source-code",
+                "--by",
+                "owner",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
     for arguments in (
         [
             "work",
@@ -601,6 +628,7 @@ def test_blocks_resumes_and_lists_work_status_from_the_cli(tmp_path: Path, monke
         assert main(arguments, cwd=root, stdout=output, stderr=errors) == 0
 
     assert errors.getvalue() == ""
+    assert workspace.show_work("delivery", "cli-child").parent_work_ref == "delivery/cli-work"
     assert '"operational_status": "blocked"' in output.getvalue()
     assert '"action": "work.resume"' in output.getvalue()
 

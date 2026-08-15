@@ -21,6 +21,7 @@ from agora.model import (
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecomposeWorkInput,
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
@@ -42,6 +43,7 @@ from agora.model import (
     PrepareCreateDelegationInput,
     PrepareCreateWorkInput,
     PrepareCriterionInput,
+    PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
     PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
@@ -551,6 +553,30 @@ def _build_parser() -> argparse.ArgumentParser:
     work_create_prepare.add_argument("--description", default="")
     work_create_prepare.add_argument("--criterion", action="append", default=[])
     work_create_prepare.add_argument("--required-artifact", action="append", default=[])
+
+    work_decompose = work.add_parser(
+        "decompose", help="Create a governed child work item under a parent"
+    )
+    work_decompose.add_argument("--swarm", required=True)
+    work_decompose.add_argument("--work", required=True, help="Parent work id")
+    work_decompose.add_argument("--child", required=True, help="Child work id")
+    work_decompose.add_argument("--title", required=True)
+    work_decompose.add_argument("--by", required=True)
+    work_decompose.add_argument("--description", default="")
+    work_decompose.add_argument("--criterion", action="append", default=[])
+    work_decompose.add_argument("--required-artifact", action="append", default=[])
+    work_decompose_prepare = work.add_parser(
+        "decompose-prepare", help="Prepare a signed work decomposition intent"
+    )
+    work_decompose_prepare.add_argument("--action-id", required=True)
+    work_decompose_prepare.add_argument("--swarm", required=True)
+    work_decompose_prepare.add_argument("--work", required=True, help="Parent work id")
+    work_decompose_prepare.add_argument("--child", required=True, help="Child work id")
+    work_decompose_prepare.add_argument("--title", required=True)
+    work_decompose_prepare.add_argument("--by", required=True)
+    work_decompose_prepare.add_argument("--description", default="")
+    work_decompose_prepare.add_argument("--criterion", action="append", default=[])
+    work_decompose_prepare.add_argument("--required-artifact", action="append", default=[])
 
     criterion = work.add_parser("criterion-satisfy", help="Satisfy an acceptance criterion")
     criterion.add_argument("--swarm", required=True)
@@ -1188,6 +1214,35 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 work=CreateWorkInput(
                     swarm_id=args.swarm,
                     id=args.id,
+                    title=args.title,
+                    actor_id=args.by,
+                    description=args.description,
+                    acceptance_criteria=[_parse_criterion(item) for item in args.criterion],
+                    required_artifacts=args.required_artifact,
+                ),
+            )
+        )
+    if args.command == "work" and args.work_command == "decompose":
+        return workspace.decompose_work(
+            DecomposeWorkInput(
+                swarm_id=args.swarm,
+                parent_work_id=args.work,
+                child_work_id=args.child,
+                title=args.title,
+                actor_id=args.by,
+                description=args.description,
+                acceptance_criteria=[_parse_criterion(item) for item in args.criterion],
+                required_artifacts=args.required_artifact,
+            )
+        )
+    if args.command == "work" and args.work_command == "decompose-prepare":
+        return workspace.prepare_decompose_work(
+            PrepareDecomposeWorkInput(
+                action_id=args.action_id,
+                decomposition=DecomposeWorkInput(
+                    swarm_id=args.swarm,
+                    parent_work_id=args.work,
+                    child_work_id=args.child,
                     title=args.title,
                     actor_id=args.by,
                     description=args.description,

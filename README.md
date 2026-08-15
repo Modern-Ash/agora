@@ -473,6 +473,10 @@ agora work create --swarm payments --id payment-api --title "Implement payment A
   --by owner --criterion api-works:"The API satisfies its contract" \
   --required-artifact source-code --required-artifact test-report
 
+agora work decompose --swarm payments --work payment-api \
+  --child payment-validation --title "Validate payment requests" \
+  --by owner --criterion covered:"Validation paths have tests"
+
 agora work transition --swarm payments --work payment-api --to planned --by delivery-swarm
 agora artifact add --swarm payments --work payment-api \
   --kind source-code --uri repo://src/payment.py --by delivery-swarm
@@ -499,6 +503,11 @@ agora work cancel --swarm payments --work payment-api --by owner \
 
 See [interruptions and cancellation](docs/guides/interruptions-and-cancellation.md) for state,
 authority, delegation, and child-ownership rules.
+
+Local decomposition links independently governed child work inside the same swarm. The parent
+cannot complete or be cancelled while a child remains open. See the
+[work decomposition guide](docs/guides/work-decomposition.md). Cross-swarm child work continues to
+use the separate delegation protocol.
 
 Transitions come from Markdown files in the installed Method Pack. Packs may define rework paths and
 per-state WIP limits. A gated terminal transition can require:
@@ -655,6 +664,7 @@ versioned registry snapshot without persisting a private key.
 - [Governed handoffs](docs/guides/handoffs.md)
 - [Recursive swarms](docs/guides/recursive-swarms.md)
 - [Delegated work](docs/guides/delegated-work.md)
+- [Work decomposition](docs/guides/work-decomposition.md)
 - [Operations and validation](docs/guides/operations-and-validation.md)
 - [Complete verification](docs/guides/verification.md)
 - [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
@@ -687,14 +697,15 @@ versioned registry snapshot without persisting a private key.
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,
   plus partial AWS and Google Cloud inventory adapters.
-- Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
-  distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
-  explicit child work acceptance, interruption, cancellation, and reference-based result collection
-  are implemented.
+- Governed same-swarm work decomposition is implemented; the selected human, agent, or swarm
+  remains responsible for proposing useful child contracts. Delegation budgets, artifact copying,
+  gate waivers, distributed leases, and remote concurrency remain future work. Local cross-process
+  writer locks, explicit child work acceptance, interruption, cancellation, and reference-based
+  result collection are implemented.
 - Optional Ed25519 actor authentication protects key rotation, independently authorized revocation
-  and recovery, actor runtime updates, vacant-role assignment, work creation, criteria, artifacts,
-  evidence, transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run launch, and
-  agent-session preparation and launch while leaving private keys external. Public-key rotation and
+  and recovery, actor runtime updates, vacant-role assignment, work creation and decomposition,
+  criteria, artifacts, evidence, transitions, interruptions, approvals, handoffs, the complete
+  delegation lifecycle, Tool Run launch, and agent-session preparation and launch while leaving private keys external. Public-key rotation and
   revocation histories are implemented. Tool Packs declare portable direct-process timeouts and
   captured-output limits. Filesystem/network/syscall isolation, resource quotas, and process-tree
   containment are not yet covered by that policy.

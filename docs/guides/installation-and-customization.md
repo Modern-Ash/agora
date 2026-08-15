@@ -279,6 +279,9 @@ Operational interruption authority is also role-defined. Grant `work.block` and 
 delivery or flow roles, `work.cancel` to the appropriate owner, and the corresponding delegation
 actions according to parent and child authority. See
 [Interruptions and cancellation](interruptions-and-cancellation.md) for the full action matrix.
+Grant `work.decompose` only to roles allowed to materialize same-swarm child contracts. Parent
+closure then remains blocked until every child is terminal or cancelled; see
+[Work decomposition](work-decomposition.md).
 
 ## Customize developer tool integrations
 

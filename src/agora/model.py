@@ -189,6 +189,7 @@ class WorkRecord:
     evidence_results: list[str]
     approval_roles: list[str]
     path: str
+    child_work_refs: list[str] = field(default_factory=list)
     operational_status: WorkOperationalStatus = "active"
     status_reason: str | None = None
     status_by: str | None = None
@@ -946,6 +947,24 @@ class CreateWorkInput:
 class PrepareCreateWorkInput:
     action_id: str
     work: CreateWorkInput
+
+
+@dataclass(frozen=True)
+class DecomposeWorkInput:
+    swarm_id: str
+    parent_work_id: str
+    child_work_id: str
+    title: str
+    actor_id: str
+    acceptance_criteria: list[tuple[str, str]] = field(default_factory=list)
+    required_artifacts: list[str] = field(default_factory=list)
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareDecomposeWorkInput:
+    action_id: str
+    decomposition: DecomposeWorkInput
 
 
 @dataclass(frozen=True)

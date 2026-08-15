@@ -130,6 +130,7 @@ Actions currently issued by the CLI are:
 | `actor.runtime.update` | Change the acting actor's runtime selection |
 | `swarm.assign` | Assign a compatible actor to a vacant swarm role |
 | `work.create` | Create a governed work item |
+| `work.decompose` | Materialize a child work contract under active same-swarm work |
 | `work.transition` | Traverse an allowed transition edge |
 | `work.block` | Suspend mutations without changing method state |
 | `work.resume` | Resume blocked work in its preserved method state |

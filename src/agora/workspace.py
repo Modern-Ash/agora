@@ -76,6 +76,7 @@ from agora.model import (
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecomposeWorkInput,
     DelegationActorInput,
     DelegationRecord,
     DoctorCheck,
@@ -118,6 +119,7 @@ from agora.model import (
     PrepareCreateDelegationInput,
     PrepareCreateWorkInput,
     PrepareCriterionInput,
+    PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
     PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
@@ -2451,13 +2453,13 @@ class AgoraWorkspace:
         )
 
     def _validate_create_work(
-        self, root: Path, data: CreateWorkInput
+        self, root: Path, data: CreateWorkInput, action: str = "work.create"
     ) -> tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path]:
         assert_slug(data.id, "Work id")
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"ready", "running"}:
             raise ValueError(f"Swarm {swarm.id} must be ready before work can be created")
-        actor = self._require_actor_for_action(root, swarm, data.actor_id, "work.create")
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
         criteria = dict(data.acceptance_criteria)
         if len(criteria) != len(data.acceptance_criteria):
@@ -2474,6 +2476,7 @@ class AgoraWorkspace:
         self,
         data: CreateWorkInput,
         context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+        parent_work_ref: str | None = None,
     ) -> WorkRecord:
         swarm, actor, contract, criteria, path = context
         work = WorkRecord(
@@ -2489,6 +2492,7 @@ class AgoraWorkspace:
             evidence_results=[],
             approval_roles=[],
             path=str(path),
+            parent_work_ref=parent_work_ref,
         )
         write_new(path / "WORK.md", self._render_work(work))
         write_new(
@@ -2531,6 +2535,96 @@ class AgoraWorkspace:
         write_new(path / "interactions.md", "# Interactions\n\n")
         self._append_work_event(work, "work.created", f"state={work.state} actor={actor.reference}")
         return work
+
+    @_locked_mutation("project")
+    def decompose_work(self, data: DecomposeWorkInput) -> WorkRecord:
+        root = self.project_root()
+        parent, child, context = self._validate_decompose_work(root, data)
+        actor = context[1]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare work.decompose before applying it"
+            )
+        return self._apply_decompose_work(parent, child, context)
+
+    @_locked_mutation("project")
+    def prepare_decompose_work(self, data: PrepareDecomposeWorkInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        parent, child, context = self._validate_decompose_work(root, data.decomposition)
+        swarm, actor, _, criteria, _ = context
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="work.decompose",
+            actor=actor,
+            swarm=swarm,
+            work=parent,
+            parameters={
+                "child-work": child.id,
+                "title": child.title,
+                "description": child.description,
+                "acceptance-criteria": json.dumps(
+                    list(criteria.items()), ensure_ascii=True, separators=(",", ":")
+                ),
+                "required-artifacts": json.dumps(
+                    list(dict.fromkeys(child.required_artifacts)),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+    def _validate_decompose_work(
+        self, root: Path, data: DecomposeWorkInput
+    ) -> tuple[
+        WorkRecord,
+        CreateWorkInput,
+        tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ]:
+        if data.parent_work_id == data.child_work_id:
+            raise ValueError("Child work id must differ from its parent work id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        parent = self._load_work(swarm, data.parent_work_id)
+        self._assert_work_mutable(root, swarm, parent)
+        child = CreateWorkInput(
+            swarm_id=data.swarm_id,
+            id=data.child_work_id,
+            title=data.title,
+            actor_id=data.actor_id,
+            acceptance_criteria=data.acceptance_criteria,
+            required_artifacts=data.required_artifacts,
+            description=data.description,
+        )
+        context = self._validate_create_work(root, child, action="work.decompose")
+        return parent, child, context
+
+    def _apply_decompose_work(
+        self,
+        parent: WorkRecord,
+        child: CreateWorkInput,
+        context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ) -> WorkRecord:
+        swarm, actor, _, _, _ = context
+        parent_reference = f"{swarm.id}/{parent.id}"
+        child_reference = f"{swarm.id}/{child.id}"
+        result = self._apply_create_work(child, context, parent_work_ref=parent_reference)
+        parent.child_work_refs = list(dict.fromkeys([*parent.child_work_refs, child_reference]))
+        atomic_write(Path(parent.path) / "WORK.md", self._render_work(parent))
+        self._append_work_event(
+            parent,
+            "work.decomposed",
+            f"child={child_reference} actor={actor.reference}",
+        )
+        self._append_work_event(
+            result,
+            "work.decomposition-linked",
+            f"parent={parent_reference} actor={actor.reference}",
+        )
+        return result
 
     @_locked_mutation("project")
     def satisfy_criterion(self, data: WorkActorInput, criterion_id: str) -> WorkRecord:
@@ -2989,6 +3083,14 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
+        work_decompose_context: (
+            tuple[
+                WorkRecord,
+                CreateWorkInput,
+                tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+            ]
+            | None
+        ) = None
         criterion_context: (
             tuple[PrepareCriterionInput, SwarmRecord, ActorRecord, WorkRecord] | None
         ) = None
@@ -3145,6 +3247,16 @@ class AgoraWorkspace:
             if record.swarm_id != swarm.id or record.work_id != creation.id:
                 raise ValueError(f"Lifecycle Action work context is not canonical: {record.id}")
             work_create_context = (creation, context)
+        elif record.action == "work.decompose":
+            decomposition = self._work_decomposition_input_from_action(record)
+            parent, child, context = self._validate_decompose_work(root, decomposition)
+            swarm, actor, _, _, _ = context
+            work = parent
+            if record.swarm_id != swarm.id or record.work_id != parent.id:
+                raise ValueError(
+                    f"Lifecycle Action decomposition context is not canonical: {record.id}"
+                )
+            work_decompose_context = (parent, child, context)
         elif record.action == "criterion.satisfy":
             if record.work_id is None:
                 raise ValueError(f"Lifecycle Action has no criterion work: {record.id}")
@@ -3394,6 +3506,10 @@ class AgoraWorkspace:
             assert work_create_context is not None
             creation, context = work_create_context
             self._apply_create_work(creation, context)
+        elif record.action == "work.decompose":
+            assert work_decompose_context is not None
+            parent, child, context = work_decompose_context
+            self._apply_decompose_work(parent, child, context)
         elif record.action == "criterion.satisfy":
             assert criterion_context is not None
             criterion, swarm, actor, work = criterion_context
@@ -3518,6 +3634,38 @@ class AgoraWorkspace:
             description=record.parameters["description"],
         )
 
+    @classmethod
+    def _work_decomposition_input_from_action(
+        cls, record: LifecycleActionRecord
+    ) -> DecomposeWorkInput:
+        if record.work_id is None:
+            raise ValueError(f"Lifecycle Action has no parent work id: {record.id}")
+        try:
+            raw_criteria = json.loads(record.parameters["acceptance-criteria"])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid decomposition acceptance criteria: {record.id}"
+            ) from error
+        if not isinstance(raw_criteria, list) or any(
+            not isinstance(item, list)
+            or len(item) != 2
+            or any(not isinstance(value, str) for value in item)
+            for item in raw_criteria
+        ):
+            raise ValueError(
+                f"Lifecycle Action has invalid decomposition acceptance criteria: {record.id}"
+            )
+        return DecomposeWorkInput(
+            swarm_id=record.swarm_id,
+            parent_work_id=record.work_id,
+            child_work_id=record.parameters["child-work"],
+            title=record.parameters["title"],
+            actor_id=record.actor,
+            acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
+            required_artifacts=cls._string_list_parameter(record, "required-artifacts"),
+            description=record.parameters["description"],
+        )
+
     @staticmethod
     def _delegation_creation_input_from_action(
         record: LifecycleActionRecord,
@@ -3598,6 +3746,8 @@ class AgoraWorkspace:
                 f"Actor {actor.reference} cannot perform transition {work.state} -> "
                 f"{data.target_state}; required roles: {', '.join(transition.roles)}"
             )
+        if data.target_state == contract.terminal_state:
+            self._assert_child_work_closed(root, swarm, work)
         self._assert_wip_limit(swarm, work, data.target_state, contract.wip_limits)
         if transition.gate is not None:
             self._assert_work_gate(work, contract.gates[transition.gate], transition.gate)
@@ -3745,6 +3895,7 @@ class AgoraWorkspace:
                 f"Work {work.id} cannot change operational status {previous} -> {target_status}"
             )
         if target_status == "cancelled":
+            self._assert_child_work_closed(root, swarm, work)
             open_delegations = [
                 item.id
                 for item in self.list_delegations()
@@ -3760,6 +3911,24 @@ class AgoraWorkspace:
         change_root = Path(work.path) / "status-changes"
         self._assert_status_change_id_available(change_root, data.id)
         return swarm, actor, work, previous
+
+    def _assert_child_work_closed(self, root: Path, swarm: SwarmRecord, parent: WorkRecord) -> None:
+        open_children: list[str] = []
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        for reference in parent.child_work_refs:
+            owner, separator, work_id = reference.partition("/")
+            if not separator or owner != swarm.id:
+                raise ValueError(
+                    f"Work {swarm.id}/{parent.id} has invalid child work reference: {reference}"
+                )
+            child = self._load_work(swarm, work_id)
+            if child.operational_status != "cancelled" and child.state != contract.terminal_state:
+                open_children.append(reference)
+        if open_children:
+            raise ValueError(
+                f"Work {swarm.id}/{parent.id} has open child work; close it first: "
+                f"{', '.join(open_children)}"
+            )
 
     def _apply_work_status_change(
         self,
@@ -5957,6 +6126,44 @@ class AgoraWorkspace:
                         f"Handoff references missing work: {handoff.work_id}",
                     )
 
+        for (swarm_id, work_id), work in work_records.items():
+            path = Path(work.path) / "WORK.md"
+            if len(work.child_work_refs) != len(set(work.child_work_refs)):
+                issue(
+                    "work.children-duplicated",
+                    path,
+                    "Child work references must be unique",
+                )
+            for reference in work.child_work_refs:
+                owner, separator, child_id = reference.partition("/")
+                child_key = (owner, child_id)
+                if not separator or owner != swarm_id or child_key not in work_records:
+                    issue(
+                        "work.child-missing",
+                        path,
+                        f"Child work reference is not a local work item: {reference}",
+                    )
+                    continue
+                child = work_records[child_key]
+                if child_key == (swarm_id, work_id) or child.parent_work_ref != (
+                    f"{swarm_id}/{work_id}"
+                ):
+                    issue(
+                        "work.child-link-invalid",
+                        Path(child.path) / "WORK.md",
+                        f"Child work does not link back to {swarm_id}/{work_id}",
+                    )
+            if work.parent_work_ref is not None and work.delegation_id is None:
+                owner, separator, parent_id = work.parent_work_ref.partition("/")
+                parent = work_records.get((owner, parent_id)) if separator else None
+                reference = f"{swarm_id}/{work_id}"
+                if owner != swarm_id or parent is None or reference not in parent.child_work_refs:
+                    issue(
+                        "work.parent-link-invalid",
+                        path,
+                        f"Local parent work does not link to child {reference}",
+                    )
+
         try:
             maximum = (
                 project.max_delegation_depth if isinstance(project, ProjectConfiguration) else 3
@@ -6343,6 +6550,53 @@ class AgoraWorkspace:
                                 "lifecycle-action.work-mismatch",
                                 Path(work.path) / "WORK.md",
                                 "Work record differs from its applied Lifecycle Action",
+                            )
+            if action.action == "work.decompose" and action.work_id is not None:
+                try:
+                    decomposition = self._work_decomposition_input_from_action(action)
+                except ValueError as error:
+                    issue("lifecycle-action.decomposition-invalid", path, str(error))
+                else:
+                    child_key = (action.swarm_id, decomposition.child_work_id)
+                    child = work_records.get(child_key)
+                    if action.status == "prepared" and child is not None:
+                        issue(
+                            "lifecycle-action.work-conflict",
+                            path,
+                            "Prepared action already has child work: "
+                            f"{decomposition.child_work_id}",
+                        )
+                    elif action.status == "applied" and child is None:
+                        issue(
+                            "lifecycle-action.child-work-missing",
+                            path,
+                            "Applied decomposition has no child work: "
+                            f"{decomposition.child_work_id}",
+                        )
+                    elif action.status == "applied" and child is not None:
+                        parent = work_records.get((action.swarm_id, action.work_id))
+                        expected = (
+                            decomposition.title,
+                            decomposition.description or "No description provided.",
+                            dict(decomposition.acceptance_criteria),
+                            list(dict.fromkeys(decomposition.required_artifacts)),
+                            f"{action.swarm_id}/{action.work_id}",
+                        )
+                        actual = (
+                            child.title,
+                            child.description,
+                            child.acceptance_criteria,
+                            child.required_artifacts,
+                            child.parent_work_ref,
+                        )
+                        child_reference = f"{action.swarm_id}/{decomposition.child_work_id}"
+                        if actual != expected or (
+                            parent is not None and child_reference not in parent.child_work_refs
+                        ):
+                            issue(
+                                "lifecycle-action.decomposition-mismatch",
+                                Path(child.path) / "WORK.md",
+                                "Child work differs from its applied Lifecycle Action",
                             )
             if action.action in {"actor.key.recover", "actor.key.rotate"}:
                 target_reference = action.parameters.get("target", action.actor)
@@ -7698,6 +7952,7 @@ class AgoraWorkspace:
             evidence_results=strings_attribute(evidence.attributes, "results"),
             approval_roles=approval_roles,
             path=str(path),
+            child_work_refs=strings_attribute(document.attributes, "child-work-refs"),
             operational_status=_work_operational_status(
                 document.attributes.get("operational-status", "active")
             ),
@@ -7727,6 +7982,7 @@ class AgoraWorkspace:
             "acceptance-criteria": work.acceptance_criteria,
             "satisfied-criteria": work.satisfied_criteria,
             "required-artifacts": work.required_artifacts,
+            "child-work-refs": work.child_work_refs,
         }
         if work.delegation_id is not None:
             attributes["delegation"] = work.delegation_id
@@ -7787,6 +8043,7 @@ class AgoraWorkspace:
             "evidence.add",
             "work.block",
             "work.cancel",
+            "work.decompose",
             "work.resume",
             "work.transition",
         }:
@@ -7997,6 +8254,7 @@ class AgoraWorkspace:
             "swarm.assign",
             "work.block",
             "work.cancel",
+            "work.decompose",
             "work.resume",
             "work.transition",
             "work.create",
@@ -8047,6 +8305,13 @@ class AgoraWorkspace:
             "work.resume": {"reason"},
             "work.transition": {"to"},
             "work.create": {
+                "title",
+                "description",
+                "acceptance-criteria",
+                "required-artifacts",
+            },
+            "work.decompose": {
+                "child-work",
                 "title",
                 "description",
                 "acceptance-criteria",
@@ -8132,7 +8397,9 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Lifecycle Action has invalid delegation required artifacts: {path}"
                 )
-        if action == "work.create":
+        if action in {"work.create", "work.decompose"}:
+            if action == "work.decompose":
+                assert_slug(parameters["child-work"], "Lifecycle Action child work id")
             try:
                 criteria = json.loads(parameters["acceptance-criteria"])
                 artifacts = json.loads(parameters["required-artifacts"])

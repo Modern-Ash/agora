@@ -129,6 +129,17 @@ specified -> planned -> implementing -> reviewing -> verifying -> completed
 Only declared transition edges can be traversed. Scrum also declares review and verification rework
 edges back to `implementing`, with role restrictions and WIP limits on active states.
 
+The Product Owner may also materialize a smaller contract inside the same swarm:
+
+```bash
+agora work decompose --swarm payment-api --work authenticated-endpoint \
+  --child authentication-tests --title "Verify authentication paths" \
+  --criterion covered:"Authentication paths have tests" --by owner
+```
+
+The parent cannot complete or be cancelled until this child completes or is explicitly cancelled.
+See [Work decomposition](guides/work-decomposition.md).
+
 ## 7. Execute and record evidence
 
 Prepare the AI actor's execution context before it changes the project:
