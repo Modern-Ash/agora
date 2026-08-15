@@ -27,8 +27,12 @@ from agora.model import (
     LaunchSessionInput,
     LaunchToolRunInput,
     PrepareApprovalInput,
+    PrepareArtifactInput,
     PrepareCreateDelegationInput,
+    PrepareCreateWorkInput,
+    PrepareCriterionInput,
     PrepareDelegationActionInput,
+    PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareToolAuthorizationInput,
@@ -117,14 +121,28 @@ def _authenticated_project(
     return root, workspace, private_key, calls
 
 
-def _create_authenticated_work(workspace: AgoraWorkspace) -> None:
-    workspace.create_work(
-        CreateWorkInput(
-            swarm_id="delivery",
-            id="signed-work",
-            title="Apply a signed lifecycle mutation",
-            actor_id="owner",
-        )
+def _create_authenticated_work(
+    workspace: AgoraWorkspace,
+    private_key: Ed25519PrivateKey,
+    output_root: Path,
+    data: CreateWorkInput | None = None,
+    action_id: str = "create-signed-work",
+) -> None:
+    work = data or CreateWorkInput(
+        swarm_id="delivery",
+        id="signed-work",
+        title="Apply a signed lifecycle mutation",
+        actor_id="owner",
+    )
+    workspace.prepare_create_work(PrepareCreateWorkInput(action_id=action_id, work=work))
+    payload = output_root / f"{action_id}.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(action_id=action_id, output=str(payload))
+    )
+    signature = output_root / f"{action_id}.sig"
+    signature.write_bytes(private_key.sign(payload.read_bytes()))
+    workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=action_id, signature=str(signature))
     )
 
 
@@ -132,7 +150,7 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
-    _create_authenticated_work(workspace)
+    _create_authenticated_work(workspace, private_key, tmp_path)
     transition = TransitionWorkInput(
         swarm_id="delivery",
         work_id="signed-work",
@@ -169,7 +187,7 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     assert applied.authentication_verified is True
     assert applied.authentication_fingerprint == authorization.fingerprint
     assert workspace.show_work("delivery", "signed-work").state == "planned"
-    assert workspace.list_lifecycle_actions("applied") == [applied]
+    assert workspace.list_lifecycle_actions("applied")[-1] == applied
     action_path = root / ".agora" / "actions" / prepared.id / "ACTION.md"
     assert action_path.is_file()
     assert workspace.validate().ok
@@ -190,11 +208,104 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     assert any(issue.code == "lifecycle-action.invalid" for issue in report.issues)
 
 
+def test_signs_work_creation_criteria_artifacts_and_evidence(tmp_path: Path, monkeypatch) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+
+    def sign_and_apply(action_id: str) -> dict[str, object]:
+        payload = tmp_path / f"{action_id}.json"
+        workspace.prepare_lifecycle_authorization(
+            PrepareLifecycleAuthorizationInput(action_id=action_id, output=str(payload))
+        )
+        signature = tmp_path / f"{action_id}.sig"
+        signature.write_bytes(private_key.sign(payload.read_bytes()))
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action_id, signature=str(signature))
+        )
+        return json.loads(payload.read_text(encoding="ascii"))
+
+    creation = CreateWorkInput(
+        swarm_id="delivery",
+        id="signed-materials",
+        title="Persist signed material changes",
+        actor_id="owner",
+        description="Bind each material mutation to the current work projection.",
+        acceptance_criteria=[("verified", "The result has durable evidence")],
+        required_artifacts=["implementation"],
+    )
+    with pytest.raises(PermissionError, match="prepare work.create"):
+        workspace.create_work(creation)
+    workspace.prepare_create_work(
+        PrepareCreateWorkInput(action_id="create-signed-materials", work=creation)
+    )
+    create_payload = sign_and_apply("create-signed-materials")
+    assert create_payload["kind"] == "work.create"
+    assert create_payload["work"] == "signed-materials"
+
+    criterion = WorkActorInput(swarm_id="delivery", work_id="signed-materials", actor_id="owner")
+    with pytest.raises(PermissionError, match="prepare criterion.satisfy"):
+        workspace.satisfy_criterion(criterion, "verified")
+    workspace.prepare_satisfy_criterion(
+        PrepareCriterionInput(
+            id="satisfy-signed-materials",
+            **criterion.__dict__,
+            criterion_id="verified",
+        )
+    )
+    sign_and_apply("satisfy-signed-materials")
+
+    artifact = AddArtifactInput(
+        swarm_id="delivery",
+        work_id="signed-materials",
+        actor_id="developer",
+        kind="implementation",
+        uri="repo://delivery/signed-materials.md",
+    )
+    with pytest.raises(PermissionError, match="prepare artifact.add"):
+        workspace.add_artifact(artifact)
+    workspace.prepare_add_artifact(
+        PrepareArtifactInput(id="add-signed-artifact", **artifact.__dict__)
+    )
+    sign_and_apply("add-signed-artifact")
+
+    evidence = AddEvidenceInput(
+        swarm_id="delivery",
+        work_id="signed-materials",
+        actor_id="facilitator",
+        type="review",
+        result="success",
+        artifact_refs=["repo://delivery/signed-materials.md"],
+    )
+    with pytest.raises(PermissionError, match="prepare evidence.add"):
+        workspace.add_evidence(evidence)
+    workspace.prepare_add_evidence(
+        PrepareEvidenceInput(id="add-signed-evidence", **evidence.__dict__)
+    )
+    evidence_payload = sign_and_apply("add-signed-evidence")
+    assert evidence_payload["parameters"]["artifacts"] == (
+        '["repo://delivery/signed-materials.md"]'
+    )
+    assert workspace.validate().ok
+
+    artifact_path = (
+        root / ".agora" / "swarms" / "delivery" / "work" / "signed-materials" / "artifacts.md"
+    )
+    artifact_path.write_text(
+        artifact_path.read_text(encoding="utf-8").replace(
+            "repo://delivery/signed-materials.md",
+            "repo://delivery/unrecorded.md",
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert not report.ok
+    assert any(issue.code == "lifecycle-action.artifact-mismatch" for issue in report.issues)
+
+
 def test_rejects_lifecycle_signature_replay_and_stale_work_state(
     tmp_path: Path, monkeypatch
 ) -> None:
     _, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
-    _create_authenticated_work(workspace)
+    _create_authenticated_work(workspace, private_key, tmp_path)
     base = {
         "swarm_id": "delivery",
         "work_id": "signed-work",
@@ -238,7 +349,7 @@ def test_applies_a_signed_approval_with_role_and_note_bound_to_the_action(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
-    _create_authenticated_work(workspace)
+    _create_authenticated_work(workspace, private_key, tmp_path)
     approval = AddApprovalInput(
         swarm_id="delivery",
         work_id="signed-work",
@@ -360,7 +471,7 @@ def test_applies_signed_work_interruptions_with_durable_status_changes(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
-    _create_authenticated_work(workspace)
+    _create_authenticated_work(workspace, private_key, tmp_path)
 
     def sign_and_apply(action_id: str) -> tuple[dict[str, object], object]:
         payload_path = tmp_path / f"{action_id}.json"
@@ -507,13 +618,17 @@ def test_applies_signed_delegation_status_decisions_across_parent_and_child(
         ("developer", "specialist-swarm"),
     ):
         workspace.assign_actor(AssignActorInput(swarm_id="parent", role_id=role, actor_id=actor_id))
-    workspace.create_work(
+    _create_authenticated_work(
+        workspace,
+        private_key,
+        tmp_path,
         CreateWorkInput(
             swarm_id="parent",
             id="parent-work",
             title="Integrate delegated output",
             actor_id="owner",
-        )
+        ),
+        "create-parent-work",
     )
 
     def create_delegation(delegation_id: str) -> None:
@@ -682,14 +797,18 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
         workspace.assign_actor(
             AssignActorInput(swarm_id="signed-parent", role_id=role, actor_id=actor_id)
         )
-    workspace.create_work(
+    _create_authenticated_work(
+        workspace,
+        private_key,
+        tmp_path,
         CreateWorkInput(
             swarm_id="signed-parent",
             id="parent-contract",
             title="Integrate the signed result",
             actor_id="owner",
             required_artifacts=["delegated-result"],
-        )
+        ),
+        "create-parent-contract",
     )
 
     def export_and_sign(action_id: str) -> tuple[Path, Path]:
@@ -751,12 +870,16 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
                 target_state=state,
             )
         )
-    workspace.satisfy_criterion(
-        WorkActorInput(
-            swarm_id="signed-specialists", work_id="signed-child-work", actor_id="owner"
+    workspace.prepare_satisfy_criterion(
+        PrepareCriterionInput(
+            id="satisfy-signed-child",
+            swarm_id="signed-specialists",
+            work_id="signed-child-work",
+            actor_id="owner",
+            criterion_id="usable",
         ),
-        "usable",
     )
+    sign_and_apply("satisfy-signed-child")
     workspace.add_artifact(
         AddArtifactInput(
             swarm_id="signed-specialists",
@@ -810,8 +933,9 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
         )
     )
     _, stale_signature = export_and_sign(stale.id)
-    workspace.add_evidence(
-        AddEvidenceInput(
+    workspace.prepare_add_evidence(
+        PrepareEvidenceInput(
+            id="change-parent-evidence",
             swarm_id="signed-parent",
             work_id="parent-contract",
             actor_id="facilitator",
@@ -819,6 +943,7 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
             result="success",
         )
     )
+    sign_and_apply("change-parent-evidence")
     with pytest.raises(ValueError, match="precondition digest mismatch"):
         workspace.apply_lifecycle_action(
             ApplyLifecycleActionInput(action_id=stale.id, signature=str(stale_signature))

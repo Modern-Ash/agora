@@ -2,12 +2,54 @@
 
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
 current work projection. The supported mutations are `work.transition`, `work.block`, `work.resume`,
-`work.cancel`, `approval.add`, `handoff.create`, and the complete delegation lifecycle. Their durable
-intents live at `.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
+`work.cancel`, `work.create`, `criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`,
+`handoff.create`, and the complete delegation lifecycle. Their durable intents live at
+`.agora/actions/<id>/ACTION.md`, separate from the resulting domain records.
 
 This boundary proves that the configured actor key authorized one exact mutation against one exact
 work state. It does not replace Method Pack permissions, transition edges, WIP limits, gates, Git
 review, or operating-system identity.
+
+## Prepare work and material records
+
+An authenticated Product Owner can bind the complete initial work definition before it exists:
+
+```bash
+agora work create-prepare \
+  --action-id create-payment-retry \
+  --swarm payments \
+  --id payment-retry \
+  --title "Retry failed payments" \
+  --criterion verified:"The retry has durable evidence" \
+  --required-artifact implementation \
+  --by authenticated-owner
+```
+
+The action work reference is the future work id. Its precondition covers `SWARM.md`; apply rechecks
+swarm readiness, assignment, `work.create` authority, Method Pack availability, criterion ids, and
+path availability before writing the ordinary work documents.
+
+Authenticated participants prepare criteria, artifacts, and evidence against an existing work
+projection:
+
+```bash
+agora work criterion-satisfy-prepare --id satisfy-payment-retry \
+  --swarm payments --work payment-retry --criterion verified \
+  --by authenticated-owner
+
+agora artifact prepare --id add-payment-implementation \
+  --swarm payments --work payment-retry --kind implementation \
+  --uri repo://payments/retry.md --by authenticated-developer
+
+agora evidence prepare --id record-payment-review \
+  --swarm payments --work payment-retry --type review --result success \
+  --artifact repo://payments/retry.md --by authenticated-reviewer
+```
+
+These actions bind the criterion id, artifact kind and URI, or evidence type, result, and artifact
+references. Their precondition covers `WORK.md`, `approvals.md`, `artifacts.md`, and `evidence.md`.
+Apply rechecks Method Pack authority and work mutability before updating the same Markdown records
+used by unauthenticated actors.
 
 ## Prepare a transition
 
@@ -222,5 +264,6 @@ The stale intent remains on disk for audit and cannot be applied.
 
 `agora/lifecycle-action/v1` separates the common authorization envelope from the action-specific
 parameter map. The current kernel accepts work transitions and interruptions, approvals, handoffs,
-and every delegation lifecycle mutation. Administrative mutations remain future action kinds and
-must keep their existing domain validation as the source of authority when added.
+work creation and material records, and every delegation lifecycle mutation. Administrative
+mutations remain future action kinds and must keep their existing domain validation as the source of
+authority when added.

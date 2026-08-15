@@ -33,8 +33,12 @@ from agora.model import (
     LaunchSessionInput,
     LaunchToolRunInput,
     PrepareApprovalInput,
+    PrepareArtifactInput,
     PrepareCreateDelegationInput,
+    PrepareCreateWorkInput,
+    PrepareCriterionInput,
     PrepareDelegationActionInput,
+    PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareToolAuthorizationInput,
@@ -485,12 +489,31 @@ def _build_parser() -> argparse.ArgumentParser:
     work_create.add_argument("--description", default="")
     work_create.add_argument("--criterion", action="append", default=[])
     work_create.add_argument("--required-artifact", action="append", default=[])
+    work_create_prepare = work.add_parser(
+        "create-prepare", help="Prepare a signed work creation intent"
+    )
+    work_create_prepare.add_argument("--action-id", required=True)
+    work_create_prepare.add_argument("--swarm", required=True)
+    work_create_prepare.add_argument("--id", required=True)
+    work_create_prepare.add_argument("--title", required=True)
+    work_create_prepare.add_argument("--by", required=True)
+    work_create_prepare.add_argument("--description", default="")
+    work_create_prepare.add_argument("--criterion", action="append", default=[])
+    work_create_prepare.add_argument("--required-artifact", action="append", default=[])
 
     criterion = work.add_parser("criterion-satisfy", help="Satisfy an acceptance criterion")
     criterion.add_argument("--swarm", required=True)
     criterion.add_argument("--work", required=True)
     criterion.add_argument("--criterion", required=True)
     criterion.add_argument("--by", required=True)
+    criterion_prepare = work.add_parser(
+        "criterion-satisfy-prepare", help="Prepare a signed criterion satisfaction intent"
+    )
+    criterion_prepare.add_argument("--id", required=True)
+    criterion_prepare.add_argument("--swarm", required=True)
+    criterion_prepare.add_argument("--work", required=True)
+    criterion_prepare.add_argument("--criterion", required=True)
+    criterion_prepare.add_argument("--by", required=True)
 
     transition = work.add_parser("transition", help="Move work across an allowed method edge")
     transition.add_argument("--swarm", required=True)
@@ -590,6 +613,13 @@ def _build_parser() -> argparse.ArgumentParser:
     artifact_add.add_argument("--kind", required=True)
     artifact_add.add_argument("--uri", required=True)
     artifact_add.add_argument("--by", required=True)
+    artifact_prepare = artifact.add_parser("prepare", help="Prepare a signed artifact intent")
+    artifact_prepare.add_argument("--id", required=True)
+    artifact_prepare.add_argument("--swarm", required=True)
+    artifact_prepare.add_argument("--work", required=True)
+    artifact_prepare.add_argument("--kind", required=True)
+    artifact_prepare.add_argument("--uri", required=True)
+    artifact_prepare.add_argument("--by", required=True)
 
     evidence = commands.add_parser("evidence", help="Manage evidence").add_subparsers(
         dest="evidence_command", required=True
@@ -601,6 +631,14 @@ def _build_parser() -> argparse.ArgumentParser:
     evidence_add.add_argument("--result", choices=("success", "failure"), required=True)
     evidence_add.add_argument("--by", required=True)
     evidence_add.add_argument("--artifact", action="append", default=[])
+    evidence_prepare = evidence.add_parser("prepare", help="Prepare a signed evidence intent")
+    evidence_prepare.add_argument("--id", required=True)
+    evidence_prepare.add_argument("--swarm", required=True)
+    evidence_prepare.add_argument("--work", required=True)
+    evidence_prepare.add_argument("--type", required=True)
+    evidence_prepare.add_argument("--result", choices=("success", "failure"), required=True)
+    evidence_prepare.add_argument("--by", required=True)
+    evidence_prepare.add_argument("--artifact", action="append", default=[])
 
     approval = commands.add_parser(
         "approval", help="Manage explicit work approvals"
@@ -1026,10 +1064,35 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 required_artifacts=args.required_artifact,
             )
         )
+    if args.command == "work" and args.work_command == "create-prepare":
+        return workspace.prepare_create_work(
+            PrepareCreateWorkInput(
+                action_id=args.action_id,
+                work=CreateWorkInput(
+                    swarm_id=args.swarm,
+                    id=args.id,
+                    title=args.title,
+                    actor_id=args.by,
+                    description=args.description,
+                    acceptance_criteria=[_parse_criterion(item) for item in args.criterion],
+                    required_artifacts=args.required_artifact,
+                ),
+            )
+        )
     if args.command == "work" and args.work_command == "criterion-satisfy":
         return workspace.satisfy_criterion(
             WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
             args.criterion,
+        )
+    if args.command == "work" and args.work_command == "criterion-satisfy-prepare":
+        return workspace.prepare_satisfy_criterion(
+            PrepareCriterionInput(
+                id=args.id,
+                swarm_id=args.swarm,
+                work_id=args.work,
+                actor_id=args.by,
+                criterion_id=args.criterion,
+            )
         )
     if args.command == "work" and args.work_command == "transition":
         return workspace.transition_work(
@@ -1131,9 +1194,32 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 uri=args.uri,
             )
         )
+    if args.command == "artifact" and args.artifact_command == "prepare":
+        return workspace.prepare_add_artifact(
+            PrepareArtifactInput(
+                id=args.id,
+                swarm_id=args.swarm,
+                work_id=args.work,
+                actor_id=args.by,
+                kind=args.kind,
+                uri=args.uri,
+            )
+        )
     if args.command == "evidence" and args.evidence_command == "add":
         return workspace.add_evidence(
             AddEvidenceInput(
+                swarm_id=args.swarm,
+                work_id=args.work,
+                actor_id=args.by,
+                type=args.type,
+                result=args.result,
+                artifact_refs=args.artifact,
+            )
+        )
+    if args.command == "evidence" and args.evidence_command == "prepare":
+        return workspace.prepare_add_evidence(
+            PrepareEvidenceInput(
+                id=args.id,
                 swarm_id=args.swarm,
                 work_id=args.work,
                 actor_id=args.by,

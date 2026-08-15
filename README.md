@@ -646,9 +646,10 @@ versioned registry snapshot without persisting a private key.
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection
   are implemented.
-- Optional Ed25519 actor authentication protects work transitions, interruptions, approvals,
-  handoffs, the complete delegation lifecycle, Tool Run launch, and agent-session launch while leaving
-  private keys external. Public-key rotation and revocation histories are implemented. Tool Packs
+- Optional Ed25519 actor authentication protects work creation, criteria, artifacts, evidence,
+  transitions, interruptions, approvals, handoffs, the complete delegation lifecycle, Tool Run
+  launch, and agent-session launch while leaving private keys external. Public-key rotation and
+  revocation histories are implemented. Tool Packs
   declare portable direct-process timeouts and captured-output limits. Session preparation,
   administrative key-change authorization, filesystem/network/syscall isolation,
   resource quotas, and process-tree containment are not yet covered by that policy.

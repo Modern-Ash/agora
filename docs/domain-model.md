@@ -99,12 +99,14 @@ To act, an actor must:
 A **Lifecycle Action** is a prepared mutation intent stored independently from current work state.
 Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
 SHA-256 precondition. Supported kinds cover work transitions, work interruptions, approvals,
-handoffs, and the complete delegation lifecycle. Work mutations cover the work projection, artifacts,
-evidence, and approvals on which the
-mutation depends. Interruption reasons are signed and successful actions link exactly to their
-`STATUS.md`. Approval parameters bind both the asserted role and durable note. A handoff instead covers
-the swarm assignment projection and optional referenced work while binding both actor identities,
-the role, and reason.
+handoffs, work creation and material records, and the complete delegation lifecycle. Existing-work
+mutations cover the work projection, artifacts, evidence, and approvals on which the mutation
+depends. Work creation instead covers the swarm projection and binds the complete initial work
+definition. Criterion, artifact, and evidence parameters bind their exact durable values.
+Interruption reasons are signed and successful actions link exactly to their `STATUS.md`. Approval
+parameters bind both the asserted role and durable note. A handoff instead covers the swarm
+assignment projection and optional referenced work while binding both actor identities, the role,
+and reason.
 
 A signed delegation status decision binds its delegation id and reason to both `DELEGATION.md` and
 the parent work digest. Parent governance authorizes block, resume, and cancel; child authority

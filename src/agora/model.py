@@ -902,6 +902,12 @@ class CreateWorkInput:
 
 
 @dataclass(frozen=True)
+class PrepareCreateWorkInput:
+    action_id: str
+    work: CreateWorkInput
+
+
+@dataclass(frozen=True)
 class WorkActorInput:
     swarm_id: str
     work_id: str
@@ -928,6 +934,12 @@ class TransitionWorkInput(WorkActorInput):
 @dataclass(frozen=True)
 class PrepareWorkTransitionInput(TransitionWorkInput):
     id: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareCriterionInput(WorkActorInput):
+    id: str = ""
+    criterion_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -984,6 +996,16 @@ class AddEvidenceInput(WorkActorInput):
     type: str = ""
     result: Literal["success", "failure"] = "failure"
     artifact_refs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PrepareArtifactInput(AddArtifactInput):
+    id: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareEvidenceInput(AddEvidenceInput):
+    id: str = ""
 
 
 @dataclass(frozen=True)

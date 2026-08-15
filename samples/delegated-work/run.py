@@ -8,7 +8,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from agora.model import (
     AddActorInput,
     AddArtifactInput,
-    AddEvidenceInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
@@ -18,11 +17,13 @@ from agora.model import (
     InitInput,
     PrepareApprovalInput,
     PrepareCreateDelegationInput,
+    PrepareCreateWorkInput,
+    PrepareCriterionInput,
     PrepareDelegationActionInput,
+    PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
     PrepareWorkTransitionInput,
     TransitionWorkInput,
-    WorkActorInput,
 )
 from agora.workspace import AgoraWorkspace
 
@@ -114,15 +115,17 @@ def main() -> None:
         "Integrate a governed specialist result",
         "specialist-swarm",
     )
-    agora.create_work(
-        CreateWorkInput(
-            swarm_id="delivery",
-            id="parent-slice",
-            title="Integrate the specialist result",
-            actor_id="owner",
-            required_artifacts=["delegated-result"],
-        )
+    parent_work = CreateWorkInput(
+        swarm_id="delivery",
+        id="parent-slice",
+        title="Integrate the specialist result",
+        actor_id="owner",
+        required_artifacts=["delegated-result"],
     )
+    parent_creation = agora.prepare_create_work(
+        PrepareCreateWorkInput(action_id="create-parent-slice", work=parent_work)
+    )
+    sign_and_apply(parent_creation.id, "owner")
 
     proposal = CreateDelegationInput(
         id="specialist-task",
@@ -195,10 +198,16 @@ def main() -> None:
         )
     )
     sign_and_apply(verify_action.id, "facilitator")
-    agora.satisfy_criterion(
-        WorkActorInput(swarm_id="specialists", work_id="child-slice", actor_id="owner"),
-        "usable",
+    criterion = agora.prepare_satisfy_criterion(
+        PrepareCriterionInput(
+            id="satisfy-child-result",
+            swarm_id="specialists",
+            work_id="child-slice",
+            actor_id="owner",
+            criterion_id="usable",
+        )
     )
+    sign_and_apply(criterion.id, "owner")
     agora.add_artifact(
         AddArtifactInput(
             swarm_id="specialists",
@@ -208,8 +217,9 @@ def main() -> None:
             uri="repo://specialists/result.md",
         )
     )
-    agora.add_evidence(
-        AddEvidenceInput(
+    evidence = agora.prepare_add_evidence(
+        PrepareEvidenceInput(
+            id="record-child-review",
             swarm_id="specialists",
             work_id="child-slice",
             actor_id="facilitator",
@@ -218,6 +228,7 @@ def main() -> None:
             artifact_refs=["repo://specialists/result.md"],
         )
     )
+    sign_and_apply(evidence.id, "facilitator")
     approval = agora.prepare_approval(
         PrepareApprovalInput(
             id="approve-child-slice",

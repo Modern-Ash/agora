@@ -108,8 +108,12 @@ from agora.model import (
     PackUpdateResult,
     PackUpdateStep,
     PrepareApprovalInput,
+    PrepareArtifactInput,
     PrepareCreateDelegationInput,
+    PrepareCreateWorkInput,
+    PrepareCriterionInput,
     PrepareDelegationActionInput,
+    PrepareEvidenceInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareToolAuthorizationInput,
@@ -2130,8 +2134,49 @@ class AgoraWorkspace:
 
     @_locked_mutation("project")
     def create_work(self, data: CreateWorkInput) -> WorkRecord:
-        assert_slug(data.id, "Work id")
         root = self.project_root()
+        context = self._validate_create_work(root, data)
+        actor = context[1]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare work.create before applying it"
+            )
+        return self._apply_create_work(data, context)
+
+    @_locked_mutation("project")
+    def prepare_create_work(self, data: PrepareCreateWorkInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, _, criteria, _ = self._validate_create_work(root, data.work)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="work.create",
+            actor=actor,
+            swarm=swarm,
+            work=None,
+            work_id=data.work.id,
+            parameters={
+                "title": data.work.title,
+                "description": data.work.description,
+                "acceptance-criteria": json.dumps(
+                    list(criteria.items()), ensure_ascii=True, separators=(",", ":")
+                ),
+                "required-artifacts": json.dumps(
+                    list(dict.fromkeys(data.work.required_artifacts)),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+    def _validate_create_work(
+        self, root: Path, data: CreateWorkInput
+    ) -> tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path]:
+        assert_slug(data.id, "Work id")
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"ready", "running"}:
             raise ValueError(f"Swarm {swarm.id} must be ready before work can be created")
@@ -2144,6 +2189,16 @@ class AgoraWorkspace:
             assert_slug(criterion_id, "Criterion id")
 
         path = Path(swarm.path) / "work" / data.id
+        if path.exists():
+            raise FileExistsError(f"Work already exists: {swarm.id}/{data.id}")
+        return swarm, actor, contract, criteria, path
+
+    def _apply_create_work(
+        self,
+        data: CreateWorkInput,
+        context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ) -> WorkRecord:
+        swarm, actor, contract, criteria, path = context
         work = WorkRecord(
             id=data.id,
             swarm_id=swarm.id,
@@ -2203,12 +2258,49 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def satisfy_criterion(self, data: WorkActorInput, criterion_id: str) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_satisfy_criterion(root, data, criterion_id)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare criterion.satisfy before applying it"
+            )
+        return self._apply_satisfy_criterion(swarm, actor, work, criterion_id)
+
+    @_locked_mutation("project")
+    def prepare_satisfy_criterion(self, data: PrepareCriterionInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_satisfy_criterion(root, data, data.criterion_id)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="criterion.satisfy",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"criterion": data.criterion_id},
+        )
+
+    def _validate_satisfy_criterion(
+        self, root: Path, data: WorkActorInput, criterion_id: str
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "criterion.satisfy")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
         if criterion_id not in work.acceptance_criteria:
             raise FileNotFoundError(f"Acceptance criterion not found: {criterion_id}")
+        return swarm, actor, work
+
+    def _apply_satisfy_criterion(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        criterion_id: str,
+    ) -> WorkRecord:
         work.satisfied_criteria = list(dict.fromkeys([*work.satisfied_criteria, criterion_id]))
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
         self._append_work_event(
@@ -2221,10 +2313,47 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def add_artifact(self, data: AddArtifactInput) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_add_artifact(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare artifact.add before applying it"
+            )
+        return self._apply_add_artifact(swarm, actor, work, data)
+
+    @_locked_mutation("project")
+    def prepare_add_artifact(self, data: PrepareArtifactInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_add_artifact(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="artifact.add",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"kind": data.kind, "uri": data.uri},
+        )
+
+    def _validate_add_artifact(
+        self, root: Path, data: AddArtifactInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "artifact.add")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        return swarm, actor, work
+
+    def _apply_add_artifact(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        data: AddArtifactInput,
+    ) -> WorkRecord:
         self._record_artifact(work, data.kind, data.uri, actor.reference)
         return self._load_work(swarm, data.work_id)
 
@@ -2247,10 +2376,53 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def add_evidence(self, data: AddEvidenceInput) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_add_evidence(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare evidence.add before applying it"
+            )
+        return self._apply_add_evidence(swarm, actor, work, data)
+
+    @_locked_mutation("project")
+    def prepare_add_evidence(self, data: PrepareEvidenceInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_add_evidence(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="evidence.add",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "type": data.type,
+                "result": data.result,
+                "artifacts": json.dumps(
+                    data.artifact_refs, ensure_ascii=True, separators=(",", ":")
+                ),
+            },
+        )
+
+    def _validate_add_evidence(
+        self, root: Path, data: AddEvidenceInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "evidence.add")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        return swarm, actor, work
+
+    def _apply_add_evidence(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        data: AddEvidenceInput,
+    ) -> WorkRecord:
         self._record_evidence(
             work,
             data.type,
@@ -2388,8 +2560,9 @@ class AgoraWorkspace:
         action: str,
         actor: ActorRecord,
         swarm: SwarmRecord,
-        work: WorkRecord,
+        work: WorkRecord | None,
         parameters: dict[str, str],
+        work_id: str | None = None,
     ) -> LifecycleActionRecord:
         action_root = root / ".agora" / "actions" / id_
         if action_root.exists():
@@ -2399,7 +2572,7 @@ class AgoraWorkspace:
             action=action,
             actor=actor.reference,
             swarm_id=swarm.id,
-            work_id=work.id if work is not None else None,
+            work_id=work.id if work is not None else work_id,
             parameters=parameters,
             precondition_sha256=self._lifecycle_precondition_sha256(
                 root, action, swarm, work, parameters
@@ -2532,7 +2705,72 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
-        if record.action == "work.transition":
+        work_create_context: (
+            tuple[
+                CreateWorkInput,
+                tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+            ]
+            | None
+        ) = None
+        criterion_context: (
+            tuple[PrepareCriterionInput, SwarmRecord, ActorRecord, WorkRecord] | None
+        ) = None
+        artifact_context: (
+            tuple[PrepareArtifactInput, SwarmRecord, ActorRecord, WorkRecord] | None
+        ) = None
+        evidence_context: (
+            tuple[PrepareEvidenceInput, SwarmRecord, ActorRecord, WorkRecord] | None
+        ) = None
+        if record.action == "work.create":
+            creation = self._work_creation_input_from_action(record)
+            context = self._validate_create_work(root, creation)
+            swarm, actor, _, _, _ = context
+            work = None
+            if record.swarm_id != swarm.id or record.work_id != creation.id:
+                raise ValueError(f"Lifecycle Action work context is not canonical: {record.id}")
+            work_create_context = (creation, context)
+        elif record.action == "criterion.satisfy":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no criterion work: {record.id}")
+            criterion = PrepareCriterionInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                criterion_id=record.parameters["criterion"],
+            )
+            swarm, actor, work = self._validate_satisfy_criterion(
+                root, criterion, criterion.criterion_id
+            )
+            criterion_context = (criterion, swarm, actor, work)
+        elif record.action == "artifact.add":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no artifact work: {record.id}")
+            artifact = PrepareArtifactInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                kind=record.parameters["kind"],
+                uri=record.parameters["uri"],
+            )
+            swarm, actor, work = self._validate_add_artifact(root, artifact)
+            artifact_context = (artifact, swarm, actor, work)
+        elif record.action == "evidence.add":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no evidence work: {record.id}")
+            evidence = PrepareEvidenceInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                type=record.parameters["type"],
+                result=record.parameters["result"],
+                artifact_refs=self._string_list_parameter(record, "artifacts"),
+            )
+            swarm, actor, work = self._validate_add_evidence(root, evidence)
+            evidence_context = (evidence, swarm, actor, work)
+        elif record.action == "work.transition":
             if set(record.parameters) != {"to"}:
                 raise ValueError(f"Lifecycle Action has invalid transition parameters: {record.id}")
             if record.work_id is None:
@@ -2712,7 +2950,23 @@ class AgoraWorkspace:
                 actor, record, Path(data.signature).expanduser().resolve()
             )
 
-        if record.action == "work.transition":
+        if record.action == "work.create":
+            assert work_create_context is not None
+            creation, context = work_create_context
+            self._apply_create_work(creation, context)
+        elif record.action == "criterion.satisfy":
+            assert criterion_context is not None
+            criterion, swarm, actor, work = criterion_context
+            self._apply_satisfy_criterion(swarm, actor, work, criterion.criterion_id)
+        elif record.action == "artifact.add":
+            assert artifact_context is not None
+            artifact, swarm, actor, work = artifact_context
+            self._apply_add_artifact(swarm, actor, work, artifact)
+        elif record.action == "evidence.add":
+            assert evidence_context is not None
+            evidence, swarm, actor, work = evidence_context
+            self._apply_add_evidence(swarm, actor, work, evidence)
+        elif record.action == "work.transition":
             self._apply_work_transition(root, swarm, actor, work, record.parameters["to"])
         elif record.action == "approval.add":
             self._apply_approval(
@@ -2784,6 +3038,45 @@ class AgoraWorkspace:
             f"- {self._timestamp()} | lifecycle-action.applied | action={record.id}",
         )
         return applied
+
+    @staticmethod
+    def _string_list_parameter(record: LifecycleActionRecord, key: str) -> list[str]:
+        try:
+            value = json.loads(record.parameters[key])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid JSON parameter {key}: {record.id}"
+            ) from error
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"Lifecycle Action parameter {key} must be a string list: {record.id}")
+        return value
+
+    @classmethod
+    def _work_creation_input_from_action(cls, record: LifecycleActionRecord) -> CreateWorkInput:
+        if record.work_id is None:
+            raise ValueError(f"Lifecycle Action has no created work id: {record.id}")
+        try:
+            raw_criteria = json.loads(record.parameters["acceptance-criteria"])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid work acceptance criteria: {record.id}"
+            ) from error
+        if not isinstance(raw_criteria, list) or any(
+            not isinstance(item, list)
+            or len(item) != 2
+            or any(not isinstance(value, str) for value in item)
+            for item in raw_criteria
+        ):
+            raise ValueError(f"Lifecycle Action has invalid work acceptance criteria: {record.id}")
+        return CreateWorkInput(
+            swarm_id=record.swarm_id,
+            id=record.work_id,
+            title=record.parameters["title"],
+            actor_id=record.actor,
+            acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
+            required_artifacts=cls._string_list_parameter(record, "required-artifacts"),
+            description=record.parameters["description"],
+        )
 
     @staticmethod
     def _delegation_creation_input_from_action(
@@ -3276,17 +3569,16 @@ class AgoraWorkspace:
         context: tuple[DelegationRecord, SwarmRecord, WorkRecord, SwarmRecord, ActorRecord],
     ) -> DelegationRecord:
         delegation, _, parent_work, child, actor = context
-        child_work = self.create_work(
-            CreateWorkInput(
-                swarm_id=child.id,
-                id=delegation.child_work_id,
-                title=delegation.title,
-                actor_id=data.actor_id,
-                acceptance_criteria=list(delegation.acceptance_criteria.items()),
-                required_artifacts=delegation.required_artifacts,
-                description=delegation.description,
-            )
+        work_data = CreateWorkInput(
+            swarm_id=child.id,
+            id=delegation.child_work_id,
+            title=delegation.title,
+            actor_id=data.actor_id,
+            acceptance_criteria=list(delegation.acceptance_criteria.items()),
+            required_artifacts=delegation.required_artifacts,
+            description=delegation.description,
         )
+        child_work = self._apply_create_work(work_data, self._validate_create_work(root, work_data))
         child_work.delegation_id = delegation.id
         child_work.parent_work_ref = f"{delegation.parent_swarm_id}/{delegation.parent_work_id}"
         atomic_write(Path(child_work.path) / "WORK.md", self._render_work(child_work))
@@ -5448,7 +5740,11 @@ class AgoraWorkspace:
                     path,
                     f"Lifecycle Action references missing swarm: {action.swarm_id}",
                 )
-            if action.work_id is not None and (action.swarm_id, action.work_id) not in work_records:
+            if (
+                action.work_id is not None
+                and (action.swarm_id, action.work_id) not in work_records
+                and not (action.action == "work.create" and action.status == "prepared")
+            ):
                 issue(
                     "lifecycle-action.work-missing",
                     path,
@@ -5464,6 +5760,80 @@ class AgoraWorkspace:
                         str(error),
                         "warning",
                     )
+            if action.action == "work.create" and action.work_id is not None:
+                work_key = (action.swarm_id, action.work_id)
+                if action.status == "prepared" and work_key in work_records:
+                    issue(
+                        "lifecycle-action.work-conflict",
+                        path,
+                        f"Prepared action already has a work record: {action.work_id}",
+                    )
+                elif action.status == "applied" and work_key in work_records:
+                    work = work_records[work_key]
+                    try:
+                        creation = self._work_creation_input_from_action(action)
+                    except ValueError as error:
+                        issue("lifecycle-action.work-invalid", path, str(error))
+                    else:
+                        expected = (
+                            creation.title,
+                            creation.description or "No description provided.",
+                            dict(creation.acceptance_criteria),
+                            list(dict.fromkeys(creation.required_artifacts)),
+                        )
+                        actual = (
+                            work.title,
+                            work.description,
+                            work.acceptance_criteria,
+                            work.required_artifacts,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.work-mismatch",
+                                Path(work.path) / "WORK.md",
+                                "Work record differs from its applied Lifecycle Action",
+                            )
+            if (
+                action.status == "applied"
+                and action.action in {"artifact.add", "criterion.satisfy", "evidence.add"}
+                and action.work_id is not None
+                and (action.swarm_id, action.work_id) in work_records
+            ):
+                work = work_records[(action.swarm_id, action.work_id)]
+                if action.action == "criterion.satisfy":
+                    if action.parameters["criterion"] not in work.satisfied_criteria:
+                        issue(
+                            "lifecycle-action.criterion-mismatch",
+                            Path(work.path) / "WORK.md",
+                            "Satisfied criterion is missing from its applied Lifecycle Action",
+                        )
+                elif action.action == "artifact.add":
+                    artifact_line = (
+                        f"| {action.parameters['kind']} | {action.parameters['uri']} | "
+                        f"{action.actor} |"
+                    )
+                    artifact_path = Path(work.path) / "artifacts.md"
+                    if artifact_line not in artifact_path.read_text(encoding="utf-8"):
+                        issue(
+                            "lifecycle-action.artifact-mismatch",
+                            artifact_path,
+                            "Artifact row is missing from its applied Lifecycle Action",
+                        )
+                else:
+                    references = (
+                        ", ".join(self._string_list_parameter(action, "artifacts")) or "none"
+                    )
+                    evidence_line = (
+                        f"| {action.parameters['type']} | {action.parameters['result']} | "
+                        f"{references} | {action.actor} |"
+                    )
+                    evidence_path = Path(work.path) / "evidence.md"
+                    if evidence_line not in evidence_path.read_text(encoding="utf-8"):
+                        issue(
+                            "lifecycle-action.evidence-mismatch",
+                            evidence_path,
+                            "Evidence row is missing from its applied Lifecycle Action",
+                        )
             if action.action == "handoff.create" and action.swarm_id in swarms:
                 swarm = swarms[action.swarm_id]
                 handoff_path = Path(swarm.path) / "handoffs" / action.id / "HANDOFF.md"
@@ -5593,7 +5963,7 @@ class AgoraWorkspace:
                             child_actor.reference,
                             action.actor,
                             creation.title,
-                            creation.description,
+                            creation.description or "No description provided.",
                             dict(creation.acceptance_criteria),
                             list(dict.fromkeys(creation.required_artifacts)),
                             creation.result_kind,
@@ -6746,6 +7116,9 @@ class AgoraWorkspace:
     ) -> str:
         if action in {
             "approval.add",
+            "artifact.add",
+            "criterion.satisfy",
+            "evidence.add",
             "work.block",
             "work.cancel",
             "work.resume",
@@ -6754,6 +7127,15 @@ class AgoraWorkspace:
             if work is None:
                 raise ValueError(f"Lifecycle Action {action} requires work")
             return self._work_precondition_sha256(work)
+        if action == "work.create":
+            swarm_path = Path(swarm.path) / "SWARM.md"
+            if not swarm_path.is_file():
+                raise FileNotFoundError(f"Swarm policy document is missing: {swarm_path}")
+            digest = hashlib.sha256()
+            digest.update(b"SWARM.md\0")
+            digest.update(swarm_path.read_bytes())
+            digest.update(b"\0")
+            return digest.hexdigest()
         if action == "handoff.create":
             swarm_path = Path(swarm.path) / "SWARM.md"
             if not swarm_path.is_file():
@@ -6825,7 +7207,11 @@ class AgoraWorkspace:
 
     def _assert_lifecycle_precondition(self, root: Path, record: LifecycleActionRecord) -> None:
         swarm = self._load_swarm(root, record.swarm_id)
-        work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
+        work = (
+            self._load_work(swarm, record.work_id)
+            if record.work_id is not None and record.action != "work.create"
+            else None
+        )
         actual = self._lifecycle_precondition_sha256(
             root, record.action, swarm, work, record.parameters
         )
@@ -6869,6 +7255,8 @@ class AgoraWorkspace:
         action = string_attribute(document.attributes, "action")
         if action not in {
             "approval.add",
+            "artifact.add",
+            "criterion.satisfy",
             "delegation.accept",
             "delegation.block",
             "delegation.cancel",
@@ -6876,11 +7264,13 @@ class AgoraWorkspace:
             "delegation.create",
             "delegation.reject",
             "delegation.resume",
+            "evidence.add",
             "handoff.create",
             "work.block",
             "work.cancel",
             "work.resume",
             "work.transition",
+            "work.create",
         }:
             raise ValueError(f"Unsupported Lifecycle Action kind: {action}")
         status = string_attribute(document.attributes, "status")
@@ -6891,6 +7281,8 @@ class AgoraWorkspace:
             raise ValueError(f"Lifecycle Action parameters must contain string values: {path}")
         expected_parameters = {
             "approval.add": {"role", "note"},
+            "artifact.add": {"kind", "uri"},
+            "criterion.satisfy": {"criterion"},
             "delegation.accept": {"delegation"},
             "delegation.block": {"delegation", "reason"},
             "delegation.cancel": {"delegation", "reason"},
@@ -6907,11 +7299,18 @@ class AgoraWorkspace:
             },
             "delegation.reject": {"delegation", "reason"},
             "delegation.resume": {"delegation", "reason"},
+            "evidence.add": {"type", "result", "artifacts"},
             "handoff.create": {"role", "from", "to", "reason"},
             "work.block": {"reason"},
             "work.cancel": {"reason"},
             "work.resume": {"reason"},
             "work.transition": {"to"},
+            "work.create": {
+                "title",
+                "description",
+                "acceptance-criteria",
+                "required-artifacts",
+            },
         }[action]
         if set(parameters) != expected_parameters:
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
@@ -6954,6 +7353,38 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Lifecycle Action has invalid delegation required artifacts: {path}"
                 )
+        if action == "work.create":
+            try:
+                criteria = json.loads(parameters["acceptance-criteria"])
+                artifacts = json.loads(parameters["required-artifacts"])
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Lifecycle Action has invalid work JSON parameters: {path}"
+                ) from error
+            if not isinstance(criteria, list) or any(
+                not isinstance(item, list)
+                or len(item) != 2
+                or any(not isinstance(value, str) for value in item)
+                for item in criteria
+            ):
+                raise ValueError(f"Lifecycle Action has invalid work acceptance criteria: {path}")
+            if not isinstance(artifacts, list) or any(
+                not isinstance(value, str) for value in artifacts
+            ):
+                raise ValueError(f"Lifecycle Action has invalid work required artifacts: {path}")
+        if action == "evidence.add":
+            if parameters["result"] not in {"success", "failure"}:
+                raise ValueError(f"Lifecycle Action has invalid evidence result: {path}")
+            try:
+                artifacts = json.loads(parameters["artifacts"])
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Lifecycle Action has invalid evidence artifacts: {path}"
+                ) from error
+            if not isinstance(artifacts, list) or any(
+                not isinstance(value, str) for value in artifacts
+            ):
+                raise ValueError(f"Lifecycle Action evidence artifacts must be strings: {path}")
         reason_actions = {
             "delegation.block",
             "delegation.cancel",

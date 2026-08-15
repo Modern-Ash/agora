@@ -20,6 +20,7 @@ from agora.model import (
     LaunchSessionInput,
     LaunchToolRunInput,
     PrepareApprovalInput,
+    PrepareCreateWorkInput,
     PrepareLifecycleAuthorizationInput,
     PrepareSessionAuthorizationInput,
     PrepareToolAuthorizationInput,
@@ -107,12 +108,30 @@ def main() -> None:
     ):
         agora.assign_actor(AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor_id))
 
-    agora.create_work(
-        CreateWorkInput(
-            swarm_id="delivery",
-            id="signed-work",
-            title="Apply a signed lifecycle mutation",
-            actor_id="owner",
+    prepared_work = agora.prepare_create_work(
+        PrepareCreateWorkInput(
+            action_id="create-signed-work",
+            work=CreateWorkInput(
+                swarm_id="delivery",
+                id="signed-work",
+                title="Apply a signed lifecycle mutation",
+                actor_id="owner",
+            ),
+        )
+    )
+    work_payload = runtime / "work-creation-authorization.json"
+    agora.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=prepared_work.id,
+            output=str(work_payload),
+        )
+    )
+    work_signature = runtime / "work-creation-authorization.sig"
+    work_signature.write_bytes(owner_private_key.sign(work_payload.read_bytes()))
+    applied_work = agora.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=prepared_work.id,
+            signature=str(work_signature),
         )
     )
     for action_id, reason, prepare in (
@@ -284,6 +303,7 @@ def main() -> None:
 
     assert completed.authentication_verified
     assert completed_session.authentication_verified
+    assert applied_work.authentication_verified
     assert applied_action.authentication_verified
     assert applied_approval.authentication_verified
     assert applied_handoff.authentication_verified
