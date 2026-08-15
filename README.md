@@ -285,8 +285,29 @@ observability, or communication CLIs. An operation declares structured arguments
 risk, a provider-neutral capability, and optional approval policy. Method Pack roles grant those
 capabilities explicitly.
 
-Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`, and
-`knowledge-base` packs:
+Agora uses a CLI-first integration policy: prefer the provider CLI already configured in the
+developer environment, use a reviewed wrapper when normalization is necessary, and keep MCP as an
+explicit alternative when it provides capabilities unavailable through the CLI. Discovery never
+installs or selects a transport automatically:
+
+```bash
+agora tool adapter list --available
+agora tool adapter list --check
+agora tool adapter list --compatible
+agora tool adapter install --id github-actions --scope project
+agora tool adapter install --id github-issues --scope project
+agora tool adapter install --id jira --scope project
+agora tool adapter install --id terraform --scope project
+agora tool adapter install --id aws-resource-inventory --scope project
+agora tool adapter install --id gcp-asset-inventory --scope project
+```
+
+`--check` runs each available adapter's declared version command and reports the detected and
+minimum versions. `--compatible` performs the same check and returns only runtimes that satisfy the
+adapter contract. Version checks never authenticate or contact the provider.
+
+Agora includes Git-backed `repository` plus provider-neutral `work-management`, `ci-cd`,
+`knowledge-base`, `cloud-infrastructure`, and `observability` packs:
 
 ```bash
 agora tool show --tool repository
@@ -315,6 +336,17 @@ agora tool invoke --id inspect-payment-guide \
   --tool knowledge-base --operation view \
   --actor delivery-swarm --swarm payments \
   --input document=DOC-42 --launch
+
+agora tool invoke --id plan-payment-capacity \
+  --tool cloud-infrastructure --operation plan \
+  --actor delivery-swarm --swarm payments \
+  --input environment=staging \
+  --input change=increase-payment-capacity --launch
+
+agora tool invoke --id payment-health \
+  --tool observability --operation service-health \
+  --actor delivery-swarm --swarm payments \
+  --input service=payments --input environment=production --launch
 ```
 
 The executable runs without a shell. Agora persists `RUN.md`, captures output and exit status in
@@ -324,16 +356,30 @@ record or Git commit is created.
 
 The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
 tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
-Method Pack. See the
-[work-management integration guide](docs/guides/work-management-integrations.md).
+Method Pack. The `github-issues` and `jira` adapters map that contract directly to `gh` and ACLI.
+See the [work-management integration guide](docs/guides/work-management-integrations.md).
 
 The `ci-cd` pack defines a stable `cictl` interface for GitHub Actions, GitLab CI/CD, Jenkins, or an
 internal platform. Routine pipeline access is separate from cancellation and deployment authority.
-See the [CI/CD integration guide](docs/guides/ci-cd-integrations.md).
+The independently installable `github-actions` adapter maps those capabilities directly to the
+developer's existing `gh` CLI. See the
+[CLI-first adapter guide](docs/guides/cli-first-adapters.md) and
+[CI/CD integration guide](docs/guides/ci-cd-integrations.md).
 
 The `knowledge-base` pack defines a stable `docsctl` interface for Confluence, Notion, and internal
 documentation. Draft access remains separate from publication and destructive archival. See the
 [knowledge-base integration guide](docs/guides/knowledge-base-integrations.md).
+
+The `cloud-infrastructure` pack defines `cloudctl` for AWS, Azure, Google Cloud, infrastructure as
+code, or internal platforms. Inspection and planning remain distinct from apply and destruction.
+The independently installable `terraform` adapter uses the developer's existing Terraform CLI and
+applies only saved plans. Partial AWS and Google Cloud adapters expose bounded inventory reads
+without plan, apply, or destruction operations. See the
+[cloud integration guide](docs/guides/cloud-integrations.md).
+
+The `observability` pack defines `observectl` for monitoring and incident systems. Reading signals
+and declaring incidents remain separate from resolution authority. See the
+[observability integration guide](docs/guides/observability-integrations.md).
 
 ## Governed work
 
@@ -548,8 +594,10 @@ versioned registry snapshot without persisting a private key.
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Organization trust synchronization, transparency, automatic background pack updates, and
   notifications are not.
-- The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD, and
-  knowledge-base packs are implemented; vendor distributions and cloud packs remain future work.
+- The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
+  knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
+  distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,
+  plus partial AWS and Google Cloud inventory adapters.
 - Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
   distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
   explicit child work acceptance, interruption, cancellation, and reference-based result collection

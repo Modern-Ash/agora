@@ -1,9 +1,17 @@
+import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agora.filesystem import template_root
-from agora.tools import load_tool_contract, validate_conventional_commit
+from agora.tools import (
+    load_tool_contract,
+    probe_tool_runtime,
+    validate_conventional_commit,
+    validate_operation_inputs,
+    validate_tool_adapter_contract,
+)
 
 
 def test_loads_a_provider_neutral_tool_pack() -> None:
@@ -49,6 +57,156 @@ def test_loads_the_bundled_ci_cd_contract() -> None:
     assert contract.operations["create-deployment"].capability == "deployment.create"
 
 
+def test_loads_the_github_actions_cli_adapter() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "github-actions")
+
+    assert contract.id == "github-actions"
+    assert contract.executable == "gh"
+    assert contract.provider == "github"
+    assert contract.transport == "cli"
+    assert contract.implements == "ci-cd"
+    assert contract.version_command == ["--version"]
+    assert contract.minimum_runtime_version == "2.45.0"
+    assert contract.operations["list-runs"].capability == "ci.read"
+    assert contract.operations["trigger"].arguments[:2] == ["workflow", "run"]
+    assert contract.operations["cancel-run"].risk == "destructive"
+
+
+def test_loads_the_terraform_cli_adapter() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.id == "terraform"
+    assert contract.executable == "terraform"
+    assert contract.provider == "hashicorp"
+    assert contract.transport == "cli"
+    assert contract.implements == "cloud-infrastructure"
+    assert contract.operations["plan"].arguments == [
+        "-chdir={environment}",
+        "plan",
+        "-input=false",
+        "-no-color",
+        "-out={change}",
+    ]
+    assert contract.operations["apply-plan"].capability == "cloud.deploy"
+    assert contract.operations["destroy-resource"].risk == "destructive"
+
+
+def test_loads_the_github_issues_cli_adapter_and_restricts_transitions() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "github-issues")
+    implemented = load_tool_contract(template_root() / "tools" / "work-management")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == "github"
+    assert contract.transport == "cli"
+    assert contract.implements == "work-management"
+    transition = contract.operations["transition"]
+    assert transition.input_values == {"state": ["close", "reopen"]}
+    validate_operation_inputs(transition, {"issue": "42", "state": "close"})
+    with pytest.raises(ValueError, match="state must be one of: close, reopen"):
+        validate_operation_inputs(transition, {"issue": "42", "state": "delete"})
+
+
+@pytest.mark.parametrize(
+    ("adapter_id", "provider", "executable"),
+    [
+        ("aws-resource-inventory", "aws", "aws"),
+        ("gcp-asset-inventory", "google-cloud", "gcloud"),
+    ],
+)
+def test_loads_a_read_only_cloud_inventory_adapter(
+    adapter_id: str, provider: str, executable: str
+) -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / adapter_id)
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == provider
+    assert contract.executable == executable
+    assert contract.implements_operations == ["list-resources", "inspect-resource"]
+    assert sorted(contract.operations) == ["inspect-resource", "list-resources"]
+    assert all(operation.risk == "read" for operation in contract.operations.values())
+
+
+def test_loads_the_jira_acli_adapter() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "jira")
+    implemented = load_tool_contract(template_root() / "tools" / "work-management")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == "atlassian"
+    assert contract.executable == "acli"
+    assert contract.implements == "work-management"
+    assert contract.version_command == ["--version"]
+    assert contract.minimum_runtime_version == "1.3.0"
+    assert contract.operations["search"].arguments[:4] == [
+        "jira",
+        "workitem",
+        "search",
+        "--jql",
+    ]
+    assert contract.operations["transition"].arguments[-2:] == ["--yes", "--json"]
+
+
+@pytest.mark.parametrize(
+    ("adapter_id", "output", "expected_version"),
+    [
+        ("github-actions", "gh version 2.82.1 (2025-10-22)", "2.82.1"),
+        ("terraform", "Terraform v1.7.0\non linux_amd64", "1.7.0"),
+        ("aws-resource-inventory", "aws-cli/2.0.30 Python/3.7.3", "2.0.30"),
+        ("gcp-asset-inventory", "Google Cloud SDK 568.0.0", "568.0.0"),
+        ("jira", "acli version 1.3.15", "1.3.15"),
+    ],
+)
+def test_probes_compatible_cli_adapter_versions(
+    adapter_id: str, output: str, expected_version: str
+) -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / adapter_id)
+
+    probe = probe_tool_runtime(
+        contract,
+        f"/usr/bin/{contract.executable}",
+        runner=lambda command: subprocess.CompletedProcess(command, 0, output, ""),
+    )
+
+    assert probe.available is True
+    assert probe.version == expected_version
+    assert probe.compatible is True
+    assert "satisfies minimum version" in probe.detail
+
+
+def test_reports_missing_old_and_unverifiable_cli_runtimes() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
+
+    missing = probe_tool_runtime(contract, None)
+    old = probe_tool_runtime(
+        contract,
+        "/usr/bin/terraform",
+        runner=lambda command: subprocess.CompletedProcess(command, 0, "Terraform v0.14.0", ""),
+    )
+    unknown = probe_tool_runtime(
+        contract,
+        "/usr/bin/terraform",
+        runner=lambda command: subprocess.CompletedProcess(command, 0, "development build", ""),
+    )
+
+    assert missing.compatible is False
+    assert missing.version is None
+    assert old.compatible is False
+    assert old.version == "0.14.0"
+    assert unknown.compatible is None
+    assert "no MAJOR.MINOR.PATCH" in unknown.detail
+
+
+def test_rejects_an_extra_operation_in_a_partial_adapter() -> None:
+    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "aws-resource-inventory")
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    adapter.operations["plan"] = implemented.operations["plan"]
+
+    with pytest.raises(ValueError, match=r"extra=\[plan\]"):
+        validate_tool_adapter_contract(adapter, implemented)
+
+
 def test_loads_the_bundled_knowledge_base_contract() -> None:
     contract = load_tool_contract(template_root() / "tools" / "knowledge-base")
 
@@ -60,6 +218,43 @@ def test_loads_the_bundled_knowledge_base_contract() -> None:
     assert contract.operations["publish"].capability == "docs.publish"
     assert contract.operations["archive"].capability == "docs.archive"
     assert contract.operations["archive"].risk == "destructive"
+
+
+def test_loads_the_bundled_cloud_infrastructure_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+
+    assert contract.id == "cloud-infrastructure"
+    assert contract.executable == "cloudctl"
+    assert list(contract.operations) == [
+        "apply-plan",
+        "destroy-resource",
+        "inspect-resource",
+        "list-resources",
+        "plan",
+    ]
+    assert contract.operations["list-resources"].capability == "cloud.read"
+    assert contract.operations["plan"].capability == "cloud.plan"
+    assert contract.operations["apply-plan"].capability == "cloud.deploy"
+    assert contract.operations["destroy-resource"].capability == "cloud.destroy"
+    assert contract.operations["destroy-resource"].risk == "destructive"
+
+
+def test_loads_the_bundled_observability_contract() -> None:
+    contract = load_tool_contract(template_root() / "tools" / "observability")
+
+    assert contract.id == "observability"
+    assert contract.executable == "observectl"
+    assert list(contract.operations) == [
+        "create-incident",
+        "query-metrics",
+        "resolve-incident",
+        "search-logs",
+        "service-health",
+        "update-incident",
+    ]
+    assert contract.operations["service-health"].capability == "observability.read"
+    assert contract.operations["create-incident"].capability == "incident.write"
+    assert contract.operations["resolve-incident"].capability == "incident.resolve"
 
 
 @pytest.mark.parametrize(
@@ -124,3 +319,50 @@ def test_rejects_unknown_tool_input_rules(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsupported input rules: unregistered-rule/v1"):
         load_tool_contract(tool)
+
+
+def test_rejects_incomplete_tool_adapter_metadata(tmp_path: Path) -> None:
+    tool = tmp_path / "tool"
+    (tool / "operations").mkdir(parents=True)
+    (tool / "TOOL.md").write_text(
+        '---\nschema: "agora/tool/v1"\nid: "vendor"\nname: "Vendor"\n'
+        'category: "ci"\nexecutable: "vendor"\nprovider: "vendor"\n'
+        'transport: "cli"\n---\n\n# Vendor\n'
+    )
+    (tool / "operations" / "view.md").write_text(
+        '---\nschema: "agora/tool-operation/v1"\nid: "view"\nname: "View"\n'
+        'capability: "ci.read"\nrisk: "read"\narguments: ["view"]\ninputs: []\n'
+        "---\n\n# View\n"
+    )
+
+    with pytest.raises(ValueError, match="requires provider, transport, and implements"):
+        load_tool_contract(tool)
+
+
+def test_rejects_incomplete_runtime_version_metadata(tmp_path: Path) -> None:
+    tool = tmp_path / "tool"
+    (tool / "operations").mkdir(parents=True)
+    (tool / "TOOL.md").write_text(
+        '---\nschema: "agora/tool/v1"\nid: "tracker"\nname: "Tracker"\n'
+        'category: "issue-tracker"\nexecutable: "tracker"\n'
+        'version-command: ["--version"]\n---\n\n# Tracker\n'
+    )
+    (tool / "operations" / "view.md").write_text(
+        '---\nschema: "agora/tool-operation/v1"\nid: "view"\nname: "View"\n'
+        'capability: "issue.read"\nrisk: "read"\narguments: ["view"]\ninputs: []\n'
+        "---\n\n# View\n"
+    )
+
+    with pytest.raises(ValueError, match="must be declared together"):
+        load_tool_contract(tool)
+
+
+def test_rejects_an_adapter_that_weakens_the_implemented_contract(tmp_path: Path) -> None:
+    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "github-actions")
+    implemented = load_tool_contract(template_root() / "tools" / "ci-cd")
+    adapter.operations["cancel-run"] = replace(
+        adapter.operations["cancel-run"], capability="ci.read"
+    )
+
+    with pytest.raises(ValueError, match="cancel-run capability must be ci.cancel"):
+        validate_tool_adapter_contract(adapter, implemented)

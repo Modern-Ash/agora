@@ -60,6 +60,7 @@ from agora.model import (
     InstallCatalogPackInput,
     InstallMethodInput,
     InstallRegistryInput,
+    InstallToolAdapterInput,
     InstallToolInput,
     Integration,
     InvokeToolInput,
@@ -90,10 +91,12 @@ from agora.model import (
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
+    ToolAdapterRecord,
     ToolContract,
     ToolPackRecord,
     ToolRisk,
     ToolRunRecord,
+    ToolRuntimeProbe,
     TransitionWorkInput,
     UpdateCatalogPackInput,
     UpdateRegistryInput,
@@ -134,7 +137,12 @@ from agora.registry_distribution import (
     download_registry_release,
     inspect_registry_release,
 )
-from agora.tools import load_tool_contract, validate_operation_inputs
+from agora.tools import (
+    load_tool_contract,
+    probe_tool_runtime,
+    validate_operation_inputs,
+    validate_tool_adapter_contract,
+)
 from agora.trust import load_trust_key, render_trust_key, revoke_trust_key, trust_key_from_pem
 from agora.upgrades import (
     CURRENT_PROJECT_VERSION,
@@ -168,12 +176,14 @@ class AgoraWorkspace:
         tool_runner: (
             Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess[str]] | None
         ) = None,
+        runtime_probe: Callable[[ToolContract, str | None], ToolRuntimeProbe] | None = None,
         lock_timeout: float | None = None,
     ) -> None:
         self.cwd = Path(cwd or Path.cwd()).resolve()
         self._now = now or (lambda: datetime.now(UTC))
         self._launcher = launcher or _launch_process
         self._tool_runner = tool_runner or _run_tool_process
+        self._runtime_probe = runtime_probe or probe_tool_runtime
         configured_timeout = os.environ.get("AGORA_LOCK_TIMEOUT", "0")
         try:
             self.lock_timeout = float(configured_timeout) if lock_timeout is None else lock_timeout
@@ -354,10 +364,103 @@ class AgoraWorkspace:
         if (source / "SOURCE.md").exists() or (source / "updates").exists():
             raise ValueError("Direct Tool Pack sources must not contain installer-owned metadata")
         contract = load_tool_contract(source)
+        if contract.implements is not None:
+            implemented = self._implemented_tool_contract(contract.implements, data.scope)
+            validate_tool_adapter_contract(contract, implemented)
         self._assert_candidate_composition("tool", contract, data.scope)
         record = self._install_tool_snapshot(source, data.scope, data.force, contract)
         self._write_pack_lock(data.scope)
         return record
+
+    def install_tool_adapter(self, data: InstallToolAdapterInput) -> ToolPackRecord:
+        assert_slug(data.adapter_id, "Tool adapter id")
+        adapters = {record.id: record for record in self.list_tool_adapters()}
+        adapter = adapters.get(data.adapter_id)
+        if adapter is None:
+            raise FileNotFoundError(f"Bundled Tool adapter not found: {data.adapter_id}")
+        return self.install_tool(
+            InstallToolInput(source=adapter.path, scope=data.scope, force=data.force)
+        )
+
+    def list_tool_adapters(
+        self,
+        available_only: bool = False,
+        compatible_only: bool = False,
+        check_runtime: bool = False,
+    ) -> list[ToolAdapterRecord]:
+        project = self._optional_project_root()
+        records: list[ToolAdapterRecord] = []
+        for manifest in sorted((template_root() / "adapters").glob("*/*/TOOL.md")):
+            contract = load_tool_contract(manifest.parent)
+            if not contract.provider or not contract.transport or not contract.implements:
+                raise ValueError(f"Bundled Tool adapter is missing adapter metadata: {manifest}")
+            implemented = load_tool_contract(template_root() / "tools" / contract.implements)
+            validate_tool_adapter_contract(contract, implemented)
+            executable_path = shutil.which(contract.executable)
+            runtime_available = executable_path is not None
+            if available_only and not runtime_available:
+                continue
+            probe = (
+                self._runtime_probe(contract, executable_path)
+                if check_runtime or compatible_only
+                else ToolRuntimeProbe(
+                    available=runtime_available,
+                    executable_path=executable_path,
+                    version=None,
+                    compatible=None,
+                    detail="Runtime version not checked",
+                )
+            )
+            if compatible_only and probe.compatible is not True:
+                continue
+            installed_scopes: list[str] = []
+            if (agora_home() / "tools" / contract.id / "TOOL.md").is_file():
+                installed_scopes.append("user")
+            if (
+                project is not None
+                and (project / ".agora" / "tools" / contract.id / "TOOL.md").is_file()
+            ):
+                installed_scopes.append("project")
+            records.append(
+                ToolAdapterRecord(
+                    id=contract.id,
+                    name=contract.name,
+                    version=contract.version,
+                    provider=contract.provider,
+                    transport=contract.transport,
+                    implements=contract.implements,
+                    implements_operations=sorted(
+                        contract.implements_operations or implemented.operations
+                    ),
+                    executable=contract.executable,
+                    runtime_available=runtime_available,
+                    minimum_runtime_version=contract.minimum_runtime_version,
+                    runtime_version=probe.version,
+                    runtime_compatible=probe.compatible,
+                    runtime_detail=probe.detail,
+                    installed_scopes=installed_scopes,
+                    path=str(manifest.parent),
+                )
+            )
+        return records
+
+    def _implemented_tool_contract(self, tool_id: str, scope: str) -> ToolContract:
+        assert_slug(tool_id, "Implemented Tool Pack id")
+        candidates: list[Path] = []
+        if scope == "project":
+            project = self._optional_project_root()
+            if project is not None:
+                candidates.append(project / ".agora" / "tools" / tool_id)
+        candidates.extend(
+            [
+                agora_home() / "tools" / tool_id,
+                template_root() / "tools" / tool_id,
+            ]
+        )
+        for candidate in candidates:
+            if (candidate / "TOOL.md").is_file():
+                return load_tool_contract(candidate)
+        raise FileNotFoundError(f"Implemented Tool Pack not found: {tool_id}")
 
     def _install_method_snapshot(
         self,
@@ -2642,9 +2745,16 @@ class AgoraWorkspace:
             self._substitute_tool_inputs(argument, data.inputs) for argument in operation.arguments
         ]
         command = [contract.executable, *arguments]
-        runtime_available = shutil.which(contract.executable) is not None
+        executable_path = shutil.which(contract.executable)
+        runtime_available = executable_path is not None
         if data.launch and not runtime_available:
             raise FileNotFoundError(f"Tool executable not found: {contract.executable}")
+        if data.launch and contract.minimum_runtime_version is not None:
+            probe = self._runtime_probe(contract, executable_path)
+            if probe.compatible is not True:
+                raise RuntimeError(
+                    f"Tool runtime compatibility check failed for {contract.id}: {probe.detail}"
+                )
 
         run_id = data.id or self._now().astimezone(UTC).strftime("tool-%Y%m%dt%H%M%sz")
         assert_slug(run_id, "Tool run id")
@@ -2834,6 +2944,7 @@ class AgoraWorkspace:
             "adapters": 0,
             "methods": 0,
             "tools": 0,
+            "tool-adapters": 0,
             "actors": 0,
             "swarms": 0,
             "work": 0,
@@ -3082,6 +3193,27 @@ class AgoraWorkspace:
                         f"Tool id {contract.id} does not match directory {path.parent.name}",
                     )
                 self._validate_pack_source("tool", path.parent, contract, inspect, issue)
+
+        for adapter in tools.values():
+            if adapter.implements is None:
+                continue
+            implemented = tools.get(adapter.implements)
+            adapter_path = tool_root / adapter.id / "TOOL.md"
+            if implemented is None:
+                issue(
+                    "tool-adapter.implementation-missing",
+                    adapter_path,
+                    f"Implemented Tool Pack is not installed: {adapter.implements}",
+                )
+                continue
+            inspect(
+                "tool-adapters",
+                "tool-adapter.contract-invalid",
+                adapter_path,
+                lambda adapter=adapter, implemented=implemented: validate_tool_adapter_contract(
+                    adapter, implemented
+                ),
+            )
 
         installed_packs: dict[tuple[str, str], MethodContract | ToolContract] = {
             **{("method", id_): contract for id_, contract in methods.items()},
@@ -4874,6 +5006,12 @@ class AgoraWorkspace:
             scope=scope,
             path=str(path),
             operations=sorted(contract.operations),
+            provider=contract.provider,
+            transport=contract.transport,
+            implements=contract.implements,
+            implements_operations=contract.implements_operations,
+            version_command=contract.version_command,
+            minimum_runtime_version=contract.minimum_runtime_version,
             source=source,
             updates=updates,
         )

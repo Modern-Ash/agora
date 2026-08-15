@@ -44,6 +44,36 @@ Agora passes every array element directly to the executable without a shell. The
 these stable verbs into the selected provider CLI or API client and writes its result to standard
 output. A provider migration changes the adapter, not Method Pack permissions or Agora's kernel.
 
+## Native GitHub Issues adapter
+
+When the developer already uses GitHub CLI, install the reviewed adapter directly:
+
+```bash
+agora tool adapter list --available
+agora tool adapter install --id github-issues --scope project
+```
+
+The adapter implements search, view, create, comment, and transition through `gh`. Its transition
+state occupies a native subcommand position, so `input-values` restricts it to `close` or `reopen`.
+Any other value is rejected before a Tool Run exists. Repository and authentication selection remain
+in the existing GitHub CLI profile, and installation does not alter role authority.
+
+## Native Jira ACLI adapter
+
+Install the reviewed Jira Cloud adapter when Atlassian CLI is part of the developer environment:
+
+```bash
+agora tool adapter list --available
+agora tool adapter install --id jira --scope project
+```
+
+The adapter maps all five operations to `acli jira workitem`. Search uses JQL with a limit and
+selected fields; create and comment provide their bodies through non-interactive flags; transition
+uses one explicit key and status with `--yes`. ACLI owns Jira site selection and authentication.
+
+The pack may be installed for command preparation when ACLI is absent, but `--launch` then fails
+before creating an external process. Agora does not download ACLI or fall back to an MCP server.
+
 ## Role authority
 
 Bundled Scrum and Kanban packs grant external work authority separately:

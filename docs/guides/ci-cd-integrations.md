@@ -43,6 +43,24 @@ agora validate
 
 Installation refreshes `PACKS.lock.md` but does not alter local Method Pack permissions.
 
+## Native GitHub CLI adapter
+
+When a developer already uses GitHub CLI, install the reviewed adapter instead of maintaining a
+`cictl` wrapper:
+
+```bash
+agora tool adapter list --available
+agora tool adapter install --id github-actions --scope project
+```
+
+Invoke `github-actions/list-runs`, `view-run`, `trigger`, `cancel-run`, `view-deployment`, or
+`create-deployment`. The adapter calls `gh` directly, preserves the same provider-neutral
+capabilities, and leaves authentication in the developer's existing GitHub CLI profile. Installing
+it does not remove `ci-cd` or grant `ci.cancel` and `deployment.create`.
+
+See [CLI-first ecosystem adapters](cli-first-adapters.md) for the selection policy and complete
+examples.
+
 ## Default authority
 
 Bundled Scrum and Kanban roles already separate CI/CD authority:

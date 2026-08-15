@@ -20,10 +20,12 @@ from agora.model import (
     HandoffActorInput,
     InitInput,
     InstallMethodInput,
+    InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
     SetActorRuntimeInput,
     StartSessionInput,
+    ToolRuntimeProbe,
     TransitionWorkInput,
     WorkActorInput,
 )
@@ -670,6 +672,464 @@ def test_governs_and_persists_external_tool_invocations(
         )
 
 
+def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/gh" if executable == "gh" else None,
+    )
+
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.provider, item.transport) for item in available] == [
+        ("github-actions", "github", "cli"),
+        ("github-issues", "github", "cli"),
+    ]
+    assert available[0].runtime_available is True
+    assert available[0].installed_scopes == []
+
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="github-actions", scope="project")
+    )
+    assert installed.executable == "gh"
+    assert installed.implements == "ci-cd"
+    adapters = {item.id: item for item in workspace.list_tool_adapters()}
+    assert adapters["github-actions"].installed_scopes == ["project"]
+
+    calls: list[list[str]] = []
+
+    def run_tool(
+        command: list[str], cwd: Path, environment: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout='[{"status":"completed"}]', stderr="")
+
+    governed = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        tool_runner=run_tool,
+        runtime_probe=lambda contract, path: ToolRuntimeProbe(
+            available=True,
+            executable_path=path,
+            version="2.82.1",
+            compatible=True,
+            detail="compatible test runtime",
+        ),
+    )
+    listed = governed.invoke_tool(
+        InvokeToolInput(
+            id="github-actions-runs",
+            tool_id="github-actions",
+            operation_id="list-runs",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify.yml"},
+            launch=True,
+        )
+    )
+    triggered = governed.invoke_tool(
+        InvokeToolInput(
+            id="github-actions-trigger",
+            tool_id="github-actions",
+            operation_id="trigger",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify.yml", "ref": "main", "parameters": "suite=all"},
+            launch=True,
+        )
+    )
+
+    assert listed.status == "completed"
+    assert calls[0][:5] == ["gh", "run", "list", "--workflow", "verify.yml"]
+    assert triggered.command == [
+        "gh",
+        "workflow",
+        "run",
+        "verify.yml",
+        "--ref",
+        "main",
+        "--raw-field",
+        "suite=all",
+    ]
+
+    incompatible = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        tool_runner=run_tool,
+        runtime_probe=lambda contract, path: ToolRuntimeProbe(
+            available=True,
+            executable_path=path,
+            version="2.0.0",
+            compatible=False,
+            detail="Runtime 2.0.0 does not satisfy minimum version 2.45.0",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="runtime compatibility check failed"):
+        incompatible.invoke_tool(
+            InvokeToolInput(
+                id="github-actions-incompatible",
+                tool_id="github-actions",
+                operation_id="list-runs",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"pipeline": "verify.yml"},
+                launch=True,
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "github-actions-incompatible").exists()
+
+    with pytest.raises(PermissionError, match="ci.cancel"):
+        governed.invoke_tool(
+            InvokeToolInput(
+                id="github-actions-cancel",
+                tool_id="github-actions",
+                operation_id="cancel-run",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"run": "123"},
+            )
+        )
+
+    cancel_path = root / ".agora" / "tools" / "github-actions" / "operations" / "cancel-run.md"
+    cancel_path.write_text(cancel_path.read_text().replace("ci.cancel", "ci.read"))
+    report = governed.validate()
+    assert any(item.code == "tool-adapter.contract-invalid" for item in report.issues)
+
+
+def test_discovers_installs_and_governs_the_terraform_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/local/bin/terraform" if executable == "terraform" else None,
+    )
+
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.implements) for item in available] == [
+        ("terraform", "cloud-infrastructure")
+    ]
+
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="terraform", scope="project")
+    )
+    assert installed.provider == "hashicorp"
+    assert installed.implements == "cloud-infrastructure"
+
+    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
+    resources = governed.invoke_tool(
+        InvokeToolInput(
+            id="terraform-resources",
+            tool_id="terraform",
+            operation_id="list-resources",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "infra/staging"},
+        )
+    )
+    plan = governed.invoke_tool(
+        InvokeToolInput(
+            id="terraform-plan",
+            tool_id="terraform",
+            operation_id="plan",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "infra/staging", "change": "plans/capacity.tfplan"},
+        )
+    )
+
+    assert resources.command == ["terraform", "-chdir=infra/staging", "state", "list"]
+    assert plan.command == [
+        "terraform",
+        "-chdir=infra/staging",
+        "plan",
+        "-input=false",
+        "-no-color",
+        "-out=plans/capacity.tfplan",
+    ]
+    with pytest.raises(PermissionError, match="cloud.deploy"):
+        governed.invoke_tool(
+            InvokeToolInput(
+                id="terraform-apply",
+                tool_id="terraform",
+                operation_id="apply-plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={
+                    "environment": "infra/staging",
+                    "plan": "plans/capacity.tfplan",
+                },
+            )
+        )
+    with pytest.raises(PermissionError, match="cloud.destroy"):
+        governed.invoke_tool(
+            InvokeToolInput(
+                id="terraform-destroy",
+                tool_id="terraform",
+                operation_id="destroy-resource",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={
+                    "environment": "infra/staging",
+                    "resource": "aws_instance.api",
+                },
+            )
+        )
+    assert governed.validate().ok
+
+
+def test_installs_and_governs_the_github_issues_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/gh" if executable == "gh" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="github-issues", scope="project")
+    )
+    assert installed.implements == "work-management"
+
+    searched = workspace.invoke_tool(
+        InvokeToolInput(
+            id="github-issue-search",
+            tool_id="github-issues",
+            operation_id="search",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"query": "repo:openai/codex is:open label:bug"},
+        )
+    )
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="github-issue-create",
+            tool_id="github-issues",
+            operation_id="create",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={
+                "project": "example/agora",
+                "type": "Task",
+                "title": "Review governed adapter",
+                "description": "Verify the CLI-first operation contract.",
+            },
+        )
+    )
+    transitioned = workspace.invoke_tool(
+        InvokeToolInput(
+            id="github-issue-close",
+            tool_id="github-issues",
+            operation_id="transition",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={"issue": "42", "state": "close"},
+        )
+    )
+
+    assert searched.command[:3] == ["gh", "search", "issues"]
+    assert created.command[:5] == [
+        "gh",
+        "issue",
+        "create",
+        "--repo",
+        "example/agora",
+    ]
+    assert transitioned.command == ["gh", "issue", "close", "42"]
+    with pytest.raises(ValueError, match="state must be one of: close, reopen"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="github-issue-unsafe-transition",
+                tool_id="github-issues",
+                operation_id="transition",
+                actor_id="owner",
+                swarm_id="delivery",
+                inputs={"issue": "42", "state": "delete"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "github-issue-unsafe-transition").exists()
+    assert workspace.validate().ok
+
+
+def test_governs_partial_aws_and_gcp_inventory_adapters(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    available_paths = {
+        "aws": "/usr/local/bin/aws",
+        "gcloud": "/usr/bin/gcloud",
+    }
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: available_paths.get(executable),
+    )
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.implements_operations) for item in available] == [
+        ("aws-resource-inventory", ["inspect-resource", "list-resources"]),
+        ("gcp-asset-inventory", ["inspect-resource", "list-resources"]),
+    ]
+
+    _prepare_scrum_team(workspace)
+    for adapter_id in ("aws-resource-inventory", "gcp-asset-inventory"):
+        workspace.install_tool_adapter(
+            InstallToolAdapterInput(adapter_id=adapter_id, scope="project")
+        )
+
+    aws_resources = workspace.invoke_tool(
+        InvokeToolInput(
+            id="aws-inventory",
+            tool_id="aws-resource-inventory",
+            operation_id="list-resources",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "us-east-1"},
+        )
+    )
+    gcp_resource = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gcp-resource",
+            tool_id="gcp-asset-inventory",
+            operation_id="inspect-resource",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={
+                "environment": "projects/agora-production",
+                "resource": (
+                    "//compute.googleapis.com/projects/agora-production/"
+                    "zones/us-central1-a/instances/api"
+                ),
+            },
+        )
+    )
+
+    assert aws_resources.command[:6] == [
+        "aws",
+        "resourcegroupstaggingapi",
+        "get-resources",
+        "--region",
+        "us-east-1",
+        "--max-items",
+    ]
+    assert gcp_resource.command[:5] == [
+        "gcloud",
+        "asset",
+        "search-all-resources",
+        "--scope=projects/agora-production",
+        "--query=name=//compute.googleapis.com/projects/agora-production/zones/us-central1-a/instances/api",
+    ]
+    for adapter_id in ("aws-resource-inventory", "gcp-asset-inventory"):
+        with pytest.raises(FileNotFoundError, match="plan"):
+            workspace.invoke_tool(
+                InvokeToolInput(
+                    id=f"{adapter_id}-unsupported-plan",
+                    tool_id=adapter_id,
+                    operation_id="plan",
+                    actor_id="developer",
+                    swarm_id="delivery",
+                    inputs={"environment": "production", "change": "change-42"},
+                )
+            )
+    assert workspace.validate().ok
+
+
+def test_discovers_installs_and_governs_the_jira_acli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/local/bin/acli" if executable == "acli" else None,
+    )
+    available = workspace.list_tool_adapters(available_only=True)
+    assert [(item.id, item.provider) for item in available] == [("jira", "atlassian")]
+
+    _prepare_scrum_team(workspace)
+    workspace.install_tool_adapter(InstallToolAdapterInput(adapter_id="jira", scope="project"))
+    searched = workspace.invoke_tool(
+        InvokeToolInput(
+            id="jira-search",
+            tool_id="jira",
+            operation_id="search",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"query": "project = AGORA AND status != Done"},
+        )
+    )
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="jira-create",
+            tool_id="jira",
+            operation_id="create",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={
+                "project": "AGORA",
+                "type": "Task",
+                "title": "Review ACLI adapter",
+                "description": "Verify the governed Jira command contract.",
+            },
+        )
+    )
+    transitioned = workspace.invoke_tool(
+        InvokeToolInput(
+            id="jira-transition",
+            tool_id="jira",
+            operation_id="transition",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={"issue": "AGORA-42", "state": "In Progress"},
+        )
+    )
+
+    assert searched.command[:6] == [
+        "acli",
+        "jira",
+        "workitem",
+        "search",
+        "--jql",
+        "project = AGORA AND status != Done",
+    ]
+    assert created.command[:8] == [
+        "acli",
+        "jira",
+        "workitem",
+        "create",
+        "--project",
+        "AGORA",
+        "--type",
+        "Task",
+    ]
+    assert transitioned.command == [
+        "acli",
+        "jira",
+        "workitem",
+        "transition",
+        "--key",
+        "AGORA-42",
+        "--status",
+        "In Progress",
+        "--yes",
+        "--json",
+    ]
+    with pytest.raises(PermissionError, match="issue.write"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="jira-developer-comment",
+                tool_id="jira",
+                operation_id="comment",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"issue": "AGORA-42", "body": "Unauthorized write"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "jira-developer-comment").exists()
+    assert workspace.validate().ok
+
+
 def test_governs_work_management_capabilities_by_role(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -822,6 +1282,112 @@ def test_governs_knowledge_base_capabilities_by_role(
         )
     assert not (root / ".agora" / "tool-runs" / "publish-documentation").exists()
     assert not (root / ".agora" / "tool-runs" / "archive-documentation").exists()
+
+
+def test_governs_cloud_infrastructure_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    plan = workspace.invoke_tool(
+        InvokeToolInput(
+            id="plan-cloud-change",
+            tool_id="cloud-infrastructure",
+            operation_id="plan",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"environment": "staging", "change": "increase-api-capacity"},
+        )
+    )
+    assert plan.status == "prepared"
+    assert plan.capability == "cloud.plan"
+    assert plan.command == [
+        "cloudctl",
+        "change",
+        "plan",
+        "--environment",
+        "staging",
+        "--change",
+        "increase-api-capacity",
+        "--output",
+        "json",
+    ]
+
+    with pytest.raises(PermissionError, match="cloud.deploy"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="apply-cloud-change",
+                tool_id="cloud-infrastructure",
+                operation_id="apply-plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"plan": "plan-42", "environment": "staging"},
+            )
+        )
+    with pytest.raises(PermissionError, match="cloud.destroy"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="destroy-cloud-resource",
+                tool_id="cloud-infrastructure",
+                operation_id="destroy-resource",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"resource": "service/api", "environment": "staging"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "apply-cloud-change").exists()
+    assert not (root / ".agora" / "tool-runs" / "destroy-cloud-resource").exists()
+
+
+def test_governs_observability_and_incident_capabilities_by_role(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    health = workspace.invoke_tool(
+        InvokeToolInput(
+            id="inspect-service-health",
+            tool_id="observability",
+            operation_id="service-health",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"service": "api", "environment": "production"},
+        )
+    )
+    assert health.status == "prepared"
+    assert health.capability == "observability.read"
+
+    incident = workspace.invoke_tool(
+        InvokeToolInput(
+            id="create-service-incident",
+            tool_id="observability",
+            operation_id="create-incident",
+            actor_id="facilitator",
+            swarm_id="delivery",
+            inputs={
+                "service": "api",
+                "severity": "high",
+                "title": "API errors",
+                "summary": "Error rate exceeded the reviewed threshold.",
+            },
+        )
+    )
+    assert incident.capability == "incident.write"
+
+    with pytest.raises(PermissionError, match="incident.resolve"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="resolve-service-incident",
+                tool_id="observability",
+                operation_id="resolve-incident",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"incident": "INC-42", "resolution": "Service recovered"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "resolve-service-incident").exists()
 
 
 def test_hands_a_running_role_from_ai_to_human_and_swarm(
@@ -1393,7 +1959,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.counts == {
         "actors": 3,
         "methods": 2,
-        "tools": 4,
+        "tools": 6,
         "swarms": 1,
         "work": 1,
         "delegations": 0,
@@ -1407,7 +1973,9 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert [item.id for item in workspace.list_methods()] == ["kanban", "scrum"]
     assert [item.id for item in workspace.list_tools()] == [
         "ci-cd",
+        "cloud-infrastructure",
         "knowledge-base",
+        "observability",
         "repository",
         "work-management",
     ]

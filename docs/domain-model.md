@@ -103,6 +103,20 @@ provider-neutral capability, risk classification, arguments, required inputs, op
 and result kind. A role grants exact values through `allowed-tool-capabilities`; installing a pack
 does not grant authority.
 
+A **Tool Adapter** is a provider-specific Tool Pack that declares `provider`, `transport`, and the
+provider-neutral contract it `implements`. The adapter changes command translation, not lifecycle
+authority. Adapter discovery records whether its executable is available; installation and
+invocation remain separate explicit actions. Bundled adapters implement `ci-cd` and
+`work-management` for GitHub through `gh`, plus `cloud-infrastructure` through Terraform CLI.
+A partial adapter lists `implements-operations`; it must contain exactly that conforming subset and
+cannot be invoked for omitted operations. AWS and Google Cloud inventory use this form for read-only
+resource discovery.
+An adapter may be distributed but unavailable in the current environment. `runtime_available`
+reflects executable discovery only. A checked adapter additionally reports its detected version and
+whether it meets the manifest's minimum runtime version. Neither result implies authentication,
+installation, authority, or a successful provider call. The Jira adapter demonstrates the absent
+state when ACLI is not installed.
+
 A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
 It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
 and command metadata, while `RESULT.md` captures status, output, and exit code.
@@ -118,6 +132,14 @@ approval requirement; both must pass before a guarded deployment is prepared.
 The bundled **Knowledge Base Tool Pack** grants reading, drafting, publication, and archival as four
 separate authorities. Remote publication can become an artifact or evidence reference, but it never
 replaces Agora's local work and governance state.
+
+The bundled **Cloud Infrastructure Tool Pack** makes inspection, planning, deployment, and
+destruction separate authorities. A plan identity connects review evidence to apply without making
+remote provider state the Agora source of truth.
+
+The bundled **Observability Tool Pack** separates signal reads, incident updates, and incident
+resolution. External resolution is provider state; health results become durable Agora evidence only
+when explicitly recorded under the active lifecycle.
 
 ## Standard
 

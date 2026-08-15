@@ -46,9 +46,12 @@ validation, so front matter preserves structured metadata and gates remain execu
   dependency-aware pack updates are also implemented, including per-pack transition history and
   deterministic scope composition locks. Preview-first, dependency-safe pack removal is implemented
   with explicit orphan pruning, rollback protection, lock refresh, and durable audit records.
-- Published vendor Tool Packs for Jira, CI/CD, documentation, and cloud. Provider-neutral
-  work-management, CI/CD, and knowledge-base contracts with executable adapter samples are
-  implemented.
+- Additional published vendor Tool Packs for Jira, documentation, cloud, and observability.
+  Provider-neutral contracts and executable adapter samples are implemented, and the reviewed
+  GitHub Actions, GitHub Issues, and Terraform CLI adapters now delegate directly to installed
+  native tools through the CLI-first adapter catalog. Partial AWS and Google Cloud inventory
+  adapters provide bounded reads without claiming provider-wide deployment semantics. Jira has a
+  complete ACLI adapter; Confluence still requires a reviewed wrapper or future supported CLI.
 - Delegation budgets, automatic child work decomposition, and child artifact copying. Explicit
   reference-based result collection is part of the current filesystem protocol.
 - Distributed leases for work coordinated across separate hosts. Local writer locks are implemented.

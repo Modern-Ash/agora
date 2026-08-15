@@ -225,6 +225,7 @@ class ToolOperation:
     arguments: list[str]
     inputs: list[str]
     input_rules: dict[str, str] = field(default_factory=dict)
+    input_values: dict[str, list[str]] = field(default_factory=dict)
     approval_role: str | None = None
     result_kind: str | None = None
 
@@ -239,6 +240,12 @@ class ToolContract:
     executable: str
     authentication_reference: str | None
     operations: dict[str, ToolOperation]
+    provider: str | None = None
+    transport: str | None = None
+    implements: str | None = None
+    implements_operations: list[str] = field(default_factory=list)
+    version_command: list[str] = field(default_factory=list)
+    minimum_runtime_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -252,8 +259,42 @@ class ToolPackRecord:
     scope: Literal["user", "project"]
     path: str
     operations: list[str]
+    provider: str | None = None
+    transport: str | None = None
+    implements: str | None = None
+    implements_operations: list[str] = field(default_factory=list)
+    version_command: list[str] = field(default_factory=list)
+    minimum_runtime_version: str | None = None
     source: PackSourceRecord | None = None
     updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ToolAdapterRecord:
+    id: str
+    name: str
+    version: str
+    provider: str
+    transport: str
+    implements: str
+    implements_operations: list[str]
+    executable: str
+    runtime_available: bool
+    minimum_runtime_version: str | None
+    runtime_version: str | None
+    runtime_compatible: bool | None
+    runtime_detail: str
+    installed_scopes: list[str]
+    path: str
+
+
+@dataclass(frozen=True)
+class ToolRuntimeProbe:
+    available: bool
+    executable_path: str | None
+    version: str | None
+    compatible: bool | None
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -596,6 +637,13 @@ class InstallMethodInput:
 @dataclass(frozen=True)
 class InstallToolInput:
     source: str
+    scope: Literal["user", "project"]
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class InstallToolAdapterInput:
+    adapter_id: str
     scope: Literal["user", "project"]
     force: bool = False
 

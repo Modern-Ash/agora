@@ -26,6 +26,7 @@ from agora.model import (
     InstallCatalogPackInput,
     InstallMethodInput,
     InstallRegistryInput,
+    InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
     RefreshPackLockInput,
@@ -225,6 +226,26 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_show.add_argument("--tool", required=True)
 
     tool.add_parser("list", help="List installed project Tool Packs")
+
+    tool_adapter = tool.add_parser(
+        "adapter", help="Discover and install reviewed ecosystem adapters"
+    ).add_subparsers(dest="tool_adapter_command", required=True)
+    adapter_list = tool_adapter.add_parser("list", help="List bundled Tool adapters")
+    adapter_list.add_argument(
+        "--available", action="store_true", help="Only show adapters whose CLI is on PATH"
+    )
+    adapter_list.add_argument(
+        "--check", action="store_true", help="Probe CLI versions and report compatibility"
+    )
+    adapter_list.add_argument(
+        "--compatible",
+        action="store_true",
+        help="Only show adapters with a compatible CLI version",
+    )
+    adapter_install = tool_adapter.add_parser("install", help="Install a bundled Tool adapter")
+    adapter_install.add_argument("--id", required=True)
+    adapter_install.add_argument("--scope", choices=("user", "project"), default="project")
+    adapter_install.add_argument("--force", action="store_true")
 
     tool_runs = tool.add_parser("runs", help="List governed tool runs")
     tool_runs.add_argument("--status")
@@ -605,6 +626,28 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.show_tool(args.tool)
     if args.command == "tool" and args.tool_command == "list":
         return workspace.list_tools()
+    if (
+        args.command == "tool"
+        and args.tool_command == "adapter"
+        and args.tool_adapter_command == "list"
+    ):
+        return workspace.list_tool_adapters(
+            available_only=args.available,
+            compatible_only=args.compatible,
+            check_runtime=args.check,
+        )
+    if (
+        args.command == "tool"
+        and args.tool_command == "adapter"
+        and args.tool_adapter_command == "install"
+    ):
+        return workspace.install_tool_adapter(
+            InstallToolAdapterInput(
+                adapter_id=args.id,
+                scope=args.scope,
+                force=args.force,
+            )
+        )
     if args.command == "tool" and args.tool_command == "runs":
         return workspace.list_tool_runs(args.status)
     if args.command == "tool" and args.tool_command == "invoke":

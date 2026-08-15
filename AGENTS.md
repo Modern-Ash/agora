@@ -13,10 +13,20 @@
 - Keep Tool Pack commands structured, shell-free, and free of credential inputs.
 - Keep ecosystem Tool Pack capabilities provider-neutral; place Jira, CI/CD, documentation, and
   cloud translation in reviewed external adapters rather than the kernel.
+- Prefer a reviewed native provider CLI when it is installed and non-interactive; use a team wrapper
+  for normalization and MCP only as an explicit alternative transport.
+- Give reviewed CLI adapters a structured local version command and a tested minimum version; never
+  infer compatibility from executable presence alone when launching governed work.
+- Use an explicit conforming operation subset when a provider CLI cannot implement a full neutral
+  contract; never invent generic plan, apply, or destructive semantics.
 - Keep CI cancellation and deployment capabilities opt-in; combine production authority with
   explicit Method Pack policy, evidence, and operation approval requirements.
 - Keep documentation publication and archival opt-in; treat remote pages as external state and
   persist their identifiers as Agora artifacts or evidence when lifecycle gates require them.
+- Keep cloud apply and destruction opt-in; require reviewed immutable plans, external workload
+  identity, explicit approvals, and durable evidence appropriate to the target environment.
+- Keep incident resolution opt-in and distinct from recovery evidence; bound observability queries
+  and redact sensitive provider output before it becomes durable.
 - Keep registry indexes and snapshots Markdown-first; verify remote releases before extraction,
   validate every contained pack before copying, persist provenance, and preserve
   project-over-user-over-bundled precedence.

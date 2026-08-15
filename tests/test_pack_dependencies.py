@@ -515,7 +515,9 @@ def test_pack_lock_tracks_managed_mutations_and_cli_refreshes_manual_changes(
         ("method", "kanban"),
         ("method", "scrum"),
         ("tool", "ci-cd"),
+        ("tool", "cloud-infrastructure"),
         ("tool", "knowledge-base"),
+        ("tool", "observability"),
         ("tool", "repository"),
         ("tool", "work-management"),
     ]

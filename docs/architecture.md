@@ -152,6 +152,25 @@ Jira, Linear, or an internal provider. The bundled CI/CD pack applies the same p
 `cictl`, with separate read, run, cancel, and deployment capabilities. Vendor-specific packs remain
 independently installable Markdown. The bundled knowledge-base pack similarly separates reading and
 drafting from publication and archival through a stable `docsctl` adapter boundary.
+The bundled cloud-infrastructure pack uses `cloudctl` to separate inspection and planning from
+deployment and destructive operations, while provider identity and state remain external.
+The observability pack applies the same adapter boundary to health signals and incidents, keeping
+resolution distinct from evidence that recovery actually occurred.
+
+Provider adapters are independently installable Tool Packs. Agora prefers a reviewed native CLI
+when it is already present in the developer environment, then a team wrapper when normalization is
+needed. MCP remains an optional external transport and never replaces Markdown or Git as the source
+of truth. Plain adapter discovery only checks executable availability; an explicit compatibility
+check runs the manifest's local version command without provider access. Selection, installation,
+and every invocation remain explicit, and live invocation enforces declared minimum versions. The
+bundled `github-actions`, `github-issues`, and `terraform` adapters are concrete CLI-first
+implementations that delegate directly to `gh` and Terraform CLI.
+Partial adapters declare the exact operations they implement. The AWS and Google Cloud inventory
+adapters use this mechanism to provide bounded native reads without claiming plan, deployment, or
+destruction behavior that the provider-wide CLIs do not possess.
+The Jira adapter implements the complete work-management contract through `acli`; it remains
+discoverable but unavailable when that executable is absent. Availability never causes installation
+or an MCP fallback.
 
 ## Recursive delegation
 

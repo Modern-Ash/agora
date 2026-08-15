@@ -13,12 +13,18 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   and configure bounded contention waits.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
+- [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native
+  CLI integrations while keeping MCP as an explicit alternative transport.
 - [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
   internal trackers through one provider-neutral, role-governed operation contract.
 - [CI/CD integrations](guides/ci-cd-integrations.md): inspect and trigger pipelines, restrict
   cancellation, and guard deployments with explicit role approval.
 - [Knowledge-base integrations](guides/knowledge-base-integrations.md): connect Confluence, Notion,
   or internal documentation while separating drafts, publication, and archival authority.
+- [Cloud integrations](guides/cloud-integrations.md): inspect and plan infrastructure while keeping
+  apply and destruction behind explicit role and approval policy.
+- [Observability integrations](guides/observability-integrations.md): query bounded health evidence,
+  declare incidents, and keep resolution behind explicit authority.
 - [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
@@ -74,8 +80,24 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   tracker contract through a local Python adapter and reject unauthorized transitions.
 - [Governed CI/CD](../samples/ci-cd/README.md): trigger a pipeline and require explicit capability
   plus Product Owner approval before deployment.
+- [GitHub Actions CLI adapter](../samples/github-actions-cli/README.md): install the reviewed `gh`
+  adapter, prepare native commands, and preserve separate cancellation authority.
+- [GitHub Issues CLI adapter](../samples/github-issues-cli/README.md): prepare native issue searches
+  and constrain dynamic transitions to close or reopen.
+- [Jira ACLI adapter](../samples/jira-cli/README.md): prepare bounded Jira searches and governed
+  transitions while keeping ACLI installation and authentication external.
+- [CLI runtime compatibility](../samples/cli-runtime-compatibility/README.md): probe local adapter
+  versions without accessing credentials or contacting providers.
+- [Terraform CLI adapter](../samples/terraform-cli/README.md): prepare state reads and a saved plan
+  through native Terraform while preserving separate apply authority.
 - [Governed knowledge base](../samples/knowledge-base/README.md): draft external documentation,
   require approval before publication, and reject unauthorized archival.
+- [Governed cloud infrastructure](../samples/cloud-infrastructure/README.md): plan a cloud change,
+  require approval before apply, and reject unauthorized destruction.
+- [Native cloud inventory](../samples/cloud-inventory-cli/README.md): prepare bounded AWS and Google
+  Cloud reads while proving partial adapters expose no deployment operation.
+- [Governed observability](../samples/observability/README.md): inspect health, declare an incident,
+  and require approval before external resolution.
 - [Governed handoffs](../samples/handoffs/README.md): preserve one work item while its Developer role
   moves from a human to an AI agent and a swarm.
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child
