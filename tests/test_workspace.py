@@ -8,6 +8,7 @@ from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddEnvironmentInput,
     AddEvidenceInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
@@ -66,6 +67,7 @@ def test_persists_defaults_and_materializes_a_codex_project(
     assert configuration.max_delegation_depth == 3
     assert (root / ".agora" / "methods" / "scrum" / "METHOD.md").exists()
     assert (root / ".agora" / "methods" / "kanban" / "METHOD.md").exists()
+    assert (root / ".agora" / "environments" / "README.md").exists()
     assert (root / ".agents" / "skills" / "agora-objective" / "SKILL.md").exists()
     assert "conventional-commits/v1.0.0" in (root / ".agora" / "STANDARDS.md").read_text()
     assert 'integration: "codex"' in (root / ".agora" / "project.md").read_text()
@@ -1070,6 +1072,13 @@ def test_discovers_installs_and_governs_the_terraform_cli_adapter(
     )
     assert installed.provider == "hashicorp"
     assert installed.implements == "cloud-infrastructure"
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="staging",
+            name="Staging",
+            allowed_tool_capabilities=["cloud.read", "cloud.plan"],
+        )
+    )
 
     governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
     resources = governed.invoke_tool(
@@ -1079,6 +1088,7 @@ def test_discovers_installs_and_governs_the_terraform_cli_adapter(
             operation_id="list-resources",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="staging",
             inputs={"environment": "infra/staging"},
         )
     )
@@ -1089,6 +1099,7 @@ def test_discovers_installs_and_governs_the_terraform_cli_adapter(
             operation_id="plan",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="staging",
             inputs={"environment": "infra/staging", "change": "plans/capacity.tfplan"},
         )
     )
@@ -1230,6 +1241,13 @@ def test_governs_partial_aws_and_gcp_inventory_adapters(
         workspace.install_tool_adapter(
             InstallToolAdapterInput(adapter_id=adapter_id, scope="project")
         )
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="inventory",
+            name="Cloud inventory",
+            allowed_tool_capabilities=["cloud.read"],
+        )
+    )
 
     aws_resources = workspace.invoke_tool(
         InvokeToolInput(
@@ -1238,6 +1256,7 @@ def test_governs_partial_aws_and_gcp_inventory_adapters(
             operation_id="list-resources",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="inventory",
             inputs={"environment": "us-east-1"},
         )
     )
@@ -1248,6 +1267,7 @@ def test_governs_partial_aws_and_gcp_inventory_adapters(
             operation_id="inspect-resource",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="inventory",
             inputs={
                 "environment": "projects/agora-production",
                 "resource": (
@@ -1541,6 +1561,13 @@ def test_governs_cloud_infrastructure_capabilities_by_role(
 ) -> None:
     root, workspace = project
     _prepare_scrum_team(workspace)
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="staging",
+            name="Staging",
+            allowed_tool_capabilities=["cloud.read", "cloud.plan"],
+        )
+    )
 
     plan = workspace.invoke_tool(
         InvokeToolInput(
@@ -1549,6 +1576,7 @@ def test_governs_cloud_infrastructure_capabilities_by_role(
             operation_id="plan",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="staging",
             inputs={"environment": "staging", "change": "increase-api-capacity"},
         )
     )
@@ -1592,11 +1620,134 @@ def test_governs_cloud_infrastructure_capabilities_by_role(
     assert not (root / ".agora" / "tool-runs" / "destroy-cloud-resource").exists()
 
 
+def test_enforces_environment_capabilities_role_scope_approvals_and_evidence(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="release",
+            title="Release a reviewed change",
+            actor_id="owner",
+        )
+    )
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="production",
+            name="Production",
+            allowed_tool_capabilities=["cloud.plan"],
+            required_approval_roles=["product-owner"],
+            require_successful_evidence=True,
+        )
+    )
+    invocation = InvokeToolInput(
+        id="production-plan",
+        tool_id="cloud-infrastructure",
+        operation_id="plan",
+        actor_id="developer",
+        swarm_id="delivery",
+        work_id="release",
+        environment_id="production",
+        inputs={"environment": "provider-production", "change": "release-v1"},
+    )
+
+    with pytest.raises(PermissionError, match="requires approval from: product-owner"):
+        workspace.invoke_tool(invocation)
+    workspace.add_approval(
+        AddApprovalInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="owner",
+            role_id="product-owner",
+        )
+    )
+    with pytest.raises(PermissionError, match="requires successful work evidence"):
+        workspace.invoke_tool(invocation)
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="facilitator",
+            type="test-run",
+            result="success",
+        )
+    )
+    prepared = workspace.invoke_tool(invocation)
+    assert prepared.environment_id == "production"
+    assert 'environment: "production"' in (Path(prepared.path) / "RUN.md").read_text()
+
+    role_path = root / ".agora" / "methods" / "scrum" / "roles" / "developer.md"
+    role_path.write_text(
+        role_path.read_text().replace(
+            'allowed-environments: ["*"]', 'allowed-environments: ["staging"]'
+        )
+    )
+    with pytest.raises(PermissionError, match="Actor roles do not allow"):
+        workspace.invoke_tool(
+            InvokeToolInput(**{**invocation.__dict__, "id": "role-denied-production-plan"})
+        )
+    report = workspace.validate()
+    assert not report.ok
+    assert {"role.environment-missing", "tool-run.environment-policy"}.issubset(
+        {issue.code for issue in report.issues}
+    )
+
+
+def test_rejects_missing_or_insufficient_environment_policy(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+    with pytest.raises(ValueError, match="at least one tool capability"):
+        workspace.add_environment(
+            AddEnvironmentInput(id="empty", name="Empty", allowed_tool_capabilities=[])
+        )
+    with pytest.raises(ValueError, match="requires a governed environment"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="unscoped-plan",
+                tool_id="cloud-infrastructure",
+                operation_id="plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"environment": "provider-sandbox", "change": "test"},
+            )
+        )
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="sandbox",
+            name="Sandbox",
+            allowed_tool_capabilities=["cloud.read"],
+        )
+    )
+    with pytest.raises(PermissionError, match="does not allow tool capability cloud.plan"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="capability-denied-plan",
+                tool_id="cloud-infrastructure",
+                operation_id="plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                environment_id="sandbox",
+                inputs={"environment": "provider-sandbox", "change": "test"},
+            )
+        )
+
+
 def test_governs_observability_and_incident_capabilities_by_role(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
     root, workspace = project
     _prepare_scrum_team(workspace)
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="production",
+            name="Production",
+            allowed_tool_capabilities=["observability.read"],
+        )
+    )
 
     health = workspace.invoke_tool(
         InvokeToolInput(
@@ -1605,6 +1756,7 @@ def test_governs_observability_and_incident_capabilities_by_role(
             operation_id="service-health",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="production",
             inputs={"service": "api", "environment": "production"},
         )
     )
@@ -2231,6 +2383,7 @@ def test_lists_and_summarizes_operational_workspace_state(
         "actors": 3,
         "methods": 2,
         "tools": 6,
+        "environments": 0,
         "swarms": 1,
         "work": 1,
         "delegations": 0,

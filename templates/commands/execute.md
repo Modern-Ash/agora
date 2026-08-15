@@ -9,8 +9,10 @@ Identify the active swarm, actor, assignment, work item, and current Method Pack
 outgoing transition edges and perform only the selected edge using tools allowed to that role.
 Respect WIP limits and gates. Persist material decisions, interactions, artifacts, evidence, and
 approvals. Invoke installed external operations through `agora tool invoke` so their attribution and
-results are durable. When work is delegated, read the related `DELEGATION.md` and act only within its
-parent or child contract. Do not invent a transition or bypass a gate.
+results are durable. When an operation requires an environment, select a policy from
+`.agora/environments`, confirm the assigned role permits it, and satisfy its approvals and evidence.
+When work is delegated, read the related `DELEGATION.md` and act only within its parent or child
+contract. Do not invent a transition or bypass a gate.
 
 When repository history is required, read `.agora/STANDARDS.md` and use the governed
 `repository/commit` operation with a Conventional Commits 1.0.0 message. Do not bypass its input

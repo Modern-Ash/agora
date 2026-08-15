@@ -56,6 +56,52 @@ def test_targets_a_project_outside_the_current_environment(tmp_path: Path, monke
     assert '"reference": "project:ada"' in output.getvalue()
 
 
+def test_manages_environment_policies_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert main(["init"], cwd=project, stdout=output, stderr=errors) == 0
+    assert (
+        main(
+            [
+                "environment",
+                "add",
+                "--id",
+                "production",
+                "--name",
+                "Production",
+                "--capability",
+                "deployment.create",
+                "--required-approval-role",
+                "product-owner",
+                "--require-successful-evidence",
+            ],
+            cwd=project,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            ["environment", "show", "--id", "production"],
+            cwd=project,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert main(["environment", "list"], cwd=project, stdout=output, stderr=errors) == 0
+
+    assert errors.getvalue() == ""
+    assert '"id": "production"' in output.getvalue()
+    assert '"require_successful_evidence": true' in output.getvalue()
+    assert (project / ".agora" / "environments" / "production.md").is_file()
+
+
 def test_installs_a_custom_method_without_an_initialized_project(
     tmp_path: Path, monkeypatch
 ) -> None:

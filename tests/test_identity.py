@@ -12,6 +12,7 @@ from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddEnvironmentInput,
     AddEvidenceInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
@@ -1505,6 +1506,7 @@ def test_launches_an_authenticated_actor_run_with_external_signature(
     payload = json.loads(payload_path.read_text(encoding="ascii"))
     assert payload["timeout-seconds"] == 300
     assert payload["max-output-bytes"] == 1048576
+    assert "environment" not in payload
 
     completed = workspace.launch_tool_run(
         LaunchToolRunInput(run_id=prepared.id, signature=str(signature_path))
@@ -1534,6 +1536,35 @@ def test_launches_an_authenticated_actor_run_with_external_signature(
     report = workspace.validate()
     assert not report.ok
     assert any(issue.code == "tool-run.invalid" for issue in report.issues)
+
+
+def test_binds_environment_to_authenticated_tool_authorization(tmp_path: Path, monkeypatch) -> None:
+    _, workspace, _, _ = _authenticated_project(tmp_path, monkeypatch)
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="production",
+            name="Production",
+            allowed_tool_capabilities=["cloud.plan"],
+        )
+    )
+    prepared = workspace.invoke_tool(
+        InvokeToolInput(
+            id="signed-production-plan",
+            tool_id="cloud-infrastructure",
+            operation_id="plan",
+            actor_id="developer",
+            swarm_id="delivery",
+            environment_id="production",
+            inputs={"environment": "provider-production", "change": "release-v1"},
+        )
+    )
+    payload_path = tmp_path / "production-authorization.json"
+    workspace.prepare_tool_authorization(
+        PrepareToolAuthorizationInput(run_id=prepared.id, output=str(payload_path))
+    )
+
+    payload = json.loads(payload_path.read_text(encoding="ascii"))
+    assert payload["environment"] == "production"
 
 
 def test_rejects_unsigned_immediate_launch_and_signature_replay(

@@ -4,6 +4,7 @@ id: "apply-plan"
 name: "Apply a saved Terraform plan"
 capability: "cloud.deploy"
 risk: "write"
+environment-required: true
 arguments: ["-chdir={environment}","apply","-input=false","-no-color","{plan}"]
 inputs: ["plan","environment"]
 result-kind: "cloud-deployment"

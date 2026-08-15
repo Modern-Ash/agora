@@ -96,6 +96,7 @@ Returns one issue without modifying the tracker.
 | `input-values` | Optional map restricting a declared input to explicit allowed strings |
 | `approval-role` | Optional role whose approval must exist on the selected work |
 | `result-kind` | Optional artifact kind describing the captured result |
+| `environment-required` | Optional boolean requiring a governed project environment |
 
 Agora never invokes a shell. It substitutes each `{input}` inside its argument and sends the result
 as one process argument, so spaces or punctuation do not become new commands. Unknown inputs,
@@ -127,11 +128,15 @@ required-capabilities: ["implementation"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm"]
 allowed-actions: ["work.transition", "artifact.add", "evidence.add"]
 allowed-tool-capabilities: ["repository.read", "repository.write", "ci.read", "ci.run"]
+allowed-environments: ["integration", "staging"]
 ---
 ```
 
 An invocation requires a registered actor, an active swarm assignment, and an assigned role that
 contains the operation capability. Tool installation alone grants no actor permission.
+When an environment is selected, one assigned role must grant both the capability and that
+environment, and `.agora/environments/<id>.md` must also allow the capability. See
+[Environment permissions](../guides/environment-permissions.md).
 
 ## Install and inspect
 
@@ -198,11 +203,11 @@ agora tool invoke \
 ```
 
 The child process inherits its normal environment plus `AGORA_PROJECT`, `AGORA_TOOL_RUN`,
-`AGORA_ACTOR`, `AGORA_SWARM`, and optional `AGORA_WORK`. Agora captures standard output, standard
-error, status, and exit code in `RESULT.md`, and appends project and work events. A non-zero exit is
-recorded before the CLI reports failure. Exit code `124` denotes an Agora timeout and `125` denotes
-an output limit violation. Both limits are copied into `RUN.md` and included in signed actor
-authorizations.
+`AGORA_ACTOR`, `AGORA_SWARM`, optional `AGORA_WORK`, and optional `AGORA_ENVIRONMENT`. Agora captures
+standard output, standard error, status, and exit code in `RESULT.md`, and appends project and work
+events. A non-zero exit is recorded before the CLI reports failure. Exit code `124` denotes an Agora
+timeout and `125` denotes an output limit violation. Both limits and the selected environment are
+copied into `RUN.md` and included in signed actor authorizations.
 
 These portable direct-process limits do not restrict filesystem, network, syscalls, credentials,
 memory, CPU, or detached descendants. Use a restricted external runner when those boundaries are

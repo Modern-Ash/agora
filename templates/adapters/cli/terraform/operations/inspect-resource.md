@@ -4,6 +4,7 @@ id: "inspect-resource"
 name: "Inspect a Terraform resource address"
 capability: "cloud.read"
 risk: "read"
+environment-required: true
 arguments: ["-chdir={environment}","state","list","{resource}"]
 inputs: ["resource","environment"]
 result-kind: "cloud-resource"

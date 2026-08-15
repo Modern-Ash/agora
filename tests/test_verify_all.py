@@ -26,6 +26,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: concurrent-writes",
         "sample: custom-lifecycle",
         "sample: delegated-work",
+        "sample: environment-permissions",
         "sample: execution-boundaries",
         "sample: gate-waivers",
         "sample: github-actions-cli",

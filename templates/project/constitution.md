@@ -14,6 +14,8 @@ status: "draft"
 - Project language, runtime, LLM, and development process are configuration, not core assumptions.
 - Decisions, handoffs, artifacts, and evidence remain reviewable in Git.
 - Production-impacting actions require an explicit project policy.
+- Environment-aware Tool Runs must bind a stable project environment separately from provider
+  target inputs and credentials.
 - Recursive delegation must remain acyclic and within the configured maximum depth.
 - Repository commits follow every active standard in `.agora/STANDARDS.md`, including Conventional
   Commits 1.0.0.

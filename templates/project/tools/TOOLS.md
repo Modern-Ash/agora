@@ -15,6 +15,8 @@ cloud providers, observability platforms, and communication services.
 - Read and write capabilities are granted separately.
 - Destructive, merge, release, and production actions require explicit policy and evidence.
 - Method Packs and role policies may further restrict this catalog.
+- Environment-aware operations require an admitted project environment; role capability,
+  environment capability, approvals, and evidence are cumulative restrictions.
 - Invoke installed operations through `agora tool invoke` so attribution and results remain durable.
 - Prefer a reviewed native CLI adapter already used by the developer, then a reviewed team wrapper;
   use MCP only when it provides a required capability unavailable through the CLI.

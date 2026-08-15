@@ -221,10 +221,16 @@ whether it meets the manifest's minimum runtime version. Neither result implies 
 installation, authority, or a successful provider call. The Jira adapter demonstrates the absent
 state when ACLI is not installed.
 
-A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
-It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
-and command metadata, optional actor authentication evidence, while `RESULT.md` captures status,
-output, and exit code.
+A project **Environment Policy** names a stable governance boundary and restricts provider-neutral
+Tool Pack capabilities. It may require work approvals and successful evidence. Method Pack roles
+independently restrict their capabilities through `allowed-environments`; provider accounts,
+regions, directories, credentials, and translation remain adapter-owned.
+
+A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, optional
+environment, and input map. It may remain `prepared` for external delegation or be launched locally.
+`RUN.md` persists attribution and command metadata, optional actor authentication evidence, while
+`RESULT.md` captures status, output, and exit code. The selected environment is included in signed
+launch authorization and revalidated immediately before execution.
 
 The bundled **Work Management Tool Pack** separates `issue.read`, `issue.write`, and
 `issue.transition` authority behind a stable `workctl` interface. External ticket state and Agora

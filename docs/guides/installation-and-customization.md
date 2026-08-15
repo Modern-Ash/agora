@@ -459,6 +459,11 @@ and launch to the resolved runtime, exact command, assignments, and materialized
 Keep environment-specific behavior out of Method Packs. Roles and lifecycle rules must remain usable
 when the project changes model provider, IDE, CLI, or cloud environment.
 
+Project execution targets are governed separately through Markdown environment policies. Use
+`agora environment add` to restrict neutral Tool Pack capabilities, approvals, and evidence, then
+limit Method Pack roles with `allowed-environments`. Provider account and target translation still
+belongs in the adapter. See [Environment permissions](environment-permissions.md).
+
 ## Customize distribution templates
 
 Framework developers may point initialization at an alternate complete template tree:

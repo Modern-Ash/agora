@@ -21,6 +21,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   governance, and delegation lifecycles.
 - [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct
   process timeouts and captured-output limits without claiming operating-system isolation.
+- [Environment permissions](guides/environment-permissions.md): restrict Tool Runs through
+  project-defined capability, role, approval, and evidence policies.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native
   CLI integrations while keeping MCP as an explicit alternative transport.
 - [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
@@ -118,6 +120,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   require approval before publication, and reject unauthorized archival.
 - [Governed cloud infrastructure](../samples/cloud-infrastructure/README.md): plan a cloud change,
   require approval before apply, and reject unauthorized destruction.
+- [Environment permissions](../samples/environment-permissions/README.md): require role scope,
+  approval, and successful evidence before preparing a production Tool Run.
 - [Native cloud inventory](../samples/cloud-inventory-cli/README.md): prepare bounded AWS and Google
   Cloud reads while proving partial adapters expose no deployment operation.
 - [Governed observability](../samples/observability/README.md): inspect health, declare an incident,

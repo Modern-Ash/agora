@@ -56,6 +56,8 @@ validation, so front matter preserves structured metadata and gates remain execu
   artifact promotion, and explicit cross-swarm reference-based result collection are part of the
   current filesystem protocol. Opaque external artifact bytes remain provider-owned.
 - Distributed leases for work coordinated across separate hosts. Local writer locks are implemented.
-- Environment-specific permissions. Single-use, work-scoped Approval Delegation and granular,
-  evidence-backed Gate Waivers are implemented without transferring roles or bypassing transition,
-  role, WIP, child-closure, or work-status policy.
+- Environment-specific Tool Run permissions are implemented through project-defined Markdown
+  policies, Method Pack role restrictions, operation opt-in, approvals, evidence, launch-time
+  revalidation, and signed environment binding. Single-use, work-scoped Approval Delegation and
+  granular, evidence-backed Gate Waivers are also implemented without transferring roles or
+  bypassing transition, role, WIP, child-closure, or work-status policy.

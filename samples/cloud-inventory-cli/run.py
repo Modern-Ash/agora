@@ -4,6 +4,7 @@ from pathlib import Path
 
 from agora.model import (
     AddActorInput,
+    AddEnvironmentInput,
     AssignActorInput,
     CreateSwarmInput,
     InitInput,
@@ -61,6 +62,13 @@ def main() -> None:
         ("developer", "developer"),
     ):
         agora.assign_actor(AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor))
+    agora.add_environment(
+        AddEnvironmentInput(
+            id="inventory",
+            name="Cloud inventory",
+            allowed_tool_capabilities=["cloud.read"],
+        )
+    )
 
     aws = agora.invoke_tool(
         InvokeToolInput(
@@ -69,6 +77,7 @@ def main() -> None:
             operation_id="list-resources",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="inventory",
             inputs={"environment": "us-east-1"},
         )
     )
@@ -79,6 +88,7 @@ def main() -> None:
             operation_id="list-resources",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="inventory",
             inputs={"environment": "projects/agora-production"},
         )
     )

@@ -60,8 +60,8 @@ adapters install as Codex skills or commands for other agents.
 
 - Distribution: defaults versioned with the Python package.
 - User: reusable preferences and actors under `~/.agora` or `$AGORA_HOME`.
-- Project: shared constitution, integration, standards, methods, policies, and maximum delegation
-  depth.
+- Project: shared constitution, integration, standards, methods, environment policies, and maximum
+  delegation depth.
 - Swarm: objective, current assignments, handoff history, branch, work, and evidence.
 
 More specific scopes may restrict broader scopes. They must not silently grant permissions prohibited
@@ -211,7 +211,8 @@ authority.
 
 This slice validates actor kind, capabilities, assignment, handoff authority, allowed action,
 transition-specific role, WIP, gates, approval records, Tool Pack inputs, tool capabilities,
-interruption edges, status attribution, sequence continuity, and derived swarm state.
+environment capability and role policy, interruption edges, status attribution, sequence
+continuity, and derived swarm state.
 Mutating workspace operations hold a reentrant operating-system lock keyed by the canonical project
 or Agora home path. Initialization acquires home and target locks in deterministic order. Lock
 metadata is runtime-only Markdown outside the repository; atomic document replacement still protects

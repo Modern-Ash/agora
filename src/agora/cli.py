@@ -11,6 +11,7 @@ from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddEnvironmentInput,
     AddEvidenceInput,
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
@@ -136,6 +137,19 @@ def _build_parser() -> argparse.ArgumentParser:
     commands.add_parser("doctor", help="Check environment prerequisites")
     commands.add_parser("status", help="Summarize operational project state")
     commands.add_parser("validate", help="Validate every Agora record and reference")
+    environment = commands.add_parser(
+        "environment", help="Manage project-defined execution environment policies"
+    ).add_subparsers(dest="environment_command", required=True)
+    environment_add = environment.add_parser("add", help="Add an environment policy")
+    environment_add.add_argument("--id", required=True)
+    environment_add.add_argument("--name", required=True)
+    environment_add.add_argument("--capability", action="append", default=[])
+    environment_add.add_argument("--required-approval-role", action="append", default=[])
+    environment_add.add_argument("--require-successful-evidence", action="store_true")
+    environment_add.add_argument("--force", action="store_true")
+    environment_show = environment.add_parser("show", help="Show an environment policy")
+    environment_show.add_argument("--id", required=True)
+    environment.add_parser("list", help="List environment policies")
     lock = commands.add_parser("lock", help="Inspect local writer coordination").add_subparsers(
         dest="lock_command", required=True
     )
@@ -297,6 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_invoke.add_argument("--actor", required=True)
     tool_invoke.add_argument("--swarm", required=True)
     tool_invoke.add_argument("--work")
+    tool_invoke.add_argument("--environment")
     tool_invoke.add_argument("--input", action="append", default=[])
     tool_invoke.add_argument("--launch", action="store_true")
     tool_invoke.add_argument("--force", action="store_true")
@@ -827,6 +842,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
+    if args.command == "environment" and args.environment_command == "add":
+        return workspace.add_environment(
+            AddEnvironmentInput(
+                id=args.id,
+                name=args.name,
+                allowed_tool_capabilities=args.capability,
+                required_approval_roles=args.required_approval_role,
+                require_successful_evidence=args.require_successful_evidence,
+                force=args.force,
+            )
+        )
+    if args.command == "environment" and args.environment_command == "show":
+        return workspace.show_environment(args.id)
+    if args.command == "environment" and args.environment_command == "list":
+        return workspace.list_environments()
     if args.command == "configure":
         return workspace.configure(
             ConfigureInput(
@@ -1016,6 +1046,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 actor_id=args.actor,
                 swarm_id=args.swarm,
                 work_id=args.work,
+                environment_id=args.environment,
                 inputs=_parse_inputs(args.input),
                 launch=args.launch,
                 force=args.force,

@@ -309,6 +309,7 @@ class ToolOperation:
     input_values: dict[str, list[str]] = field(default_factory=dict)
     approval_role: str | None = None
     result_kind: str | None = None
+    environment_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -546,6 +547,7 @@ class ToolRunRecord:
     actor: str
     swarm_id: str
     work_id: str | None
+    environment_id: str | None
     capability: str
     risk: ToolRisk
     inputs: dict[str, str]
@@ -563,6 +565,16 @@ class ToolRunRecord:
     authorization_signature: str | None = None
     timeout_seconds: int = 300
     max_output_bytes: int = 1048576
+
+
+@dataclass(frozen=True)
+class EnvironmentPolicyRecord:
+    id: str
+    name: str
+    allowed_tool_capabilities: list[str]
+    required_approval_roles: list[str]
+    require_successful_evidence: bool
+    path: str
 
 
 @dataclass(frozen=True)
@@ -1211,6 +1223,17 @@ class InvokeToolInput:
     swarm_id: str
     id: str | None = None
     work_id: str | None = None
+    environment_id: str | None = None
     inputs: dict[str, str] = field(default_factory=dict)
     launch: bool = False
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class AddEnvironmentInput:
+    id: str
+    name: str
+    allowed_tool_capabilities: list[str] = field(default_factory=list)
+    required_approval_roles: list[str] = field(default_factory=list)
+    require_successful_evidence: bool = False
     force: bool = False

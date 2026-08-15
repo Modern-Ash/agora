@@ -4,6 +4,7 @@ id: "inspect-resource"
 name: "Inspect a Google Cloud asset"
 capability: "cloud.read"
 risk: "read"
+environment-required: true
 arguments: ["asset","search-all-resources","--scope={environment}","--query=name={resource}","--limit=1","--format=json(name,assetType,project,displayName,location,state)"]
 inputs: ["resource","environment"]
 result-kind: "cloud-resource"

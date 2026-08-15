@@ -294,6 +294,9 @@ def _load_operation(path: Path) -> ToolOperation:
     result_kind = optional_string_attribute(document.attributes, "result-kind")
     if result_kind is not None:
         assert_slug(result_kind, "Result artifact kind")
+    environment_required = document.attributes.get("environment-required", False)
+    if not isinstance(environment_required, bool):
+        raise ValueError(f"Tool operation {operation_id} environment-required must be a boolean")
     return ToolOperation(
         id=operation_id,
         name=name,
@@ -305,6 +308,7 @@ def _load_operation(path: Path) -> ToolOperation:
         input_values=input_values,
         approval_role=approval_role,
         result_kind=result_kind,
+        environment_required=environment_required,
     )
 
 
@@ -354,6 +358,11 @@ def validate_tool_adapter_contract(adapter: ToolContract, implemented: ToolContr
         if actual.risk != expected.risk:
             raise ValueError(
                 f"Tool adapter {adapter.id}/{operation_id} risk must be {expected.risk}"
+            )
+        if actual.environment_required != expected.environment_required:
+            raise ValueError(
+                f"Tool adapter {adapter.id}/{operation_id} environment requirement must match "
+                f"{implemented.id}"
             )
         missing_inputs = sorted(set(expected.inputs) - set(actual.inputs))
         if missing_inputs:

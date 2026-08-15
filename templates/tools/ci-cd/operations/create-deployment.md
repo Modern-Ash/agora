@@ -4,6 +4,7 @@ id: "create-deployment"
 name: "Create a deployment"
 capability: "deployment.create"
 risk: "write"
+environment-required: true
 arguments: ["deployment","create","--environment","{environment}","--artifact","{artifact}","--output","json"]
 inputs: ["environment","artifact"]
 result-kind: "deployment"

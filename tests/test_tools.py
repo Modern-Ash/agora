@@ -236,6 +236,15 @@ def test_rejects_an_extra_operation_in_a_partial_adapter() -> None:
         validate_tool_adapter_contract(adapter, implemented)
 
 
+def test_rejects_an_adapter_that_weakens_environment_governance() -> None:
+    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    adapter.operations["plan"] = replace(adapter.operations["plan"], environment_required=False)
+
+    with pytest.raises(ValueError, match="environment requirement must match"):
+        validate_tool_adapter_contract(adapter, implemented)
+
+
 def test_loads_the_bundled_knowledge_base_contract() -> None:
     contract = load_tool_contract(template_root() / "tools" / "knowledge-base")
 
@@ -265,6 +274,7 @@ def test_loads_the_bundled_cloud_infrastructure_contract() -> None:
     assert contract.operations["plan"].capability == "cloud.plan"
     assert contract.operations["apply-plan"].capability == "cloud.deploy"
     assert contract.operations["destroy-resource"].capability == "cloud.destroy"
+    assert contract.operations["plan"].environment_required is True
     assert contract.operations["destroy-resource"].risk == "destructive"
 
 

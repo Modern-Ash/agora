@@ -105,6 +105,7 @@ required-capabilities: ["delivery"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm", "automation"]
 allowed-actions: ["work.transition", "artifact.add", "evidence.add"]
 allowed-tool-capabilities: ["repository.read", "repository.write", "ci.run"]
+allowed-environments: ["integration", "staging"]
 ---
 
 # Maker
@@ -117,8 +118,11 @@ Produces the governed outcome and its inspectable artifacts.
 swarm; it does not grant operating-system, cloud, or external-service permissions.
 
 `allowed-tool-capabilities` is optional and defaults to no external-tool authority. Each value must
-match the capability of an installed Tool Pack operation. See the
-[Tool Pack reference](tool-packs.md) for invocation and result contracts.
+match the capability of an installed Tool Pack operation. `allowed-environments` is optional for
+legacy roles and defaults to `["*"]`; explicit ids must reference project environment policies.
+One assigned role must grant both the operation capability and selected environment. See the
+[Tool Pack reference](tool-packs.md) for invocation and result contracts and
+[Environment permissions](../guides/environment-permissions.md) for project policy.
 
 Actions currently issued by the CLI are:
 

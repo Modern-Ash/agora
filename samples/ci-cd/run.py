@@ -9,6 +9,7 @@ from agora.markdown import read_markdown, render_markdown
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
+    AddEnvironmentInput,
     AssignActorInput,
     CreateSwarmInput,
     CreateWorkInput,
@@ -145,6 +146,13 @@ def main() -> None:
         raise AssertionError("Developer unexpectedly received ci.cancel authority")
 
     _grant_guarded_deployment(project, agora)
+    agora.add_environment(
+        AddEnvironmentInput(
+            id="staging",
+            name="Staging",
+            allowed_tool_capabilities=["deployment.create"],
+        )
+    )
     deployment = InvokeToolInput(
         id="deploy-release-candidate",
         tool_id="ci-cd",
@@ -152,6 +160,7 @@ def main() -> None:
         actor_id="developer",
         swarm_id="delivery",
         work_id="release-candidate",
+        environment_id="staging",
         inputs={"environment": "staging", "artifact": "sha256:verified"},
         launch=True,
     )

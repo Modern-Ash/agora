@@ -268,6 +268,8 @@ def tool_authorization_payload(record: ToolRunRecord) -> bytes:
         "max-output-bytes": record.max_output_bytes,
         "created-at": record.created_at,
     }
+    if record.environment_id is not None:
+        value["environment"] = record.environment_id
     return (
         json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode()

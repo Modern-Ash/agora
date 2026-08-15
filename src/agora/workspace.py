@@ -66,6 +66,7 @@ from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddEnvironmentInput,
     AddEvidenceInput,
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
@@ -83,6 +84,7 @@ from agora.model import (
     DelegationActorInput,
     DelegationRecord,
     DoctorCheck,
+    EnvironmentPolicyRecord,
     EventRecord,
     GatePolicy,
     GateWaiverRecord,
@@ -200,6 +202,7 @@ from agora.registry_distribution import (
     inspect_registry_release,
 )
 from agora.tools import (
+    CAPABILITY_PATTERN,
     DEFAULT_TOOL_MAX_OUTPUT_BYTES,
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     MAX_TOOL_MAX_OUTPUT_BYTES,
@@ -402,6 +405,54 @@ class AgoraWorkspace:
             id_=upgrade_id,
             applied_at=self._timestamp(),
         )
+
+    @_locked_mutation("project")
+    def add_environment(self, data: AddEnvironmentInput) -> EnvironmentPolicyRecord:
+        assert_slug(data.id, "Environment id")
+        if not data.name.strip():
+            raise ValueError("Environment name must not be empty")
+        if not data.allowed_tool_capabilities:
+            raise ValueError("Environment policy must allow at least one tool capability")
+        if len(set(data.allowed_tool_capabilities)) != len(data.allowed_tool_capabilities):
+            raise ValueError("Environment tool capabilities must be unique")
+        for capability in data.allowed_tool_capabilities:
+            if CAPABILITY_PATTERN.fullmatch(capability) is None:
+                raise ValueError(f"Invalid environment tool capability: {capability}")
+        if len(set(data.required_approval_roles)) != len(data.required_approval_roles):
+            raise ValueError("Environment approval roles must be unique")
+        for role_id in data.required_approval_roles:
+            assert_slug(role_id, "Environment approval role id")
+
+        root = self.project_root()
+        path = root / ".agora" / "environments" / f"{data.id}.md"
+        record = EnvironmentPolicyRecord(
+            id=data.id,
+            name=data.name.strip(),
+            allowed_tool_capabilities=data.allowed_tool_capabilities,
+            required_approval_roles=data.required_approval_roles,
+            require_successful_evidence=data.require_successful_evidence,
+            path=str(path),
+        )
+        write_new(path, self._render_environment(record), data.force)
+        append_entry(
+            root / ".agora" / "events.md",
+            f"- {self._timestamp()} | environment.configured | environment={record.id}",
+        )
+        return record
+
+    def show_environment(self, environment_id: str) -> EnvironmentPolicyRecord:
+        assert_slug(environment_id, "Environment id")
+        return self._load_environment(
+            self.project_root() / ".agora" / "environments" / f"{environment_id}.md"
+        )
+
+    def list_environments(self) -> list[EnvironmentPolicyRecord]:
+        root = self.project_root() / ".agora" / "environments"
+        return [
+            self._load_environment(path)
+            for path in sorted(root.glob("*.md"))
+            if path.name != "README.md"
+        ]
 
     @_locked_mutation("scoped")
     def install_method(self, data: InstallMethodInput) -> MethodPackRecord:
@@ -5776,6 +5827,15 @@ class AgoraWorkspace:
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
         if work is not None:
             self._assert_work_mutable(root, swarm, work)
+        self._assert_environment_permission(
+            root,
+            swarm,
+            roles,
+            operation.capability,
+            data.environment_id,
+            operation.environment_required,
+            work,
+        )
         if operation.approval_role is not None:
             if work is None:
                 raise ValueError(
@@ -5815,6 +5875,7 @@ class AgoraWorkspace:
             actor=actor.reference,
             swarm_id=swarm.id,
             work_id=work.id if work else None,
+            environment_id=data.environment_id,
             capability=operation.capability,
             risk=operation.risk,
             inputs=data.inputs,
@@ -5928,6 +5989,15 @@ class AgoraWorkspace:
         work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
         if work is not None:
             self._assert_work_mutable(root, swarm, work)
+        self._assert_environment_permission(
+            root,
+            swarm,
+            roles,
+            operation.capability,
+            record.environment_id,
+            operation.environment_required,
+            work,
+        )
         if operation.approval_role is not None:
             if work is None or operation.approval_role not in work.approval_roles:
                 raise PermissionError(
@@ -5995,6 +6065,8 @@ class AgoraWorkspace:
         }
         if work is not None:
             environment["AGORA_WORK"] = work.id
+        if record.environment_id is not None:
+            environment["AGORA_ENVIRONMENT"] = record.environment_id
         if self._tool_runner is None:
             result = _run_tool_process(
                 record.command,
@@ -6045,6 +6117,7 @@ class AgoraWorkspace:
         actors = self.list_actors()
         methods = self.list_methods()
         tools = self.list_tools()
+        environments = self.list_environments()
         swarms = self.list_swarms()
         work = self.list_work()
         delegations = self.list_delegations()
@@ -6089,6 +6162,7 @@ class AgoraWorkspace:
                 "actors": len(actors),
                 "methods": len(methods),
                 "tools": len(tools),
+                "environments": len(environments),
                 "swarms": len(swarms),
                 "work": len(work),
                 "delegations": len(delegations),
@@ -6152,6 +6226,7 @@ class AgoraWorkspace:
             "methods": 0,
             "tools": 0,
             "tool-adapters": 0,
+            "environments": 0,
             "actors": 0,
             "actor-keys": 0,
             "swarms": 0,
@@ -6303,6 +6378,26 @@ class AgoraWorkspace:
             lambda: _assert_project_standards(read_markdown(standards_path), standards_path),
         )
 
+        environments: dict[str, EnvironmentPolicyRecord] = {}
+        for path in sorted((root / ".agora" / "environments").glob("*.md")):
+            if path.name == "README.md":
+                continue
+            environment = inspect(
+                "environments",
+                "environment.invalid",
+                path,
+                lambda path=path: self._load_environment(path),
+            )
+            if not isinstance(environment, EnvironmentPolicyRecord):
+                continue
+            environments[environment.id] = environment
+            if environment.id != path.stem:
+                issue(
+                    "environment.id-mismatch",
+                    path,
+                    f"Environment id {environment.id} does not match filename {path.name}",
+                )
+
         command_root = root / ".agora" / "commands"
         commands: dict[str, Path] = {}
         for path in sorted(command_root.glob("*.md")):
@@ -6384,6 +6479,30 @@ class AgoraWorkspace:
                 project_path,
                 f"Default Method Pack is not valid or installed: {project.default_method}",
             )
+        for method_id, contract in methods.items():
+            for role_id in contract.required_roles:
+                role_path = method_root / method_id / "roles" / f"{role_id}.md"
+                role = read_markdown(role_path)
+                allowed_environments = role.attributes.get("allowed-environments", ["*"])
+                unknown = sorted(set(allowed_environments) - {"*"} - set(environments))
+                if unknown:
+                    issue(
+                        "role.environment-missing",
+                        role_path,
+                        f"Role {role_id} allows missing environments: {', '.join(unknown)}",
+                    )
+        known_role_ids = {
+            role_id for contract in methods.values() for role_id in contract.required_roles
+        }
+        for environment in environments.values():
+            unknown_roles = sorted(set(environment.required_approval_roles) - known_role_ids)
+            if unknown_roles:
+                issue(
+                    "environment.approval-role-missing",
+                    Path(environment.path),
+                    "Environment requires roles absent from installed Method Packs: "
+                    f"{', '.join(unknown_roles)}",
+                )
 
         tools: dict[str, ToolContract] = {}
         tool_root = root / ".agora" / "tools"
@@ -8152,6 +8271,22 @@ class AgoraWorkspace:
                     path,
                     "Tool run policy differs from its installed Tool Pack operation",
                 )
+            if run.environment_id is not None and run.environment_id not in environments:
+                issue(
+                    "tool-run.environment-missing",
+                    path,
+                    f"Tool run references missing environment: {run.environment_id}",
+                )
+            if (
+                operation is not None
+                and operation.environment_required
+                and run.environment_id is None
+            ):
+                issue(
+                    "tool-run.environment-required",
+                    path,
+                    f"Tool operation {run.tool_id}/{run.operation_id} requires an environment",
+                )
             run_actor = resolve_actor(run.actor, path)
             if (
                 run_actor is not None
@@ -8176,6 +8311,30 @@ class AgoraWorkspace:
                     path,
                     f"Tool run references missing work: {run.work_id}",
                 )
+            if (
+                run.status in {"prepared", "running"}
+                and operation is not None
+                and run.swarm_id in swarms
+                and (run.environment_id is None or run.environment_id in environments)
+            ):
+                run_swarm = swarms[run.swarm_id]
+                run_work = (
+                    work_records.get((run.swarm_id, run.work_id))
+                    if run.work_id is not None
+                    else None
+                )
+                try:
+                    self._assert_environment_permission(
+                        root,
+                        run_swarm,
+                        self._actor_roles(run_swarm, run.actor),
+                        operation.capability,
+                        run.environment_id,
+                        operation.environment_required,
+                        run_work,
+                    )
+                except (FileNotFoundError, PermissionError, ValueError) as error:
+                    issue("tool-run.environment-policy", path, str(error))
             result_path = path.parent / "RESULT.md"
             if run.status in {"completed", "failed"}:
                 inspect(
@@ -10121,6 +10280,7 @@ class AgoraWorkspace:
         method_root = root / ".agora" / "methods" / swarm.method
         swarm_root = Path(swarm.path)
         role_paths = [method_root / "roles" / f"{role}.md" for role in roles]
+        environment_paths = sorted((root / ".agora" / "environments").glob("*.md"))
         handoff_paths = sorted((swarm_root / "handoffs").glob("*/HANDOFF.md"))
         delegation_paths = self._related_delegation_paths(
             root, swarm.id, work.id if work is not None else None
@@ -10148,6 +10308,7 @@ class AgoraWorkspace:
             method_root / "PROTOCOL.md",
             method_root / "TOOLS.md",
             *role_paths,
+            *environment_paths,
             *handoff_paths,
             *delegation_paths,
             *represented_paths,
@@ -10277,6 +10438,57 @@ class AgoraWorkspace:
             updates=updates,
         )
 
+    @staticmethod
+    def _render_environment(record: EnvironmentPolicyRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/environment-policy/v1",
+                    "id": record.id,
+                    "name": record.name,
+                    "allowed-tool-capabilities": record.allowed_tool_capabilities,
+                    "required-approval-roles": record.required_approval_roles,
+                    "require-successful-evidence": record.require_successful_evidence,
+                },
+                body=(
+                    f"# {record.name}\n\n"
+                    "This policy limits governed Tool Runs for one project-defined environment. "
+                    "Provider targets and credentials remain in reviewed adapters and external "
+                    "runtime configuration."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_environment(path: Path) -> EnvironmentPolicyRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/environment-policy/v1", path)
+        environment_id = string_attribute(document.attributes, "id")
+        assert_slug(environment_id, "Environment id")
+        capabilities = strings_attribute(document.attributes, "allowed-tool-capabilities")
+        if not capabilities or len(set(capabilities)) != len(capabilities):
+            raise ValueError(
+                f"Environment {environment_id} must declare unique allowed tool capabilities"
+            )
+        for capability in capabilities:
+            if CAPABILITY_PATTERN.fullmatch(capability) is None:
+                raise ValueError(f"Invalid environment tool capability: {capability}")
+        approval_roles = strings_attribute(document.attributes, "required-approval-roles")
+        if len(set(approval_roles)) != len(approval_roles):
+            raise ValueError(f"Environment {environment_id} approval roles must be unique")
+        for role_id in approval_roles:
+            assert_slug(role_id, "Environment approval role id")
+        return EnvironmentPolicyRecord(
+            id=environment_id,
+            name=string_attribute(document.attributes, "name"),
+            allowed_tool_capabilities=capabilities,
+            required_approval_roles=approval_roles,
+            require_successful_evidence=_boolean_attribute(
+                document.attributes, "require-successful-evidence"
+            ),
+            path=str(path),
+        )
+
     def _actor_tool_capabilities(
         self, root: Path, swarm: SwarmRecord, roles: list[str]
     ) -> set[str]:
@@ -10290,6 +10502,69 @@ class AgoraWorkspace:
                 raise ValueError(f"Role {role} allowed-tool-capabilities must be a string array")
             capabilities.update(value)
         return capabilities
+
+    def _assert_environment_permission(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        roles: list[str],
+        capability: str,
+        environment_id: str | None,
+        environment_required: bool,
+        work: WorkRecord | None,
+    ) -> None:
+        if environment_id is None:
+            if environment_required:
+                raise ValueError(f"Tool capability {capability} requires a governed environment")
+            return
+        assert_slug(environment_id, "Environment id")
+        policy = self._load_environment(root / ".agora" / "environments" / f"{environment_id}.md")
+        if policy.id != environment_id:
+            raise ValueError(
+                f"Environment id {policy.id} does not match policy filename {environment_id}"
+            )
+        if capability not in policy.allowed_tool_capabilities:
+            raise PermissionError(
+                f"Environment {environment_id} does not allow tool capability {capability}"
+            )
+
+        permitted_roles: list[str] = []
+        for role_id in roles:
+            attributes = read_markdown(
+                root / ".agora" / "methods" / swarm.method / "roles" / f"{role_id}.md"
+            ).attributes
+            capabilities = strings_attribute(attributes, "allowed-tool-capabilities")
+            environments = attributes.get("allowed-environments", ["*"])
+            if not isinstance(environments, list) or any(
+                not isinstance(item, str) or not item for item in environments
+            ):
+                raise ValueError(f"Role {role_id} allowed-environments must be a string array")
+            if capability in capabilities and (
+                "*" in environments or environment_id in environments
+            ):
+                permitted_roles.append(role_id)
+        if not permitted_roles:
+            raise PermissionError(
+                f"Actor roles do not allow tool capability {capability} in environment "
+                f"{environment_id}"
+            )
+
+        if policy.required_approval_roles or policy.require_successful_evidence:
+            if work is None:
+                raise ValueError(
+                    f"Environment {environment_id} requires governed work for its approvals "
+                    "or evidence"
+                )
+            missing_roles = sorted(set(policy.required_approval_roles) - set(work.approval_roles))
+            if missing_roles:
+                raise PermissionError(
+                    f"Environment {environment_id} requires approval from: "
+                    f"{', '.join(missing_roles)}"
+                )
+            if policy.require_successful_evidence and "success" not in work.evidence_results:
+                raise PermissionError(
+                    f"Environment {environment_id} requires successful work evidence"
+                )
 
     @staticmethod
     def _substitute_tool_inputs(argument: str, inputs: dict[str, str]) -> str:
@@ -10310,6 +10585,7 @@ class AgoraWorkspace:
                     "actor": record.actor,
                     "swarm": record.swarm_id,
                     "work": record.work_id,
+                    "environment": record.environment_id,
                     "capability": record.capability,
                     "risk": record.risk,
                     "inputs": record.inputs,
@@ -10399,6 +10675,7 @@ class AgoraWorkspace:
             actor=string_attribute(document.attributes, "actor"),
             swarm_id=string_attribute(document.attributes, "swarm"),
             work_id=optional_string_attribute(document.attributes, "work"),
+            environment_id=optional_string_attribute(document.attributes, "environment"),
             capability=string_attribute(document.attributes, "capability"),
             risk=_tool_risk(risk),
             inputs=record_attribute(document.attributes, "inputs"),
@@ -10417,6 +10694,8 @@ class AgoraWorkspace:
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
         )
+        if record.environment_id is not None:
+            assert_slug(record.environment_id, "Tool Run environment id")
         validate_persisted_tool_authorization(record)
         return record
 

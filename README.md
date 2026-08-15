@@ -44,6 +44,7 @@ Agora distribution
   STANDARDS.md          Enforced cross-actor engineering standards
   commands/*.md         Portable agent commands
   methods/              Built-in and custom lifecycle Method Packs
+  environments/*.md     Project-defined Tool Run permission boundaries
   registries/           Project-local pack catalog snapshots
   actors/               Project actors and public key lifecycle histories
   tools/                Policy and installed Tool Packs
@@ -395,6 +396,11 @@ Agora includes Git-backed `repository` plus provider-neutral `work-management`, 
 `knowledge-base`, `cloud-infrastructure`, and `observability` packs:
 
 ```bash
+agora environment add --id staging --name "Staging" \
+  --capability cloud.read --capability cloud.plan
+agora environment add --id production --name "Production" \
+  --capability observability.read
+
 agora tool show --tool repository
 agora tool invoke --id payment-status \
   --tool repository --operation status \
@@ -425,12 +431,14 @@ agora tool invoke --id inspect-payment-guide \
 agora tool invoke --id plan-payment-capacity \
   --tool cloud-infrastructure --operation plan \
   --actor delivery-swarm --swarm payments \
+  --environment staging \
   --input environment=staging \
   --input change=increase-payment-capacity --launch
 
 agora tool invoke --id payment-health \
   --tool observability --operation service-health \
   --actor delivery-swarm --swarm payments \
+  --environment production \
   --input service=payments --input environment=production --launch
 ```
 
@@ -438,6 +446,11 @@ The executable runs without a shell. Agora persists `RUN.md`, captures output an
 `RESULT.md`, and stores no credentials. Omitting `--launch` creates a portable invocation for an IDE,
 CI worker, or cloud executor. The commit operation validates Conventional Commits 1.0.0 before a run
 record or Git commit is created.
+
+Environment-aware operations additionally require a project policy, an assigned role that permits
+the environment, and any configured work approvals or successful evidence. Agora records the stable
+environment id separately from provider-specific Tool Pack inputs and rechecks it before launch. See
+the [environment permissions guide](docs/guides/environment-permissions.md).
 
 The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
 tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
@@ -586,9 +599,10 @@ agora validate
 ```
 
 `doctor` checks environment prerequisites. `validate` performs a complete, non-mutating integrity
-audit across schemas, portable commands, generated agent adapters, Method and Tool Packs, actors,
-role assignments, work, WIP, handoffs, delegations, sessions, tool runs, events, and recursive swarm
-constraints. Validation emits all findings and exits with status `1` when errors are present. See the
+audit across schemas, portable commands, generated agent adapters, Method and Tool Packs,
+environment policies, actors, role assignments, work, WIP, handoffs, delegations, sessions, tool
+runs, events, and recursive swarm constraints. Validation emits all findings and exits with status
+`1` when errors are present. See the
 [operations and validation guide](docs/guides/operations-and-validation.md).
 
 ## Development
@@ -627,6 +641,7 @@ uv run python samples/pack-dependencies/run.py
 uv run python samples/remote-registry/run.py
 uv run python samples/gate-waivers/run.py
 uv run python samples/approval-delegation/run.py
+uv run python samples/environment-permissions/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -653,6 +668,8 @@ local process contention and recovery. The
 compatible Tool Pack before copying either catalog selection. The
 [remote registry sample](samples/remote-registry/README.md) signs, verifies, installs, and validates a
 versioned registry snapshot without persisting a private key.
+The [environment permissions sample](samples/environment-permissions/README.md) gates a production
+Tool Run on role scope, Product Owner approval, and successful work evidence.
 
 ## Documentation
 
@@ -671,6 +688,7 @@ versioned registry snapshot without persisting a private key.
 - [Work decomposition](docs/guides/work-decomposition.md)
 - [Granular Gate Waivers](docs/guides/gate-waivers.md)
 - [Approval Delegation](docs/guides/approval-delegation.md)
+- [Environment permissions](docs/guides/environment-permissions.md)
 - [Operations and validation](docs/guides/operations-and-validation.md)
 - [Complete verification](docs/guides/verification.md)
 - [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
