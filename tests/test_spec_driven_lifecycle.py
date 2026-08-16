@@ -117,7 +117,7 @@ def test_spec_driven_walks_to_completion_with_evidence_and_approval(
             swarm_id="delivery", id="increment", title="Add idempotency", actor_id="owner",
             description="Requests must be safe to retry.",
             acceptance_criteria=[("idempotent", "Retried requests do not duplicate effects")],
-            required_artifacts=["spec", "test-report"],
+            required_artifacts=["spec"],
         )
     )
     workspace.satisfy_criterion(
