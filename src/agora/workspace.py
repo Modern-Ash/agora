@@ -10101,6 +10101,24 @@ class AgoraWorkspace:
         ]
         available_integrations = sum(path.is_file() for path in integration_paths)
         git_enabled = is_git_repository(root)
+        runtime_command = self._runtime_command(
+            configuration.integration,
+            None,
+            configuration.model,
+        )
+        if runtime_command:
+            runtime_path = shutil.which(runtime_command[0])
+            runtime_check = DoctorCheck(
+                "runtime",
+                runtime_path is not None,
+                runtime_path or f"{runtime_command[0]} not found on PATH",
+            )
+        else:
+            runtime_check = DoctorCheck(
+                "runtime",
+                True,
+                "generic integration: provide a structured --runner when launching",
+            )
         return [
             DoctorCheck("project", True, str(root)),
             DoctorCheck(
@@ -10119,6 +10137,7 @@ class AgoraWorkspace:
                 f"{configuration.integration}: {available_integrations}/{len(integration_paths)} "
                 "commands available",
             ),
+            runtime_check,
             DoctorCheck(
                 "tool-policy",
                 (agora / "tools" / "TOOLS.md").exists(),

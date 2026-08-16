@@ -85,6 +85,26 @@ def test_supports_filesystem_only_environments(
     assert git_check.detail == "filesystem-only mode"
 
 
+def test_doctor_reports_native_runtime_availability(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="codex"))
+    monkeypatch.setattr("agora.workspace.shutil.which", lambda executable: None)
+
+    unavailable = next(item for item in workspace.doctor() if item.name == "runtime")
+
+    assert unavailable.ok is False
+    assert unavailable.detail == "codex not found on PATH"
+
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/opt/team/bin/codex" if executable == "codex" else None,
+    )
+    available = next(item for item in workspace.doctor() if item.name == "runtime")
+    assert available.ok is True
+    assert available.detail == "/opt/team/bin/codex"
+
+
 def test_defaults_new_projects_to_spec_driven_without_prior_configuration(
     tmp_path: Path, monkeypatch
 ) -> None:

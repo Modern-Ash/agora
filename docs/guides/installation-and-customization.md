@@ -239,6 +239,11 @@ agora doctor
 agora validate
 ```
 
+`doctor` checks the materialized integration adapters and the selected native runtime. Codex and
+Claude projects report the resolved executable path or a `not found on PATH` failure. Generic
+projects remain valid without a fixed executable because they supply a structured `--runner` at
+launch time. Runtime authentication remains owned by the CLI and its environment.
+
 Validation includes the portable command Markdown and every generated Codex, Claude, or generic
 adapter. The [complete verification guide](verification.md) covers repository-wide tests and samples.
 
