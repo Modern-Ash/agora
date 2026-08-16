@@ -7,6 +7,21 @@ operation is supported.
 For installation alternatives, upgrades, scope precedence, and deeper configuration, see
 [Installation and customization](guides/installation-and-customization.md).
 
+```mermaid
+flowchart LR
+    A[Install] --> B[Configure]
+    B --> C[Initialize]
+    C --> D[Register actors]
+    D --> E[Form swarm]
+    E --> F[Create work]
+    F --> G[Execute and record evidence]
+    G --> H[Accept and complete]
+    H --> I[Validate and commit]
+```
+
+For a shorter first experience that creates the actors and swarm automatically, start with the
+[Visual adoption guide](adoption.md) or use `agora quickstart` as shown below.
+
 ## 1. Install Agora
 
 Agora requires Python 3.11 or newer. From this repository:

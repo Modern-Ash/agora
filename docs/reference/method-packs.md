@@ -1,8 +1,8 @@
 # Method Pack reference
 
 A Method Pack is a versioned Markdown contract for a work lifecycle. The Agora core does not reserve
-method identifiers: `scrum` and `kanban` are bundled examples, while user and project scopes may
-install any valid pack.
+method identifiers: `spec-driven`, `scrum`, and `kanban` are bundled examples, while user and project
+scopes may install any valid pack.
 
 ## Directory contract
 

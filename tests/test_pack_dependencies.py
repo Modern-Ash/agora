@@ -624,8 +624,10 @@ def test_pack_lock_tracks_managed_mutations_and_cli_refreshes_manual_changes(
     assert [(item.kind, item.id) for item in initial.packs] == [
         ("method", "kanban"),
         ("method", "scrum"),
+        ("method", "spec-driven"),
         ("tool", "ci-cd"),
         ("tool", "cloud-infrastructure"),
+        ("tool", "code-review"),
         ("tool", "knowledge-base"),
         ("tool", "observability"),
         ("tool", "repository"),
@@ -783,8 +785,8 @@ def test_pack_removal_blocks_dependents_and_preserves_shared_dependencies(
 def test_pack_removal_blocks_durable_runtime_references(tmp_path: Path, monkeypatch) -> None:
     workspace = _workspace(tmp_path, monkeypatch)
 
-    with pytest.raises(ValueError, match="project default method scrum"):
-        workspace.remove_pack(RemovePackInput(kind="method", pack_id="scrum"))
+    with pytest.raises(ValueError, match="project default method spec-driven"):
+        workspace.remove_pack(RemovePackInput(kind="method", pack_id="spec-driven"))
 
 
 def test_pack_removal_rolls_back_a_multi_pack_failure(tmp_path: Path, monkeypatch) -> None:

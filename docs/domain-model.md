@@ -4,8 +4,8 @@
 
 A Method Pack is the unit of lifecycle customization. It defines required roles, allowed actor kinds
 and actions, work states, explicit transitions, WIP limits, gates, approval requirements, protocol,
-and tool policy. Its identifier is open: Scrum and Kanban are installed, editable presets, while any
-custom pack may implement the same Markdown contract.
+and tool policy. Its identifier is open: Spec-Driven, Scrum, and Kanban are installed, editable
+presets, while any custom pack may implement the same Markdown contract.
 
 No Method Pack is privileged by the core. A project can model a standard methodology, an internal
 software delivery process, an operational runbook, or a purpose-built hybrid lifecycle.

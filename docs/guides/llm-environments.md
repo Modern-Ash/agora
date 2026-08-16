@@ -17,6 +17,23 @@ LLM SDK, call a model API directly, or store credentials.
 The separation is intentional. A model can change without rewriting roles, work state, acceptance
 criteria, artifacts, evidence, or Git history.
 
+```mermaid
+flowchart TD
+    U[User defaults ~/.agora/config.md] --> P[Project .agora/project.md]
+    P --> A[Optional actor runtime override]
+    A --> S[Prepared SESSION.md and CONTEXT.md]
+    S --> R{Integration}
+    R -->|codex| C[Codex local runner]
+    R -->|claude| L[Claude local runner]
+    R -->|generic| G[Explicit external runner]
+    C --> D[Same durable .agora state]
+    L --> D
+    G --> D
+```
+
+This resolution selects an execution environment. Role assignment and Method Pack authority are
+evaluated separately.
+
 ## Codex example
 
 ```bash

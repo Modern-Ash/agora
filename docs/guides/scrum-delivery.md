@@ -38,8 +38,17 @@ The installed pack is `.agora/methods/scrum`. Its roles are:
 
 The primary delivery path is:
 
-```text
-specified -> planned -> implementing -> reviewing -> verifying -> completed
+```mermaid
+stateDiagram-v2
+    [*] --> specified
+    specified --> planned
+    planned --> implementing
+    implementing --> reviewing
+    reviewing --> implementing: rework
+    reviewing --> verifying
+    verifying --> implementing: failed verification
+    verifying --> completed: criteria, artifacts, evidence, approval
+    completed --> [*]
 ```
 
 The graph also permits `reviewing -> implementing` and `verifying -> implementing` for rework. The

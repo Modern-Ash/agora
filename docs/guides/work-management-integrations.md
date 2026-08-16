@@ -76,11 +76,11 @@ before creating an external process. Agora does not download ACLI or fall back t
 
 ## Role authority
 
-Bundled Scrum and Kanban packs grant external work authority separately:
+Bundled Spec-Driven, Scrum, and Kanban packs grant external work authority separately:
 
 | Role type | Granted capabilities |
 | --- | --- |
-| Product Owner or Service Request Manager | `issue.read`, `issue.write`, `issue.transition` |
+| Product Owner, Service Request Manager, or Spec Owner | `issue.read`, `issue.write`, `issue.transition` |
 | Scrum Master or Flow Manager | `issue.read` |
 | Developer or Delivery | `issue.read` |
 

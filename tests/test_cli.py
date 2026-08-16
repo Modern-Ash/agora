@@ -13,6 +13,17 @@ from agora.model import (
 from agora.workspace import AgoraWorkspace
 
 
+def test_cli_init_defaults_to_spec_driven(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert main(["init"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+
+    assert errors.getvalue() == ""
+    assert '"default_method": "spec-driven"' in output.getvalue()
+
+
 def test_targets_a_project_outside_the_current_environment(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "project"
     home = tmp_path / "home"
@@ -192,7 +203,7 @@ def test_filters_cli_adapters_by_checked_runtime_compatibility(tmp_path: Path, m
     )
 
     assert errors.getvalue() == ""
-    assert output.getvalue().count('"runtime_compatible": true') == 2
+    assert output.getvalue().count('"runtime_compatible": true') == 3
     assert '"id": "github-actions"' in output.getvalue()
     assert '"id": "github-issues"' in output.getvalue()
     assert '"id": "terraform"' not in output.getvalue()
@@ -205,7 +216,7 @@ def test_configures_actor_runtime_and_prepares_a_session_from_the_cli(
     root.mkdir()
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     workspace = AgoraWorkspace(cwd=root)
-    workspace.initialize(InitInput(integration="generic"))
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
     for actor in (
         AddActorInput(
             id="owner",
@@ -374,7 +385,7 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
     root.mkdir()
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     workspace = AgoraWorkspace(cwd=root)
-    workspace.initialize(InitInput(integration="generic"))
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
     for actor in (
         AddActorInput(
             id="owner",
@@ -568,7 +579,7 @@ def test_blocks_resumes_and_lists_work_status_from_the_cli(tmp_path: Path, monke
     root.mkdir()
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     workspace = AgoraWorkspace(cwd=root)
-    workspace.initialize(InitInput(integration="generic"))
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
     for actor in (
         AddActorInput(
             id="owner",
@@ -702,7 +713,7 @@ def test_queries_status_and_returns_a_failure_code_for_invalid_state(
     assert main(["method", "list"], cwd=root, stdout=output, stderr=errors) == 0
     assert main(["validate"], cwd=root, stdout=output, stderr=errors) == 0
     assert '"project": "project"' in output.getvalue()
-    assert '"methods": 2' in output.getvalue()
+    assert '"methods": 3' in output.getvalue()
     assert '"ok": true' in output.getvalue()
 
     constitution = root / ".agora" / "constitution.md"
@@ -723,7 +734,7 @@ def test_creates_and_lists_a_granular_gate_waiver_from_the_cli(tmp_path: Path, m
     root.mkdir()
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     workspace = AgoraWorkspace(cwd=root)
-    workspace.initialize(InitInput(integration="generic"))
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
     for actor_id, name, capabilities in (
         ("owner", "Owner", ["backlog-management", "acceptance"]),
         ("alternate-owner", "Alternate Owner", ["backlog-management", "acceptance"]),

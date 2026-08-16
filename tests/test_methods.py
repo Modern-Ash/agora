@@ -39,7 +39,9 @@ def test_loads_the_spec_driven_pack_with_its_clarification_gate() -> None:
     assert contract.wip_limits == {}
 
     clarify = next(
-        rule for rule in contract.transitions if rule.source == "drafting" and rule.target == "clarified"
+        rule
+        for rule in contract.transitions
+        if rule.source == "drafting" and rule.target == "clarified"
     )
     assert clarify.roles == ["spec-owner"]
     assert clarify.gate == "spec-clarified"

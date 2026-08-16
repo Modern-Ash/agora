@@ -85,6 +85,20 @@ def test_supports_filesystem_only_environments(
     assert git_check.detail == "filesystem-only mode"
 
 
+def test_defaults_new_projects_to_spec_driven_without_prior_configuration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+
+    configuration = workspace.initialize(InitInput())
+
+    assert configuration.default_method == "spec-driven"
+    assert (tmp_path / ".agora" / "methods" / "spec-driven" / "METHOD.md").exists()
+    assert (tmp_path / ".agora" / "methods" / "scrum" / "METHOD.md").exists()
+    assert (tmp_path / ".agora" / "methods" / "kanban" / "METHOD.md").exists()
+
+
 def test_validates_every_codex_command_and_detects_a_missing_adapter(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -939,6 +953,7 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
     assert [(item.id, item.provider, item.transport) for item in available] == [
         ("github-actions", "github", "cli"),
         ("github-issues", "github", "cli"),
+        ("github-pull-requests", "github", "cli"),
     ]
     assert available[0].runtime_available is True
     assert available[0].installed_scopes == []
@@ -2381,8 +2396,8 @@ def test_lists_and_summarizes_operational_workspace_state(
 
     assert status.counts == {
         "actors": 3,
-        "methods": 2,
-        "tools": 6,
+        "methods": 3,
+        "tools": 7,
         "environments": 0,
         "swarms": 1,
         "work": 1,
@@ -2394,10 +2409,15 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.work_states == {"specified": 1}
     assert status.attention["active-work"] == ["delivery/observable-work"]
     assert status.attention["unfinished-sessions"] == ["observable-session"]
-    assert [item.id for item in workspace.list_methods()] == ["kanban", "scrum"]
+    assert [item.id for item in workspace.list_methods()] == [
+        "kanban",
+        "scrum",
+        "spec-driven",
+    ]
     assert [item.id for item in workspace.list_tools()] == [
         "ci-cd",
         "cloud-infrastructure",
+        "code-review",
         "knowledge-base",
         "observability",
         "repository",

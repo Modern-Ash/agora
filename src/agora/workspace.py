@@ -125,6 +125,7 @@ from agora.model import (
     Method,
     MethodContract,
     MethodPackRecord,
+    OperationalTask,
     OrganizationTrustRootRecord,
     OrganizationTrustRootRotationRecord,
     OrganizationTrustRootRotationResult,
@@ -176,12 +177,15 @@ from agora.model import (
     RegistryUpdateRecord,
     RegistryUpdateResult,
     RemovePackInput,
+    ResumeSessionInput,
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
     RevokeTransparencyTrustKeyInput,
     RotateActorKeyInput,
     RotateOrganizationTrustRootInput,
+    RunLoopResult,
+    RunNextInput,
     SessionAuthorizationRecord,
     SessionRecord,
     SetActorRuntimeInput,
@@ -196,6 +200,7 @@ from agora.model import (
     ToolRisk,
     ToolRunRecord,
     ToolRuntimeProbe,
+    TransitionRule,
     TransitionWorkInput,
     TransparencyInclusionProofRecord,
     TransparencyTrustKeyRecord,
@@ -386,7 +391,7 @@ class AgoraWorkspace:
             integration=data.integration or (user.integration if user else "generic"),
             provider=data.provider or (user.provider if user else "configured-by-integration"),
             model=data.model or (user.model if user else "configured-by-integration"),
-            default_method=data.default_method or (user.default_method if user else "scrum"),
+            default_method=data.default_method or (user.default_method if user else "spec-driven"),
             max_delegation_depth=(
                 data.max_delegation_depth
                 if data.max_delegation_depth is not None
@@ -6331,20 +6336,21 @@ class AgoraWorkspace:
         ]
         return [record for record in records if status is None or record.status == status]
 
-    @_locked_mutation("project")
     def start_session(self, data: StartSessionInput) -> SessionRecord:
         root = self.project_root()
-        context = self._validate_session_preparation(root, data)
-        actor = context[2]
-        if actor.authentication_required:
-            raise PermissionError(
-                f"Actor {actor.reference} requires a signed lifecycle action; "
-                "prepare session.prepare before materializing its context"
-            )
-        record = self._apply_session_preparation(root, data, context, None)
-        if not data.launch:
-            return record
-        return self._execute_session(root, record, actor, context[1], context[4])
+        with self._mutation_lock((root,), "start_session"):
+            context = self._validate_session_preparation(root, data)
+            actor = context[2]
+            if actor.authentication_required:
+                raise PermissionError(
+                    f"Actor {actor.reference} requires a signed lifecycle action; "
+                    "prepare session.prepare before materializing its context"
+                )
+            record = self._apply_session_preparation(root, data, context, None)
+            if not data.launch:
+                return record
+            running = self._mark_session_running(record)
+        return self._run_session_process(root, running, actor, context[1], context[4])
 
     @_locked_mutation("project")
     def prepare_session(self, data: PrepareSessionInput) -> LifecycleActionRecord:
@@ -6408,7 +6414,7 @@ class AgoraWorkspace:
         integration = actor.integration or project.integration
         provider = actor.provider or project.provider
         model = actor.model or project.model
-        command = self._runtime_command(integration, data.runner)
+        command = self._runtime_command(integration, data.runner, model)
         runtime_available = bool(command and shutil.which(command[0]))
         if data.launch and not command:
             raise ValueError("A generic integration requires --runner when --launch is used")
@@ -6541,107 +6547,124 @@ class AgoraWorkspace:
             path=str(output),
         )
 
-    @_locked_mutation("project")
     def launch_session(self, data: LaunchSessionInput) -> SessionRecord:
         assert_slug(data.session_id, "Session id")
         root = self.project_root()
-        record = self._load_session(root / ".agora" / "sessions" / data.session_id)
-        if record.status != "prepared":
-            raise ValueError(f"Session must be prepared before launch: {record.id}")
-        actor = self._find_actor(root, record.actor)
-        assert_actor_identity_available(actor)
-        self._assert_current_actor_key(actor)
-        swarm = self._load_swarm(root, record.swarm_id)
-        if swarm.status not in {"ready", "running"}:
-            raise ValueError(f"Swarm {swarm.id} must be ready before a session can launch")
-        self._assert_represented_swarm_operational(root, actor)
-        roles = self._actor_roles(swarm, actor.reference)
-        if not roles:
-            raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
-        if roles != record.roles:
-            raise ValueError(f"Prepared session roles no longer match assignments: {record.id}")
-        work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
-        if work is not None:
-            self._assert_work_mutable(root, swarm, work)
-        project = self._load_project_configuration(root)
-        expected_runtime = (
-            actor.integration or project.integration,
-            actor.provider or project.provider,
-            actor.model or project.model,
-        )
-        if (record.integration, record.provider, record.model) != expected_runtime:
-            raise ValueError(f"Prepared session runtime no longer matches its actor: {record.id}")
-        self._assert_session_context(record)
-        if not record.launch_command:
-            raise ValueError(f"Session has no launch command: {record.id}")
-        if shutil.which(record.launch_command[0]) is None:
-            raise FileNotFoundError(f"Runtime executable not found: {record.launch_command[0]}")
-
-        fingerprint: str | None = None
-        authentication_public_key: str | None = None
-        authorization_sha256: str | None = None
-        authorization_signature: str | None = None
-        if actor.authentication_required and data.signature is None:
-            raise PermissionError(
-                f"Actor {actor.reference} requires a signed session authorization"
+        with self._mutation_lock((root,), "launch_session"):
+            record = self._load_session(root / ".agora" / "sessions" / data.session_id)
+            if record.status != "prepared":
+                raise ValueError(f"Session must be prepared before launch: {record.id}")
+            actor = self._find_actor(root, record.actor)
+            assert_actor_identity_available(actor)
+            self._assert_current_actor_key(actor)
+            swarm = self._load_swarm(root, record.swarm_id)
+            if swarm.status not in {"ready", "running"}:
+                raise ValueError(f"Swarm {swarm.id} must be ready before a session can launch")
+            self._assert_represented_swarm_operational(root, actor)
+            roles = self._actor_roles(swarm, actor.reference)
+            if not roles:
+                raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+            if roles != record.roles:
+                raise ValueError(f"Prepared session roles no longer match assignments: {record.id}")
+            work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
+            if work is not None:
+                self._assert_work_mutable(root, swarm, work)
+            project = self._load_project_configuration(root)
+            expected_runtime = (
+                actor.integration or project.integration,
+                actor.provider or project.provider,
+                actor.model or project.model,
             )
-        if data.signature is not None:
-            (
-                fingerprint,
-                authorization_sha256,
-                authentication_public_key,
-                authorization_signature,
-            ) = verify_session_authorization(
-                actor, record, Path(data.signature).expanduser().resolve()
-            )
-        authorized = SessionRecord(
-            **{
-                **record.__dict__,
-                "runtime_available": True,
-                "authentication_verified": fingerprint is not None,
-                "authentication_fingerprint": fingerprint,
-                "authentication_public_key": authentication_public_key,
-                "authorization_sha256": authorization_sha256,
-                "authorization_signature": authorization_signature,
-            }
-        )
-        return self._execute_session(root, authorized, actor, swarm, work)
+            if (record.integration, record.provider, record.model) != expected_runtime:
+                raise ValueError(
+                    f"Prepared session runtime no longer matches its actor: {record.id}"
+                )
+            self._assert_session_context(record)
+            if not record.launch_command:
+                raise ValueError(f"Session has no launch command: {record.id}")
+            if shutil.which(record.launch_command[0]) is None:
+                raise FileNotFoundError(f"Runtime executable not found: {record.launch_command[0]}")
 
-    def _execute_session(
+            fingerprint: str | None = None
+            authentication_public_key: str | None = None
+            authorization_sha256: str | None = None
+            authorization_signature: str | None = None
+            if actor.authentication_required and data.signature is None:
+                raise PermissionError(
+                    f"Actor {actor.reference} requires a signed session authorization"
+                )
+            if data.signature is not None:
+                (
+                    fingerprint,
+                    authorization_sha256,
+                    authentication_public_key,
+                    authorization_signature,
+                ) = verify_session_authorization(
+                    actor, record, Path(data.signature).expanduser().resolve()
+                )
+            authorized = SessionRecord(
+                **{
+                    **record.__dict__,
+                    "runtime_available": True,
+                    "authentication_verified": fingerprint is not None,
+                    "authentication_fingerprint": fingerprint,
+                    "authentication_public_key": authentication_public_key,
+                    "authorization_sha256": authorization_sha256,
+                    "authorization_signature": authorization_signature,
+                }
+            )
+            running = self._mark_session_running(authorized)
+        return self._run_session_process(root, running, actor, swarm, work)
+
+    def _mark_session_running(self, record: SessionRecord) -> SessionRecord:
+        running = SessionRecord(**{**record.__dict__, "status": "running", "exit_code": None})
+        atomic_write(Path(record.path) / "SESSION.md", self._render_session(running))
+        return running
+
+    def _run_session_process(
         self,
         root: Path,
-        record: SessionRecord,
+        running: SessionRecord,
         actor: ActorRecord,
         swarm: SwarmRecord,
         work: WorkRecord | None,
     ) -> SessionRecord:
-        session_path = Path(record.path)
-        running = SessionRecord(**{**record.__dict__, "status": "running"})
-        atomic_write(session_path / "SESSION.md", self._render_session(running))
+        session_path = Path(running.path)
         environment = {
             **os.environ,
             "AGORA_PROJECT": str(root),
             "AGORA_SESSION": str(session_path / "SESSION.md"),
-            "AGORA_CONTEXT": record.context_path,
+            "AGORA_CONTEXT": running.context_path,
             "AGORA_ACTOR": actor.reference,
             "AGORA_SWARM": swarm.id,
         }
         if work is not None:
             environment["AGORA_WORK"] = work.id
-        exit_code = self._launcher(record.launch_command, root, environment)
+        launch_error: BaseException | None = None
+        try:
+            exit_code = self._launcher(running.launch_command, root, environment)
+        except BaseException as error:
+            launch_error = error
+            exit_code = None
         status = "completed" if exit_code == 0 else "failed"
-        finished = SessionRecord(**{**record.__dict__, "status": status, "exit_code": exit_code})
-        atomic_write(session_path / "SESSION.md", self._render_session(finished))
-        append_entry(
-            root / ".agora" / "events.md",
-            (
-                f"- {self._timestamp()} | session.{status} | session={record.id} "
-                f"exit-code={exit_code}"
-            ),
-        )
+        finished = SessionRecord(**{**running.__dict__, "status": status, "exit_code": exit_code})
+        with self._mutation_lock((root,), "finish_session"):
+            current = self._load_session(session_path)
+            if current.status != "running":
+                raise ValueError(f"Running session state changed during execution: {running.id}")
+            atomic_write(session_path / "SESSION.md", self._render_session(finished))
+            append_entry(
+                root / ".agora" / "events.md",
+                (
+                    f"- {self._timestamp()} | session.{status} | session={running.id} "
+                    f"exit-code={exit_code if exit_code is not None else 'unavailable'}"
+                ),
+            )
+        if launch_error is not None:
+            raise launch_error
         if exit_code != 0:
             raise RuntimeError(
-                f"Session runner exited with code {exit_code}: {' '.join(record.launch_command)}"
+                f"Session runner exited with code {exit_code}: {' '.join(running.launch_command)}"
             )
         return finished
 
@@ -7066,6 +7089,361 @@ class AgoraWorkspace:
             tool_run_statuses=_count_values(item.status for item in tool_runs),
             attention=attention,
         )
+
+    def next_actions(
+        self,
+        *,
+        actor_id: str | None = None,
+        swarm_id: str | None = None,
+        human_only: bool = False,
+        limit: int = 20,
+    ) -> list[OperationalTask]:
+        if limit < 1:
+            raise ValueError("Operational action limit must be a positive integer")
+        root = self.project_root()
+        selected_actor = self._find_actor(root, actor_id) if actor_id is not None else None
+        selected_reference = selected_actor.reference if selected_actor is not None else None
+        swarms = [self.show_swarm(swarm_id)] if swarm_id is not None else self.list_swarms()
+        sessions = self.list_sessions()
+        tasks: list[OperationalTask] = []
+
+        for swarm in swarms:
+            if swarm.status == "forming":
+                if selected_reference is None:
+                    for role in swarm.required_roles:
+                        if role not in swarm.assignments:
+                            tasks.append(
+                                OperationalTask(
+                                    id=f"{swarm.id}:assign:{role}",
+                                    kind="assign-role",
+                                    actor=None,
+                                    actor_kind=None,
+                                    swarm_id=swarm.id,
+                                    work_id=None,
+                                    role=role,
+                                    state=None,
+                                    target_states=[],
+                                    blockers=[],
+                                    session_id=None,
+                                    reason=f"Assign a compatible actor to the vacant {role} role",
+                                )
+                            )
+                continue
+            if swarm.status not in {"ready", "running", "blocked"}:
+                continue
+
+            contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+            for work in self.list_work(swarm.id):
+                if work.operational_status == "cancelled" or work.state == contract.terminal_state:
+                    continue
+                if work.operational_status == "blocked":
+                    for role, reference in sorted(swarm.assignments.items()):
+                        if not self._role_allows_action(root, swarm.method, role, "work.resume"):
+                            continue
+                        actor = self._find_actor(root, reference)
+                        if selected_reference is not None and actor.reference != selected_reference:
+                            continue
+                        if human_only and actor.kind != "human":
+                            continue
+                        tasks.append(
+                            OperationalTask(
+                                id=f"{swarm.id}/{work.id}:resume:{role}",
+                                kind="resume-work",
+                                actor=actor.reference,
+                                actor_kind=actor.kind,
+                                swarm_id=swarm.id,
+                                work_id=work.id,
+                                role=role,
+                                state=work.state,
+                                target_states=[],
+                                blockers=[work.status_reason] if work.status_reason else [],
+                                session_id=None,
+                                reason="Review the blocking condition and resume governed work",
+                            )
+                        )
+                    continue
+
+                transitions_by_role: dict[str, list[TransitionRule]] = {}
+                for transition in contract.transitions:
+                    if transition.source != work.state:
+                        continue
+                    for role in transition.roles:
+                        transitions_by_role.setdefault(role, []).append(transition)
+                ordered_roles = sorted(
+                    transitions_by_role.items(),
+                    key=lambda item: (
+                        -max(contract.work_states.index(rule.target) for rule in item[1]),
+                        item[0],
+                    ),
+                )
+                for role, transitions in ordered_roles:
+                    reference = swarm.assignments.get(role)
+                    if reference is None:
+                        continue
+                    actor = self._find_actor(root, reference)
+                    if selected_reference is not None and actor.reference != selected_reference:
+                        continue
+                    if human_only and actor.kind != "human":
+                        continue
+                    actor_sessions = sorted(
+                        (
+                            item
+                            for item in sessions
+                            if item.actor == actor.reference
+                            and item.swarm_id == swarm.id
+                            and item.work_id == work.id
+                        ),
+                        key=lambda item: (item.created_at, item.id),
+                    )
+                    latest_session = actor_sessions[-1] if actor_sessions else None
+                    blockers: list[str] = []
+                    targets: list[str] = []
+                    for transition in transitions:
+                        targets.append(transition.target)
+                        blockers.extend(
+                            self._operational_transition_blockers(
+                                root, swarm, work, contract, transition
+                            )
+                        )
+                    kind = "execute-work"
+                    reason = f"Continue {work.state} work as {role}"
+                    session_id_value = None
+                    if latest_session is not None and latest_session.status in {
+                        "prepared",
+                        "running",
+                        "failed",
+                    }:
+                        session_id_value = latest_session.id
+                        if latest_session.status == "failed":
+                            kind = "retry-session"
+                            reason = f"Retry failed session {latest_session.id} as {role}"
+                        elif latest_session.status == "running":
+                            blockers.append(f"Session {latest_session.id} is already running")
+                        else:
+                            reason = f"Launch prepared session {latest_session.id} as {role}"
+                    if actor.authentication_required:
+                        blockers.append("Actor requires signed session preparation and launch")
+                    tasks.append(
+                        OperationalTask(
+                            id=f"{swarm.id}/{work.id}:{role}",
+                            kind=kind,  # type: ignore[arg-type]
+                            actor=actor.reference,
+                            actor_kind=actor.kind,
+                            swarm_id=swarm.id,
+                            work_id=work.id,
+                            role=role,
+                            state=work.state,
+                            target_states=sorted(set(targets)),
+                            blockers=list(dict.fromkeys(blockers)),
+                            session_id=session_id_value,
+                            reason=reason,
+                        )
+                    )
+
+        return tasks[:limit]
+
+    def run_next(self, data: RunNextInput) -> SessionRecord:
+        tasks = self.next_actions(
+            actor_id=data.actor_id,
+            swarm_id=data.swarm_id,
+            human_only=False,
+            limit=1000,
+        )
+        candidates = [
+            task
+            for task in tasks
+            if task.kind in {"execute-work", "retry-session"}
+            and (data.work_id is None or task.work_id == data.work_id)
+        ]
+        if data.actor_id is None and candidates and candidates[0].actor_kind == "human":
+            raise ValueError(f"Next action requires human attention from {candidates[0].actor}")
+        eligible = [
+            task for task in candidates if task.actor is not None and task.actor_kind != "human"
+        ]
+        if not eligible:
+            raise ValueError("No eligible non-human operational action is available")
+        task = eligible[0]
+        if any(blocker.endswith("is already running") for blocker in task.blockers):
+            raise ValueError(task.blockers[-1])
+        if task.session_id is not None:
+            existing = self._load_session(
+                self.project_root() / ".agora" / "sessions" / task.session_id
+            )
+            if existing.status == "prepared":
+                if data.runner is not None:
+                    raise ValueError("A prepared session must launch with its bound runner")
+                if data.prepare_only:
+                    return existing
+                return self.launch_session(
+                    LaunchSessionInput(session_id=existing.id, signature=data.signature)
+                )
+            if existing.status == "failed":
+                return self.resume_session(
+                    ResumeSessionInput(
+                        session_id=existing.id,
+                        replacement_id=data.session_id,
+                        runner=data.runner,
+                        prepare_only=data.prepare_only,
+                        signature=data.signature,
+                    )
+                )
+        if data.signature is not None:
+            raise ValueError("--signature can only launch an already prepared session")
+        session_id = data.session_id or self._available_session_id(
+            self.project_root(), f"run-{task.swarm_id}-{task.work_id}"
+        )
+        return self.start_session(
+            StartSessionInput(
+                id=session_id,
+                actor_id=task.actor,
+                swarm_id=task.swarm_id or "",
+                work_id=task.work_id,
+                runner=data.runner,
+                launch=not data.prepare_only,
+            )
+        )
+
+    def run_until_blocked(self, data: RunNextInput, *, max_steps: int = 20) -> RunLoopResult:
+        if max_steps < 1 or max_steps > 100:
+            raise ValueError("Run loop max steps must be between 1 and 100")
+        if data.prepare_only:
+            raise ValueError("--prepare-only cannot be combined with --until-blocked")
+        if data.signature is not None:
+            raise ValueError("A run loop cannot reuse one signature across multiple sessions")
+        if data.session_id is not None and max_steps > 1:
+            raise ValueError("An explicit session id cannot be reused by a multi-step run loop")
+
+        sessions: list[SessionRecord] = []
+        for index in range(max_steps):
+            actions = self.next_actions(
+                actor_id=data.actor_id,
+                swarm_id=data.swarm_id,
+                human_only=False,
+                limit=1000,
+            )
+            candidates = [
+                item
+                for item in actions
+                if item.kind in {"execute-work", "retry-session"}
+                and (data.work_id is None or item.work_id == data.work_id)
+            ]
+            if data.actor_id is None and candidates and candidates[0].actor_kind == "human":
+                return RunLoopResult(
+                    sessions=sessions,
+                    stop_reason="human-attention",
+                    next_actions=actions,
+                )
+            eligible = [item for item in candidates if item.actor_kind != "human"]
+            if not eligible:
+                reason = (
+                    "human-attention"
+                    if any(
+                        item.actor_kind == "human" or item.kind == "assign-role" for item in actions
+                    )
+                    else "no-agent-action"
+                )
+                return RunLoopResult(
+                    sessions=sessions,
+                    stop_reason=reason,
+                    next_actions=actions,
+                )
+            selected = eligible[0]
+            before = self._operational_task_sha256(selected)
+            step_input = data if index == 0 else replace(data, session_id=None)
+            sessions.append(self.run_next(step_input))
+            after = self._operational_task_sha256(selected)
+            if before == after:
+                return RunLoopResult(
+                    sessions=sessions,
+                    stop_reason="no-governed-progress",
+                    next_actions=self.next_actions(
+                        actor_id=data.actor_id,
+                        swarm_id=data.swarm_id,
+                        human_only=False,
+                        limit=1000,
+                    ),
+                )
+
+        return RunLoopResult(
+            sessions=sessions,
+            stop_reason="max-steps",
+            next_actions=self.next_actions(
+                actor_id=data.actor_id,
+                swarm_id=data.swarm_id,
+                human_only=False,
+                limit=1000,
+            ),
+        )
+
+    def _operational_task_sha256(self, task: OperationalTask) -> str:
+        if task.swarm_id is None or task.work_id is None:
+            return hashlib.sha256(task.id.encode()).hexdigest()
+        work = self.show_work(task.swarm_id, task.work_id)
+        return self._work_precondition_sha256(work)
+
+    def resume_session(self, data: ResumeSessionInput) -> SessionRecord:
+        root = self.project_root()
+        previous = self._load_session(root / ".agora" / "sessions" / data.session_id)
+        if previous.status == "prepared":
+            if data.replacement_id is not None or data.runner is not None:
+                raise ValueError("A prepared session must launch with its bound id and runner")
+            if data.prepare_only:
+                return previous
+            return self.launch_session(
+                LaunchSessionInput(session_id=previous.id, signature=data.signature)
+            )
+        if previous.status != "failed":
+            raise ValueError(f"Only prepared or failed sessions can resume: {previous.id}")
+        if data.signature is not None:
+            raise ValueError(
+                "A failed session retry has new context and requires a new signed preparation"
+            )
+        replacement_id = data.replacement_id or self._available_session_id(
+            root, f"{previous.id}-retry"
+        )
+        runner = data.runner or shlex.join(previous.launch_command)
+        return self.start_session(
+            StartSessionInput(
+                id=replacement_id,
+                actor_id=previous.actor,
+                swarm_id=previous.swarm_id,
+                work_id=previous.work_id,
+                runner=runner,
+                launch=not data.prepare_only,
+            )
+        )
+
+    def _operational_transition_blockers(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        work: WorkRecord,
+        contract: MethodContract,
+        transition: TransitionRule,
+    ) -> list[str]:
+        blockers: list[str] = []
+        try:
+            target = transition.target
+            if target == contract.terminal_state:
+                self._assert_child_work_closed(root, swarm, work)
+                self._assert_no_active_approval_delegations(work)
+            self._assert_wip_limit(swarm, work, target, contract.wip_limits)
+            gate_id = transition.gate
+            if gate_id is not None:
+                self._assert_work_gate(work, contract.gates[gate_id], gate_id)
+        except ValueError as error:
+            blockers.append(str(error))
+        return blockers
+
+    def _available_session_id(self, root: Path, prefix: str) -> str:
+        base = f"{prefix}-{self._now().astimezone(UTC).strftime('%Y%m%dt%H%M%sz')}"
+        assert_slug(base, "Session id")
+        candidate = base
+        suffix = 2
+        while (root / ".agora" / "sessions" / candidate).exists():
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        return candidate
 
     def list_events(
         self,
@@ -10778,16 +11156,28 @@ class AgoraWorkspace:
         ]
 
     @staticmethod
-    def _runtime_command(integration: Integration, runner: str | None) -> list[str]:
+    def _runtime_command(integration: Integration, runner: str | None, model: str) -> list[str]:
         if runner is not None:
             command = shlex.split(runner)
             if not command:
                 raise ValueError("Runner command cannot be empty")
             return command
+        prompt = (
+            "Read the Agora session context from the path in AGORA_CONTEXT. Follow its operational "
+            "Markdown, perform only the next action permitted for the assigned role, persist "
+            "artifacts and evidence through Agora, and stop at human approval or unavailable "
+            "authority."
+        )
         if integration == "codex":
-            return ["codex"]
+            command = ["codex", "exec"]
+            if not model.startswith("configured-by-"):
+                command.extend(["--model", model])
+            return [*command, prompt]
         if integration == "claude":
-            return ["claude"]
+            command = ["claude", "--print"]
+            if not model.startswith("configured-by-"):
+                command.extend(["--model", model])
+            return [*command, prompt]
         return []
 
     @staticmethod

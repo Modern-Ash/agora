@@ -36,14 +36,20 @@ def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
 def _form_swarm(workspace: AgoraWorkspace) -> None:
     workspace.add_actor(
         AddActorInput(
-            id="owner", name="Owner", kind="human",
-            capabilities=["specification", "acceptance"], scope="project",
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["specification", "acceptance"],
+            scope="project",
         )
     )
     workspace.add_actor(
         AddActorInput(
-            id="dev", name="Developer", kind="ai-agent",
-            capabilities=["implementation"], scope="project",
+            id="dev",
+            name="Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
         )
     )
     workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship the increment"))
@@ -94,8 +100,11 @@ def test_spec_driven_blocks_clarification_until_criteria_and_spec_artifact_exist
 
     workspace.add_artifact(
         AddArtifactInput(
-            swarm_id="delivery", work_id="increment", actor_id="owner",
-            kind="spec", uri="repo://docs/specs/increment.md",
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="owner",
+            kind="spec",
+            uri="repo://docs/specs/increment.md",
         )
     )
     clarified = workspace.transition_work(
@@ -114,7 +123,10 @@ def test_spec_driven_walks_to_completion_with_evidence_and_approval(
 
     workspace.create_work(
         CreateWorkInput(
-            swarm_id="delivery", id="increment", title="Add idempotency", actor_id="owner",
+            swarm_id="delivery",
+            id="increment",
+            title="Add idempotency",
+            actor_id="owner",
             description="Requests must be safe to retry.",
             acceptance_criteria=[("idempotent", "Retried requests do not duplicate effects")],
             required_artifacts=["spec"],
@@ -126,8 +138,11 @@ def test_spec_driven_walks_to_completion_with_evidence_and_approval(
     )
     workspace.add_artifact(
         AddArtifactInput(
-            swarm_id="delivery", work_id="increment", actor_id="owner",
-            kind="spec", uri="repo://docs/specs/increment.md",
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="owner",
+            kind="spec",
+            uri="repo://docs/specs/increment.md",
         )
     )
     workspace.transition_work(
@@ -152,14 +167,21 @@ def test_spec_driven_walks_to_completion_with_evidence_and_approval(
     )
     workspace.add_artifact(
         AddArtifactInput(
-            swarm_id="delivery", work_id="increment", actor_id="dev",
-            kind="test-report", uri="ci://builds/1/tests",
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="dev",
+            kind="test-report",
+            uri="ci://builds/1/tests",
         )
     )
     workspace.add_evidence(
         AddEvidenceInput(
-            swarm_id="delivery", work_id="increment", actor_id="dev",
-            type="test-run", result="success", artifact_refs=["ci://builds/1/tests"],
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="dev",
+            type="test-run",
+            result="success",
+            artifact_refs=["ci://builds/1/tests"],
         )
     )
     workspace.add_approval(

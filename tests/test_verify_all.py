@@ -38,6 +38,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: knowledge-base",
         "sample: llm-environments",
         "sample: observability",
+        "sample: operational-loop",
         "sample: operational-query",
         "sample: organization-trust",
         "sample: pack-dependencies",

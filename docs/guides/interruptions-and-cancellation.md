@@ -158,8 +158,8 @@ Custom Method Packs grant interruption actions exactly like other capabilities:
 | `delegation.reject` | Child owner |
 | `delegation.cancel` | Parent owner |
 
-The bundled Scrum and Kanban packs provide these defaults, but the core does not attach them to role
-names. A custom pack may distribute authority differently by editing `allowed-actions`.
+The bundled Spec-Driven, Scrum, and Kanban packs provide these defaults, but the core does not attach
+them to role names. A custom pack may distribute authority differently by editing `allowed-actions`.
 
 Run `agora validate` after manual edits. Validation checks current status attribution, legal status
 edges, sequence continuity, actor references, derived swarm status, and agreement between the latest

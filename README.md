@@ -11,8 +11,9 @@ Agora is deliberately agnostic in three dimensions:
 
 - **Language:** governed projects may use any programming language, runtime, architecture, or stack.
 - **LLM:** providers and models are selected configuration, never dependencies of the core protocol.
-- **Development process:** Scrum and Kanban are included presets; any valid Method Pack can define
-  the roles, states, transitions, policies, and evidence required by a team's own lifecycle.
+- **Development process:** Spec-Driven, Scrum, and Kanban are included presets; any valid Method
+  Pack can define the roles, states, transitions, policies, and evidence required by a team's own
+  lifecycle.
 
 The reference CLI is implemented in Python for portability and maintainability. That is an
 implementation detail of Agora itself, not a constraint placed on projects that use it.
@@ -64,10 +65,39 @@ Configuration precedence is:
 Agora defaults < ~/.agora < project .agora < swarm configuration
 ```
 
+## Where the operational Markdown lives
+
+The framework repository does not commit a generated `.agora/` workspace. It ships the operational
+sources that `agora init`, `agora quickstart`, and pack installation materialize in each governed
+project:
+
+| Operational source | What it becomes |
+| --- | --- |
+| [`templates/commands/`](templates/commands/) | Portable agent commands under `.agora/commands/`, plus the selected Codex or Claude projection |
+| [`templates/project/`](templates/project/) | Constitution, protocol, standards, catalogs, and project-level operational files under `.agora/` |
+| [`templates/methods/`](templates/methods/) | Role, transition, gate, and policy contracts under `.agora/methods/` |
+| [`templates/tools/`](templates/tools/) | Provider-neutral Tool Packs under `.agora/tools/` |
+| [`templates/adapters/`](templates/adapters/) | Reviewed native CLI adapters installed under `.agora/tools/` |
+
+Actors, swarms, work items, actions, sessions, artifacts, evidence, approvals, and Tool Runs are not
+static templates: Agora creates their Markdown records as the team works. See
+[documentation and artifact locations](docs/reference/artifact-locations.md) for the full
+source-to-runtime map.
+
 ## Install from this repository
 
 Agora requires Python 3.11 or newer. The recommended development and tool manager is
 [uv](https://docs.astral.sh/uv/).
+
+Install a published release:
+
+```bash
+uv tool install agora-framework
+agora --help
+```
+
+Release tags publish the same verified wheel to GitHub Releases and PyPI through OIDC Trusted
+Publishing. No PyPI token is stored in the repository.
 
 ```bash
 uv sync --extra dev
@@ -106,6 +136,20 @@ agora quickstart --objective "Ship the MVP" --secure --key-dir ~/.my-team/dev-ke
 Without `--key-dir`, the external key directory is
 `~/.config/agora-quickstart-keys/<project-hash>/`. The command reports its exact path. See the
 [quickstart guide](docs/guides/quickstart.md) for rerun, custom Method Pack, and security behavior.
+
+Inspect the next role-authorized action, run non-human actors until Agora reaches human authority,
+then inspect the human inbox:
+
+```bash
+agora next
+agora run --until-blocked --max-steps 10
+agora inbox
+```
+
+Codex and Claude run through their installed non-interactive CLIs. A generic integration supplies an
+explicit structured runner with `--runner`. The controller stops when no governed progress is
+recorded, so a successful process cannot create an unbounded empty loop. See the
+[operational agent loop guide](docs/guides/operational-loop.md).
 
 ## Configure and initialize
 
@@ -154,7 +198,7 @@ record under `.agora/pack-removals`. See the [pack removal guide](docs/guides/pa
 
 A Method Pack is a Markdown contract for a work lifecycle. It defines role requirements, allowed
 actor kinds and actions, transition graphs, WIP limits, gates, approval requirements, protocol, and
-tool policy. The core does not attach special behavior to the names Scrum or Kanban.
+tool policy. The core does not attach special behavior to bundled method names.
 
 Install a custom pack for reuse across projects:
 
@@ -171,8 +215,8 @@ agora method install --source ./my-method-pack --scope project
 agora swarm create --id delivery --objective "Deliver the objective" --method my-method
 ```
 
-See [the custom lifecycle sample](samples/custom-lifecycle/README.md) for a pack that does not derive
-from Scrum or Kanban.
+See [the custom lifecycle sample](samples/custom-lifecycle/README.md) for a pack unrelated to the
+bundled methods.
 
 Discover bundled and registered packs, or install a reviewed local or remote registry snapshot:
 
@@ -512,6 +556,11 @@ tracker while keeping `issue.read`, `issue.write`, and `issue.transition` author
 Method Pack. The `github-issues` and `jira` adapters map that contract directly to `gh` and ACLI.
 See the [work-management integration guide](docs/guides/work-management-integrations.md).
 
+The `code-review` pack separates review reads, review writing, review decisions, and merge authority.
+The `github-pull-requests` adapter maps it to the installed `gh` CLI. No bundled role receives
+`review.merge`; projects must opt in explicitly. See the
+[code-review integration guide](docs/guides/code-review-integrations.md).
+
 The `ci-cd` pack defines a stable `cictl` interface for GitHub Actions, GitLab CI/CD, Jenkins, or an
 internal platform. Routine pipeline access is separate from cancellation and deployment authority.
 The independently installable `github-actions` adapter maps those capabilities directly to the
@@ -716,6 +765,9 @@ depth. The [delegated work sample](samples/delegated-work/README.md) creates acc
 collects its terminal result into the parent. The
 [operational query sample](samples/operational-query/README.md) summarizes and validates a complete
 workspace directly from its Markdown records. The
+[operational loop sample](samples/operational-loop/README.md) launches a real external process,
+persists work while its session is running, prepares a Pull Request command, and stops at a human
+gate. The
 [interruption sample](samples/interruptions/README.md) exercises work and delegation blocking,
 resumption, rejection, and cancellation.
 The [project upgrade sample](samples/project-upgrade/README.md) applies a backed-up protocol
@@ -732,44 +784,29 @@ mutation in a structured external lease while retaining the local operating-syst
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Installation and customization](docs/guides/installation-and-customization.md)
-- [Getting started](docs/getting-started.md)
-- [LLM environments](docs/guides/llm-environments.md)
-- [Scrum delivery with humans and AI](docs/guides/scrum-delivery.md)
-- [Method Pack reference](docs/reference/method-packs.md)
-- [Tool Pack reference](docs/reference/tool-packs.md)
-- [Governed handoffs](docs/guides/handoffs.md)
-- [Recursive swarms](docs/guides/recursive-swarms.md)
-- [Delegated work](docs/guides/delegated-work.md)
-- [Delegation budgets](docs/guides/delegation-budgets.md)
-- [Delegated artifact promotion](docs/guides/delegated-artifacts.md)
-- [Work decomposition](docs/guides/work-decomposition.md)
-- [Granular Gate Waivers](docs/guides/gate-waivers.md)
-- [Approval Delegation](docs/guides/approval-delegation.md)
-- [Environment permissions](docs/guides/environment-permissions.md)
-- [Operations and validation](docs/guides/operations-and-validation.md)
-- [Complete verification](docs/guides/verification.md)
-- [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
-- [Concurrent writers](docs/guides/concurrent-writers.md)
-- [Conventional Commits](docs/guides/conventional-commits.md)
-- [Actor authentication](docs/guides/actor-authentication.md)
-- [Portable Tool execution boundaries](docs/guides/execution-boundaries.md)
-- [Pack registries](docs/guides/pack-registries.md)
-- [Pack dependencies](docs/guides/pack-dependencies.md)
-- [Pack updates](docs/guides/pack-updates.md)
-- [Pack composition locks](docs/guides/pack-locks.md)
-- [Remote registry releases](docs/guides/remote-registries.md)
-- [Registry trust stores and organization feeds](docs/guides/registry-trust.md)
-- [Registry updates](docs/guides/registry-updates.md)
-- [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
-- [ADR 0001](docs/decisions/0001-initial-architecture.md)
+- [Visual adoption guide](docs/adoption.md): move from installation to a validated first workflow
+  with decision diagrams, minimal commands, and staged team adoption.
+- [Documentation index](docs/README.md): guides grouped by onboarding, governance, agentic work,
+  integrations, registries, concepts, and reference.
+- [Documentation and artifact locations](docs/reference/artifact-locations.md): distinguish product
+  documentation, plugin output, protocol sources, generated agent adapters, durable `.agora` state,
+  and externally owned work products.
+- [Installation and customization](docs/guides/installation-and-customization.md) and
+  [getting started](docs/getting-started.md).
+- End-to-end delivery guides for [Spec-Driven](docs/guides/spec-driven-delivery.md),
+  [Scrum](docs/guides/scrum-delivery.md), and [Kanban](docs/guides/kanban-delivery.md).
+- [Operational agent loop](docs/guides/operational-loop.md) and
+  [code-review integrations](docs/guides/code-review-integrations.md).
+- [Architecture](docs/architecture.md), [domain model](docs/domain-model.md),
+  [Method Pack reference](docs/reference/method-packs.md), and
+  [Tool Pack reference](docs/reference/tool-packs.md).
+- [Executable samples](samples/): runnable examples with companion documentation.
 - [Contributing](CONTRIBUTING.md)
 
 ## Current limitations
 
-- Scrum and Kanban are starter Method Packs, not privileged core workflows or exhaustive methodology
-  implementations.
+- Spec-Driven, Scrum, and Kanban are starter Method Packs, not privileged core workflows or
+  exhaustive methodology implementations.
 - Method and Tool Packs can be discovered through bundled, user, project, and verified remote
   registry snapshots. Local and project trust stores, rotation, and revocation are implemented;
   explicit update checks, transactional application, and dependency-aware installation are
@@ -780,10 +817,10 @@ mutation in a structured external lease while retaining the local operating-syst
   implemented, and a recorded proof can be made a forward-only installation and update policy.
   Automatic proof discovery and background pack updates are not implemented. Aggregate update
   notifications and explicit audited batch application are available for external schedulers.
-- The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
+- The Tool Pack kernel plus Git repository, provider-neutral code-review, work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
-  distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,
-  plus partial AWS and Google Cloud inventory adapters.
+  distributions currently include GitHub Actions, GitHub Issues, GitHub Pull Requests, Jira, and
+  Terraform CLI adapters, plus partial AWS and Google Cloud inventory adapters.
 - Governed same-swarm work decomposition and provider-neutral delegation budgets are implemented;
   the selected human, agent, or swarm remains responsible for proposing useful child contracts and
   external runtimes remain responsible for usage metering. Opt-in typed child artifact promotion is

@@ -61,9 +61,9 @@ The wildcard does not grant a capability: the role and environment policy must b
 Agora requires one assigned role to grant both the exact capability and the selected environment;
 permissions from separate roles are not combined.
 
-Bundled Scrum and Kanban examples use `["*"]` so projects can introduce their own environment names
-without editing the example Method Packs first. Replace the wildcard on a reviewable branch when a
-role must be limited.
+Bundled Spec-Driven, Scrum, and Kanban examples use `["*"]` so projects can introduce their own
+environment names without editing the example Method Packs first. Replace the wildcard on a
+reviewable branch when a role must be limited.
 
 ## Require an environment
 
