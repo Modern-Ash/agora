@@ -3,7 +3,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from agora.filesystem import assert_slug, atomic_write, template_root
+from agora.filesystem import assert_slug, atomic_write, packs_root
 from agora.markdown import MarkdownDocument, read_markdown, render_markdown, string_attribute
 from agora.model import Integration, ProjectConfiguration, UpgradeChange, UpgradeResult
 
@@ -265,7 +265,7 @@ def _migrate_0_1_0_to_0_2_0(
                 mutations,
                 root,
                 commit_operation,
-                (template_root() / "tools" / "repository" / "operations" / "commit.md").read_text(
+                (packs_root() / "tools" / "repository" / "operations" / "commit.md").read_text(
                     encoding="utf-8"
                 ),
                 "Install the governed Conventional Commit operation",
@@ -351,7 +351,7 @@ def _migrate_0_2_0_to_0_3_0(
 
 
 def _render_template_command(command_id: str, project: ProjectConfiguration) -> str:
-    contents = (template_root() / "commands" / f"{command_id}.md").read_text(encoding="utf-8")
+    contents = (packs_root() / "commands" / f"{command_id}.md").read_text(encoding="utf-8")
     replacements = {
         "PROJECT_NAME": project.project,
         "INTEGRATION": project.integration,
@@ -365,7 +365,7 @@ def _render_template_command(command_id: str, project: ProjectConfiguration) -> 
 
 
 def _render_project_template(relative: str, project: ProjectConfiguration) -> str:
-    contents = (template_root() / "project" / relative).read_text(encoding="utf-8")
+    contents = (packs_root() / "scaffold" / relative).read_text(encoding="utf-8")
     replacements = {
         "PROJECT_NAME": project.project,
         "INTEGRATION": project.integration,

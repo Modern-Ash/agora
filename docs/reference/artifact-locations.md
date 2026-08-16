@@ -9,11 +9,11 @@ does not determine the role of a file; its directory, schema, ownership, and lif
 | --- | --- | --- | --- | --- |
 | Product documentation | `docs/` | Not materialized | Humans and contributors | Edited with the product |
 | Plugin run output | `docs/superpowers/` | Plugin-owned | Contributors and the originating plugin | Managed by plugin runs |
-| Portable agent commands | `templates/commands/` | `.agora/commands/` | Humans, agents, and generic runners | Customized per project |
-| Project protocol sources | `templates/project/` | `.agora/` | Every project participant | Customized per project |
-| Method Pack sources | `templates/methods/` | `.agora/methods/` | Kernel, humans, and agents | Installed and versioned |
-| Tool Pack sources | `templates/tools/` | `.agora/tools/` | Kernel, agents, and tool runners | Installed and versioned |
-| Reviewed CLI adapters | `templates/adapters/` | `.agora/tools/` when installed | Kernel and native CLIs | Explicitly installed |
+| Portable agent commands | `packs/commands/` | `.agora/commands/` | Humans, agents, and generic runners | Customized per project |
+| Project protocol sources | `packs/scaffold/` | `.agora/` | Every project participant | Customized per project |
+| Method Pack sources | `packs/methods/` | `.agora/methods/` | Kernel, humans, and agents | Installed and versioned |
+| Tool Pack sources | `packs/tools/` | `.agora/tools/` | Kernel, agents, and tool runners | Installed and versioned |
+| Reviewed CLI adapters | `packs/adapters/` | `.agora/tools/` when installed | Kernel and native CLIs | Explicitly installed |
 | Environment adapters | Generated from portable commands | `.agents/skills/` or `.claude/commands/` | Codex or Claude | Generated, then reviewable |
 | Durable collaboration state | Created by Agora commands | `.agora/` | Kernel, humans, and agents | Changed only through governed operations |
 | Product outputs | Project files or external systems | Referenced from `artifacts.md` | Humans, agents, and lifecycle gates | Owned by their producing system |
@@ -24,7 +24,7 @@ is not normative Agora protocol, a bundled Method Pack, or project runtime state
 ```mermaid
 flowchart LR
     DOC[docs/] --> READER[Human understanding]
-    T[templates/] --> INIT[agora init or install]
+    T[packs/] --> INIT[agora init or install]
     INIT --> STATE[.agora durable protocol and state]
     STATE --> CODEX[.agents/skills]
     STATE --> CLAUDE[.claude/commands]
@@ -38,12 +38,12 @@ flowchart LR
 
 ## Distribution sources
 
-The Markdown under `templates/` is source material shipped with the Python distribution. It is not
+The Markdown under `packs/` is source material shipped with the Python distribution. It is not
 the state of a governed project until Agora copies or installs it into a project or user scope.
 
 ### Portable commands
 
-[`templates/commands/`](../../templates/commands/) contains model-independent instructions such as `objective`, `specify`,
+[`packs/commands/`](../../packs/commands/) contains model-independent instructions such as `objective`, `specify`,
 `execute`, `review`, and `complete`. Initialization always copies them to:
 
 ```text
@@ -63,7 +63,7 @@ the Codex or Claude projection.
 
 ### Shared project protocol
 
-[`templates/project/`](../../templates/project/) provides the initial collaboration contract:
+[`packs/scaffold/`](../../packs/scaffold/) provides the initial collaboration contract:
 
 ```text
 .agora/project.md
@@ -79,12 +79,12 @@ structured portions; the repository and Git preserve review history.
 
 ### Method and Tool Packs
 
-[`templates/methods/`](../../templates/methods/) contains example lifecycle contracts. Their `METHOD.md`, roles, gates, and
+[`packs/methods/`](../../packs/methods/) contains example lifecycle contracts. Their `METHOD.md`, roles, gates, and
 transitions define allowed work states and actions. Scrum, Kanban, and spec-driven development are
 bundled examples rather than privileged kernel workflows.
 
-[`templates/tools/`](../../templates/tools/) contains provider-neutral operation contracts.
-[`templates/adapters/`](../../templates/adapters/) contains
+[`packs/tools/`](../../packs/tools/) contains provider-neutral operation contracts.
+[`packs/adapters/`](../../packs/adapters/) contains
 reviewed translations to native provider CLIs. Finding a CLI on `PATH` never installs its adapter or
 grants its capabilities.
 
@@ -119,7 +119,7 @@ provider. The work item's `artifacts.md` records its kind, URI, producer, and ti
 `evidence.md` records verification outcomes and artifact references used by lifecycle gates.
 
 The catalog at `.agora/artifacts/ARTIFACTS.md`, sourced from
-`templates/project/artifacts/ARTIFACTS.md`, defines common artifact kinds. It is a project policy
+`packs/scaffold/artifacts/ARTIFACTS.md`, defines common artifact kinds. It is a project policy
 catalog, not a container for the product bytes.
 
 ## Repository-specific agent instructions
@@ -134,7 +134,7 @@ commands, and the selected environment adapter.
 Use this decision order when reading a Markdown file:
 
 1. Under `docs/`: explanatory material, except explicitly plugin-owned run output.
-2. Under `templates/`: distribution source for a protocol, pack, command, or reviewed adapter.
+2. Under `packs/`: distribution source for a protocol, pack, command, or reviewed adapter.
 3. Under `.agora/`: authoritative project policy or durable collaboration state.
 4. Under `.agents/` or `.claude/`: environment projection of a portable agent command.
 5. Referenced by `artifacts.md`: a work product owned by its repository or external system.

@@ -239,7 +239,7 @@ def test_installs_and_inherits_a_user_tool_pack(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
     root, workspace = project
-    source = Path(__file__).parents[1] / "templates" / "tools" / "repository"
+    source = Path(__file__).parents[1] / "packs" / "tools" / "repository"
 
     installed = workspace.install_tool(InstallToolInput(source=str(source), scope="user"))
     workspace.initialize(InitInput(integration="generic"))

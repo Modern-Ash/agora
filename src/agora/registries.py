@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agora.filesystem import assert_slug, template_root
+from agora.filesystem import assert_slug, packs_root
 from agora.markdown import (
     MarkdownDocument,
     optional_string_attribute,
@@ -28,7 +28,7 @@ REGISTRY_SCOPES = ("project", "user", "bundled")
 
 
 def bundled_registry() -> RegistryRecord:
-    root = template_root()
+    root = packs_root()
     return _registry_record(
         id_="agora-bundled",
         name="Agora bundled packs",

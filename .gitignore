@@ -10,3 +10,4 @@ __pycache__/
 .agora/
 .agents/skills/agora-*/
 .claude/commands/agora.*.md
+graphify-out/

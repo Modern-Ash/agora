@@ -24,7 +24,7 @@ The CLI owns validation and mutation rules. LLMs, IDEs, provider CLIs, and cloud
 replaceable execution environments around the same protocol.
 
 ```text
-Python CLI + templates
+Python CLI + packs
           |
           +-> ~/.agora                  personal configuration
           +-> <project>/.agora          shared protocol and state
@@ -65,11 +65,11 @@ the scan, then checks portable commands, generated adapters, cross-record owners
 lifecycle state, recursive graphs, and terminal results. This makes `agora validate` suitable for CI
 without changing the source of truth.
 
-### Templates
+### Packs
 
-`templates/project` contains the base constitution, protocol, standards, and catalogs.
-`templates/methods` provides Spec-Driven, Scrum, and Kanban as replaceable presets. User and project
-scopes may install any Method Pack that satisfies the Markdown contract. `templates/commands`
+`packs/scaffold` contains the base constitution, protocol, standards, and catalogs.
+`packs/methods` provides Spec-Driven, Scrum, and Kanban as replaceable presets. User and project
+scopes may install any Method Pack that satisfies the Markdown contract. `packs/commands`
 contains portable instructions that adapters install as Codex skills or commands for other agents.
 
 ### Scopes

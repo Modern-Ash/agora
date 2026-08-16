@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from agora.filesystem import template_root
+from agora.filesystem import packs_root
 from agora.methods import load_method_contract
 
 
 def test_loads_explicit_transition_graph_gates_and_wip_limits() -> None:
-    contract = load_method_contract(template_root() / "methods" / "scrum")
+    contract = load_method_contract(packs_root() / "methods" / "scrum")
 
     assert contract.wip_limits == {"implementing": 2, "reviewing": 2}
     assert any(
@@ -23,7 +23,7 @@ def test_loads_explicit_transition_graph_gates_and_wip_limits() -> None:
 
 
 def test_loads_the_spec_driven_pack_with_its_clarification_gate() -> None:
-    contract = load_method_contract(template_root() / "methods" / "spec-driven")
+    contract = load_method_contract(packs_root() / "methods" / "spec-driven")
 
     assert contract.id == "spec-driven"
     assert contract.required_roles == ["spec-owner", "developer"]
@@ -86,7 +86,7 @@ def test_rejects_an_explicit_transition_without_an_authorized_role(tmp_path: Pat
 
 def test_rejects_an_invalid_role_manifest(tmp_path: Path) -> None:
     method = tmp_path / "scrum"
-    shutil.copytree(template_root() / "methods" / "scrum", method)
+    shutil.copytree(packs_root() / "methods" / "scrum", method)
     role = method / "roles" / "developer.md"
     role.write_text(role.read_text().replace('schema: "agora/role/v1"', 'schema: "invalid/role"'))
 
@@ -96,7 +96,7 @@ def test_rejects_an_invalid_role_manifest(tmp_path: Path) -> None:
 
 def test_rejects_invalid_role_environment_scope(tmp_path: Path) -> None:
     method = tmp_path / "scrum"
-    shutil.copytree(template_root() / "methods" / "scrum", method)
+    shutil.copytree(packs_root() / "methods" / "scrum", method)
     role = method / "roles" / "developer.md"
     role.write_text(
         role.read_text().replace(

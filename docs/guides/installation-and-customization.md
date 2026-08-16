@@ -517,17 +517,17 @@ Projects mutated from multiple hosts may also configure a reviewed external leas
 it does not introduce a database or make the lease service authoritative for work. See
 [Concurrent writers](concurrent-writers.md).
 
-## Customize distribution templates
+## Customize distribution packs
 
-Framework developers may point initialization at an alternate complete template tree:
+Framework developers may point initialization at an alternate complete pack tree:
 
 ```bash
-export AGORA_TEMPLATE_ROOT=/absolute/path/to/templates
+export AGORA_PACKS_ROOT=/absolute/path/to/packs
 agora init --path ./temporary-project
 ```
 
-The directory must contain compatible `project`, `methods`, and `commands` trees. This advanced
-override replaces the distribution template source for the process; it is not a project-level merge
+The directory must contain compatible `scaffold`, `methods`, and `commands` trees. This advanced
+override replaces the distribution pack source for the process; it is not a project-level merge
 mechanism. Prefer installable Method Packs and project amendments for normal customization.
 
 ## Safe updates

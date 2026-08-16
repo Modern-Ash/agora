@@ -10,4 +10,4 @@ def test_documentation_link_check_excludes_plugin_run_output() -> None:
     assert is_ignored_document(Path("docs/superpowers/plans/generated.md")) is True
     assert is_ignored_document(Path("docs/superpowers/specs/generated.md")) is True
     assert is_ignored_document(Path("docs/guides/quickstart.md")) is False
-    assert is_ignored_document(Path("templates/commands/execute.md")) is False
+    assert is_ignored_document(Path("packs/commands/execute.md")) is False

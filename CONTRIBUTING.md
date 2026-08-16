@@ -52,7 +52,7 @@ uv run python samples/github-end-to-end/run.py
   interruptions, recursive swarms, delegated work, sessions, tool runs, queries, validation, and
   filesystem behavior.
 - Update templates and documentation whenever the installed protocol changes.
-- Keep explanatory material under `docs/`, operational protocol sources under `templates/`, and
+- Keep explanatory material under `docs/`, operational protocol sources under `packs/`, and
   plugin-owned run output under its existing plugin directory.
 - Use Mermaid when a decision tree, lifecycle, sequence, scope hierarchy, or ownership boundary is
   easier to understand visually. Keep adjacent prose and commands authoritative, and prefer a table
