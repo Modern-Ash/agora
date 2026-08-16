@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agora.cli import main
-from agora.filesystem import template_root
+from agora.filesystem import packs_root
 from agora.markdown import MarkdownDocument, read_markdown, render_markdown
 from agora.model import (
     ApplyPackUpdateAuditInput,
@@ -35,7 +35,7 @@ def _tool(
     version: str,
     dependencies: list[dict[str, str]] | None = None,
 ) -> Path:
-    shutil.copytree(template_root() / "tools" / "repository", destination)
+    shutil.copytree(packs_root() / "tools" / "repository", destination)
     document = read_markdown(destination / "TOOL.md")
     document.attributes.update(
         {
@@ -55,7 +55,7 @@ def _method(
     version: str,
     dependencies: list[dict[str, str]] | None = None,
 ) -> Path:
-    shutil.copytree(template_root() / "methods" / "scrum", destination)
+    shutil.copytree(packs_root() / "methods" / "scrum", destination)
     document = read_markdown(destination / "METHOD.md")
     document.attributes.update(
         {

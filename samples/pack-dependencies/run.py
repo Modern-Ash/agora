@@ -5,7 +5,7 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from agora.filesystem import template_root
+from agora.filesystem import packs_root
 from agora.markdown import MarkdownDocument, read_markdown, render_markdown
 from agora.model import (
     InitInput,
@@ -46,7 +46,7 @@ def main() -> None:
         encoding="utf-8",
     )
     tool = registry / "tools" / "delivery-tool"
-    shutil.copytree(template_root() / "tools" / "repository", tool)
+    shutil.copytree(packs_root() / "tools" / "repository", tool)
     _rewrite_manifest(
         tool / "TOOL.md",
         id="delivery-tool",
@@ -55,7 +55,7 @@ def main() -> None:
         dependencies=[],
     )
     method = registry / "methods" / "delivery-flow"
-    shutil.copytree(template_root() / "methods" / "scrum", method)
+    shutil.copytree(packs_root() / "methods" / "scrum", method)
     _rewrite_manifest(
         method / "METHOD.md",
         id="delivery-flow",

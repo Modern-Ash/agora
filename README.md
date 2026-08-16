@@ -33,7 +33,7 @@ reviewable files and Git branches.
 
 ```text
 Agora distribution
-  Python CLI + templates + Method Packs + adapters
+  Python CLI + packs + Method Packs + adapters
 
 ~/.agora/
   config.md             Runtime, method, and delegation defaults
@@ -77,11 +77,11 @@ project:
 
 | Operational source | What it becomes |
 | --- | --- |
-| [`templates/commands/`](templates/commands/) | Portable agent commands under `.agora/commands/`, plus the selected Codex or Claude projection |
-| [`templates/project/`](templates/project/) | Constitution, protocol, standards, catalogs, and project-level operational files under `.agora/` |
-| [`templates/methods/`](templates/methods/) | Role, transition, gate, and policy contracts under `.agora/methods/` |
-| [`templates/tools/`](templates/tools/) | Provider-neutral Tool Packs under `.agora/tools/` |
-| [`templates/adapters/`](templates/adapters/) | Reviewed native CLI adapters installed under `.agora/tools/` |
+| [`packs/commands/`](packs/commands/) | Portable agent commands under `.agora/commands/`, plus the selected Codex or Claude projection |
+| [`packs/scaffold/`](packs/scaffold/) | Constitution, protocol, standards, catalogs, and project-level operational files under `.agora/` |
+| [`packs/methods/`](packs/methods/) | Role, transition, gate, and policy contracts under `.agora/methods/` |
+| [`packs/tools/`](packs/tools/) | Provider-neutral Tool Packs under `.agora/tools/` |
+| [`packs/adapters/`](packs/adapters/) | Reviewed native CLI adapters installed under `.agora/tools/` |
 
 Actors, swarms, work items, actions, sessions, artifacts, evidence, approvals, and Tool Runs are not
 static templates: Agora creates their Markdown records as the team works. See

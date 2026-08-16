@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agora.filesystem import template_root
+from agora.filesystem import packs_root
 from agora.tools import (
     load_tool_contract,
     probe_tool_runtime,
@@ -16,7 +16,7 @@ from agora.tools import (
 
 
 def test_loads_a_provider_neutral_tool_pack() -> None:
-    contract = load_tool_contract(template_root() / "tools" / "repository")
+    contract = load_tool_contract(packs_root() / "tools" / "repository")
 
     assert contract.id == "repository"
     assert contract.executable == "git"
@@ -41,7 +41,7 @@ def test_loads_a_provider_neutral_tool_pack() -> None:
 def test_rejects_invalid_tool_execution_boundaries(
     tmp_path: Path, attribute: str, value: str
 ) -> None:
-    source = template_root() / "tools" / "repository"
+    source = packs_root() / "tools" / "repository"
     tool = tmp_path / "repository"
     shutil.copytree(source, tool)
     manifest = tool / "TOOL.md"
@@ -55,7 +55,7 @@ def test_rejects_invalid_tool_execution_boundaries(
 
 
 def test_loads_the_bundled_work_management_contract() -> None:
-    contract = load_tool_contract(template_root() / "tools" / "work-management")
+    contract = load_tool_contract(packs_root() / "tools" / "work-management")
 
     assert contract.id == "work-management"
     assert contract.executable == "workctl"
@@ -67,7 +67,7 @@ def test_loads_the_bundled_work_management_contract() -> None:
 
 
 def test_loads_the_bundled_ci_cd_contract() -> None:
-    contract = load_tool_contract(template_root() / "tools" / "ci-cd")
+    contract = load_tool_contract(packs_root() / "tools" / "ci-cd")
 
     assert contract.id == "ci-cd"
     assert contract.executable == "cictl"
@@ -87,7 +87,7 @@ def test_loads_the_bundled_ci_cd_contract() -> None:
 
 
 def test_loads_the_github_actions_cli_adapter() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "github-actions")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "github-actions")
 
     assert contract.id == "github-actions"
     assert contract.executable == "gh"
@@ -102,8 +102,8 @@ def test_loads_the_github_actions_cli_adapter() -> None:
 
 
 def test_loads_the_gitlab_ci_adapter_as_an_explicit_subset() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "gitlab-ci")
-    implemented = load_tool_contract(template_root() / "tools" / "ci-cd")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "gitlab-ci")
+    implemented = load_tool_contract(packs_root() / "tools" / "ci-cd")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.provider == "gitlab"
@@ -118,8 +118,8 @@ def test_loads_the_gitlab_ci_adapter_as_an_explicit_subset() -> None:
 
 
 def test_loads_the_terraform_cli_adapter() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
-    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "terraform")
+    implemented = load_tool_contract(packs_root() / "tools" / "cloud-infrastructure")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.id == "terraform"
@@ -139,8 +139,8 @@ def test_loads_the_terraform_cli_adapter() -> None:
 
 
 def test_loads_the_github_issues_cli_adapter_and_restricts_transitions() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "github-issues")
-    implemented = load_tool_contract(template_root() / "tools" / "work-management")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "github-issues")
+    implemented = load_tool_contract(packs_root() / "tools" / "work-management")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.provider == "github"
@@ -154,8 +154,8 @@ def test_loads_the_github_issues_cli_adapter_and_restricts_transitions() -> None
 
 
 def test_loads_the_gitlab_issues_adapter_as_an_explicit_subset() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "gitlab-issues")
-    implemented = load_tool_contract(template_root() / "tools" / "work-management")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "gitlab-issues")
+    implemented = load_tool_contract(packs_root() / "tools" / "work-management")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.provider == "gitlab"
@@ -171,8 +171,8 @@ def test_loads_the_gitlab_issues_adapter_as_an_explicit_subset() -> None:
 
 
 def test_loads_the_gitlab_merge_request_adapter_as_an_explicit_subset() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "gitlab-merge-requests")
-    implemented = load_tool_contract(template_root() / "tools" / "code-review")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "gitlab-merge-requests")
+    implemented = load_tool_contract(packs_root() / "tools" / "code-review")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.provider == "gitlab"
@@ -196,8 +196,8 @@ def test_loads_the_gitlab_merge_request_adapter_as_an_explicit_subset() -> None:
 def test_loads_a_read_only_cloud_inventory_adapter(
     adapter_id: str, provider: str, executable: str
 ) -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / adapter_id)
-    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / adapter_id)
+    implemented = load_tool_contract(packs_root() / "tools" / "cloud-infrastructure")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.provider == provider
@@ -208,8 +208,8 @@ def test_loads_a_read_only_cloud_inventory_adapter(
 
 
 def test_loads_the_jira_acli_adapter() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "jira")
-    implemented = load_tool_contract(template_root() / "tools" / "work-management")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "jira")
+    implemented = load_tool_contract(packs_root() / "tools" / "work-management")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.provider == "atlassian"
@@ -227,8 +227,8 @@ def test_loads_the_jira_acli_adapter() -> None:
 
 
 def test_loads_the_twg_confluence_adapter_as_an_explicit_subset() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "twg-confluence")
-    implemented = load_tool_contract(template_root() / "tools" / "knowledge-base")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "twg-confluence")
+    implemented = load_tool_contract(packs_root() / "tools" / "knowledge-base")
 
     validate_tool_adapter_contract(contract, implemented)
     assert contract.provider == "atlassian-confluence"
@@ -269,7 +269,7 @@ def test_loads_the_twg_confluence_adapter_as_an_explicit_subset() -> None:
 def test_probes_compatible_cli_adapter_versions(
     adapter_id: str, output: str, expected_version: str
 ) -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / adapter_id)
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / adapter_id)
 
     probe = probe_tool_runtime(
         contract,
@@ -284,7 +284,7 @@ def test_probes_compatible_cli_adapter_versions(
 
 
 def test_reports_missing_old_and_unverifiable_cli_runtimes() -> None:
-    contract = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "terraform")
 
     missing = probe_tool_runtime(contract, None)
     old = probe_tool_runtime(
@@ -307,8 +307,8 @@ def test_reports_missing_old_and_unverifiable_cli_runtimes() -> None:
 
 
 def test_rejects_an_extra_operation_in_a_partial_adapter() -> None:
-    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "aws-resource-inventory")
-    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    adapter = load_tool_contract(packs_root() / "adapters" / "cli" / "aws-resource-inventory")
+    implemented = load_tool_contract(packs_root() / "tools" / "cloud-infrastructure")
     adapter.operations["plan"] = implemented.operations["plan"]
 
     with pytest.raises(ValueError, match=r"extra=\[plan\]"):
@@ -316,8 +316,8 @@ def test_rejects_an_extra_operation_in_a_partial_adapter() -> None:
 
 
 def test_rejects_an_adapter_that_weakens_environment_governance() -> None:
-    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
-    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    adapter = load_tool_contract(packs_root() / "adapters" / "cli" / "terraform")
+    implemented = load_tool_contract(packs_root() / "tools" / "cloud-infrastructure")
     adapter.operations["plan"] = replace(adapter.operations["plan"], environment_required=False)
 
     with pytest.raises(ValueError, match="environment requirement must match"):
@@ -325,7 +325,7 @@ def test_rejects_an_adapter_that_weakens_environment_governance() -> None:
 
 
 def test_loads_the_bundled_knowledge_base_contract() -> None:
-    contract = load_tool_contract(template_root() / "tools" / "knowledge-base")
+    contract = load_tool_contract(packs_root() / "tools" / "knowledge-base")
 
     assert contract.id == "knowledge-base"
     assert contract.executable == "docsctl"
@@ -338,7 +338,7 @@ def test_loads_the_bundled_knowledge_base_contract() -> None:
 
 
 def test_loads_the_bundled_cloud_infrastructure_contract() -> None:
-    contract = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    contract = load_tool_contract(packs_root() / "tools" / "cloud-infrastructure")
 
     assert contract.id == "cloud-infrastructure"
     assert contract.executable == "cloudctl"
@@ -358,7 +358,7 @@ def test_loads_the_bundled_cloud_infrastructure_contract() -> None:
 
 
 def test_loads_the_bundled_observability_contract() -> None:
-    contract = load_tool_contract(template_root() / "tools" / "observability")
+    contract = load_tool_contract(packs_root() / "tools" / "observability")
 
     assert contract.id == "observability"
     assert contract.executable == "observectl"
@@ -476,8 +476,8 @@ def test_rejects_incomplete_runtime_version_metadata(tmp_path: Path) -> None:
 
 
 def test_rejects_an_adapter_that_weakens_the_implemented_contract(tmp_path: Path) -> None:
-    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "github-actions")
-    implemented = load_tool_contract(template_root() / "tools" / "ci-cd")
+    adapter = load_tool_contract(packs_root() / "adapters" / "cli" / "github-actions")
+    implemented = load_tool_contract(packs_root() / "tools" / "ci-cd")
     adapter.operations["cancel-run"] = replace(
         adapter.operations["cancel-run"], capability="ci.read"
     )

@@ -7,14 +7,14 @@ def agora_home() -> Path:
     return Path(os.environ.get("AGORA_HOME", Path.home() / ".agora")).expanduser().resolve()
 
 
-def template_root() -> Path:
-    override = os.environ.get("AGORA_TEMPLATE_ROOT")
+def packs_root() -> Path:
+    override = os.environ.get("AGORA_PACKS_ROOT")
     if override:
         return Path(override).resolve()
-    installed = Path(__file__).resolve().parent / "templates"
+    installed = Path(__file__).resolve().parent / "packs"
     if installed.exists():
         return installed
-    return Path(__file__).resolve().parents[2] / "templates"
+    return Path(__file__).resolve().parents[2] / "packs"
 
 
 def atomic_write(path: Path, contents: str) -> None:

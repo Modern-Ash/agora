@@ -4,7 +4,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from agora.filesystem import template_root
+from agora.filesystem import packs_root
 from agora.markdown import read_markdown, render_markdown
 from agora.model import (
     AddActorInput,
@@ -22,7 +22,7 @@ from agora.workspace import AgoraWorkspace
 
 def _sample_pack(runtime: Path) -> Path:
     source = runtime / "knowledge-base"
-    shutil.copytree(template_root() / "tools" / "knowledge-base", source)
+    shutil.copytree(packs_root() / "tools" / "knowledge-base", source)
     provider = Path(__file__).with_name("provider.py").resolve()
     manifest = read_markdown(source / "TOOL.md")
     manifest.attributes["executable"] = sys.executable

@@ -6,7 +6,7 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 ## Documentation boundaries
 
 This directory contains explanatory product documentation. Operational Markdown is sourced from
-`../templates/` and becomes authoritative only after Agora materializes it under `.agora/`,
+`../packs/` and becomes authoritative only after Agora materializes it under `.agora/`,
 `.agents/`, or `.claude/` in a governed project.
 
 The files under `superpowers/` are intentionally retained plugin-run output. They are useful
@@ -20,12 +20,12 @@ durable work records, and externally owned product artifacts.
 
 These directories are the operational product, not explanatory documentation:
 
-- [Portable agent commands](../templates/commands/): model-independent instructions projected into
+- [Portable agent commands](../packs/commands/): model-independent instructions projected into
   Codex, Claude, or a generic environment.
-- [Project protocol](../templates/project/): constitution, shared protocol, standards, and catalogs.
-- [Method Packs](../templates/methods/): roles, transitions, gates, WIP, and lifecycle policy.
-- [Tool Packs](../templates/tools/): provider-neutral capabilities and operations.
-- [Reviewed CLI adapters](../templates/adapters/): bounded translations to native provider CLIs.
+- [Project protocol](../packs/scaffold/): constitution, shared protocol, standards, and catalogs.
+- [Method Packs](../packs/methods/): roles, transitions, gates, WIP, and lifecycle policy.
+- [Tool Packs](../packs/tools/): provider-neutral capabilities and operations.
+- [Reviewed CLI adapters](../packs/adapters/): bounded translations to native provider CLIs.
 
 After initialization, inspect their materialized forms in the governed project's `.agora/`,
 `.agents/`, or `.claude/` directories. Actor and swarm records are created there dynamically; they

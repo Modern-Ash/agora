@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from agora.filesystem import template_root
+from agora.filesystem import packs_root
 from agora.model import (
     AddActorInput,
     AssignActorInput,
@@ -70,8 +70,8 @@ def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
 
 @pytest.mark.parametrize(("adapter_id", "tool_id"), ADAPTERS)
 def test_loads_complete_github_ecosystem_adapters(adapter_id: str, tool_id: str) -> None:
-    adapter = load_tool_contract(template_root() / "adapters" / "cli" / adapter_id)
-    implemented = load_tool_contract(template_root() / "tools" / tool_id)
+    adapter = load_tool_contract(packs_root() / "adapters" / "cli" / adapter_id)
+    implemented = load_tool_contract(packs_root() / "tools" / tool_id)
 
     validate_tool_adapter_contract(adapter, implemented)
     assert adapter.provider == "github"
@@ -89,7 +89,7 @@ def test_loads_complete_github_ecosystem_adapters(adapter_id: str, tool_id: str)
 
 
 def test_github_release_list_uses_only_supported_json_fields() -> None:
-    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "github-releases")
+    adapter = load_tool_contract(packs_root() / "adapters" / "cli" / "github-releases")
 
     assert adapter.operations["list-releases"].arguments[-1] == (
         "createdAt,isDraft,isLatest,isPrerelease,name,publishedAt,tagName"

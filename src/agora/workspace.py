@@ -34,7 +34,7 @@ from agora.filesystem import (
     atomic_write,
     copy_template_tree,
     find_project_root,
-    template_root,
+    packs_root,
     write_new,
 )
 from agora.git import (
@@ -363,7 +363,7 @@ class AgoraWorkspace:
         self._assert_delegation_depth(data.max_delegation_depth)
         self._assert_method_available(
             data.default_method,
-            template_root() / "methods",
+            packs_root() / "methods",
             agora_home() / "methods",
         )
         configuration = UserConfiguration(
@@ -423,7 +423,7 @@ class AgoraWorkspace:
         self._assert_delegation_depth(configuration.max_delegation_depth)
         self._assert_method_available(
             configuration.default_method,
-            template_root() / "methods",
+            packs_root() / "methods",
             agora_home() / "methods",
         )
 
@@ -458,8 +458,8 @@ class AgoraWorkspace:
             "MODEL": configuration.model,
             "DEFAULT_METHOD": configuration.default_method,
         }
-        root = template_root()
-        copy_template_tree(root / "project", agora, replacements, data.force)
+        root = packs_root()
+        copy_template_tree(root / "scaffold", agora, replacements, data.force)
         copy_template_tree(root / "methods", agora / "methods", replacements, data.force)
         user_methods = agora_home() / "methods"
         if user_methods.exists():
@@ -617,7 +617,7 @@ class AgoraWorkspace:
         integration: Integration,
         swarm_id: str,
     ) -> list[Path]:
-        root = template_root()
+        root = packs_root()
         paths = {
             target / ".agora" / "project.md",
             target / ".agora" / "actors" / "owner.md",
@@ -625,7 +625,7 @@ class AgoraWorkspace:
             target / ".agora" / "swarms" / swarm_id / "SWARM.md",
         }
         for source, destination in (
-            (root / "project", target / ".agora"),
+            (root / "scaffold", target / ".agora"),
             (root / "methods", target / ".agora" / "methods"),
             (root / "tools", target / ".agora" / "tools"),
             (root / "commands", target / ".agora" / "commands"),
@@ -809,11 +809,11 @@ class AgoraWorkspace:
     ) -> list[ToolAdapterRecord]:
         project = self._optional_project_root()
         records: list[ToolAdapterRecord] = []
-        for manifest in sorted((template_root() / "adapters").glob("*/*/TOOL.md")):
+        for manifest in sorted((packs_root() / "adapters").glob("*/*/TOOL.md")):
             contract = load_tool_contract(manifest.parent)
             if not contract.provider or not contract.transport or not contract.implements:
                 raise ValueError(f"Bundled Tool adapter is missing adapter metadata: {manifest}")
-            implemented = load_tool_contract(template_root() / "tools" / contract.implements)
+            implemented = load_tool_contract(packs_root() / "tools" / contract.implements)
             validate_tool_adapter_contract(contract, implemented)
             executable_path = shutil.which(contract.executable)
             runtime_available = executable_path is not None
@@ -873,7 +873,7 @@ class AgoraWorkspace:
         candidates.extend(
             [
                 agora_home() / "tools" / tool_id,
-                template_root() / "tools" / tool_id,
+                packs_root() / "tools" / tool_id,
             ]
         )
         for candidate in candidates:
@@ -10968,7 +10968,7 @@ class AgoraWorkspace:
     ) -> None:
         if integration == "generic":
             return
-        for source_path in (template_root() / "commands").glob("*.md"):
+        for source_path in (packs_root() / "commands").glob("*.md"):
             command_id = source_path.stem
             contents = source_path.read_text(encoding="utf-8")
             for key, value in replacements.items():
@@ -13631,7 +13631,7 @@ class AgoraWorkspace:
         if integration != "generic":
             paths.extend(
                 self._integration_command_path(root, integration, path.stem)
-                for path in (template_root() / "commands").glob("*.md")
+                for path in (packs_root() / "commands").glob("*.md")
             )
         return paths
 
