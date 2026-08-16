@@ -504,6 +504,17 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_invoke.add_argument("--launch", action="store_true")
     tool_invoke.add_argument("--force", action="store_true")
 
+    tool_sync = tool.add_parser(
+        "sync", help="Launch one governed read and persist its external snapshot"
+    )
+    tool_sync.add_argument("--id", required=True)
+    tool_sync.add_argument("--tool", required=True)
+    tool_sync.add_argument("--operation", required=True)
+    tool_sync.add_argument("--actor", required=True)
+    tool_sync.add_argument("--swarm", required=True)
+    tool_sync.add_argument("--work")
+    tool_sync.add_argument("--input", action="append", default=[])
+
     delegation = commands.add_parser(
         "delegation", help="Manage parent-to-child swarm work"
     ).add_subparsers(dest="delegation_command", required=True)
@@ -1419,6 +1430,20 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 inputs=_parse_inputs(args.input),
                 launch=args.launch,
                 force=args.force,
+            )
+        )
+    if args.command == "tool" and args.tool_command == "sync":
+        return workspace.invoke_tool(
+            InvokeToolInput(
+                id=args.id,
+                tool_id=args.tool,
+                operation_id=args.operation,
+                actor_id=args.actor,
+                swarm_id=args.swarm,
+                work_id=args.work,
+                inputs=_parse_inputs(args.input),
+                launch=True,
+                read_only_sync=True,
             )
         )
     if args.command == "delegation" and args.delegation_command == "create":

@@ -973,7 +973,11 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
     assert [(item.id, item.provider, item.transport) for item in available] == [
         ("github-actions", "github", "cli"),
         ("github-issues", "github", "cli"),
+        ("github-projects", "github", "cli"),
         ("github-pull-requests", "github", "cli"),
+        ("github-releases", "github", "cli"),
+        ("github-repository-governance", "github", "cli"),
+        ("github-security", "github", "cli"),
     ]
     assert available[0].runtime_available is True
     assert available[0].installed_scopes == []
@@ -2801,7 +2805,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.counts == {
         "actors": 3,
         "methods": 3,
-        "tools": 7,
+        "tools": 11,
         "environments": 0,
         "swarms": 1,
         "work": 1,
@@ -2825,7 +2829,11 @@ def test_lists_and_summarizes_operational_workspace_state(
         "code-review",
         "knowledge-base",
         "observability",
+        "portfolio-management",
+        "release-management",
         "repository",
+        "repository-governance",
+        "security-scanning",
         "work-management",
     ]
     assert [item.id for item in workspace.list_actors("project")] == [

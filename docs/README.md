@@ -89,6 +89,8 @@ do not exist as one static agent file in this repository.
 
 ## Ecosystem integrations
 
+- [GitHub ecosystem](guides/github-ecosystem.md): install and govern Issues, Pull Requests, Actions,
+  repository policy, releases, security alerts, Projects, and explicit snapshots.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): prefer reviewed native CLIs while
   retaining MCP as an explicit alternative transport.
 - [Code-review integrations](guides/code-review-integrations.md): govern Pull Requests, checks,
@@ -152,6 +154,8 @@ do not exist as one static agent file in this repository.
   plus Product Owner approval before deployment.
 - [GitHub Actions CLI adapter](../samples/github-actions-cli/README.md): install the reviewed `gh`
   adapter, prepare native commands, and preserve separate cancellation authority.
+- [Governed GitHub delivery](../samples/github-end-to-end/README.md): prepare the complete path from
+  Issue and branch through review, merge, security snapshots, Projects, and release.
 - [GitLab CI/CD CLI adapter](../samples/gitlab-ci-cli/README.md): prepare bounded pipeline reads and
   reject unauthorized cancellation and unsupported trigger translation.
 - [GitHub Issues CLI adapter](../samples/github-issues-cli/README.md): prepare native issue searches

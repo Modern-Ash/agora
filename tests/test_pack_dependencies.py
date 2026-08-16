@@ -630,7 +630,11 @@ def test_pack_lock_tracks_managed_mutations_and_cli_refreshes_manual_changes(
         ("tool", "code-review"),
         ("tool", "knowledge-base"),
         ("tool", "observability"),
+        ("tool", "portfolio-management"),
+        ("tool", "release-management"),
         ("tool", "repository"),
+        ("tool", "repository-governance"),
+        ("tool", "security-scanning"),
         ("tool", "work-management"),
     ]
     direct = _tool(tmp_path / "direct", "direct", "1.0.0")

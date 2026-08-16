@@ -31,6 +31,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: execution-boundaries",
         "sample: gate-waivers",
         "sample: github-actions-cli",
+        "sample: github-end-to-end",
         "sample: github-issues-cli",
         "sample: gitlab-ci-cli",
         "sample: gitlab-issues-cli",

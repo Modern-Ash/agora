@@ -22,6 +22,12 @@
   cloud translation in reviewed external adapters rather than the kernel.
 - Keep GitLab merge-request adapters on an exact native subset; do not discard review-decision bodies
   or reinterpret conditional list and merge flags as neutral semantics.
+- Keep GitHub ecosystem adapters behind provider-neutral contracts; keep ruleset administration
+  read-only until a neutral policy artifact is validated, and keep release publication ungranted.
+- Redact GitHub secret scanning values before provider output becomes durable; never request secret
+  locations or raw credentials merely to build a synchronization snapshot.
+- Keep Tool Sync provider-neutral, explicit, read-only, bounded, and persisted as an ordinary Tool
+  Run; never add background reconciliation or allow write risk through the sync path.
 - Prefer a reviewed native provider CLI when it is installed and non-interactive; use a team wrapper
   for normalization and MCP only as an explicit alternative transport.
 - Give reviewed CLI adapters a structured local version command and a tested minimum version; never

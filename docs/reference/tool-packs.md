@@ -224,8 +224,12 @@ Keep capabilities stable even when a project changes vendors:
 | System category | Example capabilities | Typical durable result |
 | --- | --- | --- |
 | Issue tracking | `issue.read`, `issue.write`, `issue.transition` | `ticket` |
-| Repository hosting | `repository.read`, `pull-request.write` | `review` |
+| Repository governance | `repository.governance.read` | `repository-ruleset` |
+| Code review | `review.read`, `review.write`, `review.decide`, `review.merge` | `review` |
 | CI/CD | `ci.read`, `ci.run`, `deployment.create` | `test-report`, `build`, `deployment` |
+| Releases | `release.read`, `release.publish` | `release`, `release-verification` |
+| Security | `security.read` | `security-alert-list` |
+| Portfolio | `portfolio.read`, `portfolio.write` | `portfolio-project`, `portfolio-item` |
 | Documentation | `docs.read`, `docs.write`, `docs.publish` | `documentation` |
 | Cloud | `cloud.read`, `cloud.plan`, `cloud.deploy` | `plan`, `deployment` |
 | Observability | `observability.read`, `incident.write` | `metric-report`, `incident` |
@@ -243,6 +247,10 @@ agora tool adapter list --available
 agora tool adapter list --check
 agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
+agora tool adapter install --id github-projects --scope project
+agora tool adapter install --id github-releases --scope project
+agora tool adapter install --id github-repository-governance --scope project
+agora tool adapter install --id github-security --scope project
 agora tool adapter install --id gitlab-ci --scope project
 agora tool adapter install --id gitlab-issues --scope project
 agora tool adapter install --id gitlab-merge-requests --scope project
