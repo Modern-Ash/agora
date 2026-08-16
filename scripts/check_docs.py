@@ -4,7 +4,7 @@ from pathlib import Path
 
 LINK_PATTERN = re.compile(r"\[[^]]*]\(([^)]+)\)")
 IGNORED_DIRECTORIES = {".git", ".venv", "dist", "node_modules"}
-PLUGIN_OUTPUT_ROOTS = {Path("docs/superpowers")}
+PLUGIN_OUTPUT_ROOTS = {Path(".superpowers"), Path("docs/superpowers")}
 
 
 def is_ignored_document(relative_path: Path) -> bool:

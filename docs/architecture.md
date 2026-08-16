@@ -241,6 +241,9 @@ The GitLab Issues adapter similarly exposes native search, view, comment, and cl
 `glab` without claiming typed creation that the CLI cannot represent. The GitLab Merge Requests
 adapter exposes exact view, create, comment, and head-pipeline inspection while leaving conditional
 state filters, review decisions, and merge strategies to a reviewed normalizing wrapper.
+The GitLab CI/CD adapter exposes bounded pipeline listing, inspection without variables or logs, and
+separately authorized cancellation. It omits trigger and deployment operations that cannot preserve
+the complete provider-neutral input contract through native `glab` commands.
 The Jira adapter implements the complete work-management contract through `acli`; it remains
 discoverable but unavailable when that executable is absent. Availability never causes installation
 or an MCP fallback. The `twg-confluence` adapter uses the same explicit-subset mechanism for page

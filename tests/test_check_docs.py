@@ -6,6 +6,7 @@ is_ignored_document = runpy.run_path(str(ROOT / "scripts" / "check_docs.py"))["i
 
 
 def test_documentation_link_check_excludes_plugin_run_output() -> None:
+    assert is_ignored_document(Path(".superpowers/sdd/generated.md")) is True
     assert is_ignored_document(Path("docs/superpowers/plans/generated.md")) is True
     assert is_ignored_document(Path("docs/superpowers/specs/generated.md")) is True
     assert is_ignored_document(Path("docs/guides/quickstart.md")) is False

@@ -152,6 +152,8 @@ do not exist as one static agent file in this repository.
   plus Product Owner approval before deployment.
 - [GitHub Actions CLI adapter](../samples/github-actions-cli/README.md): install the reviewed `gh`
   adapter, prepare native commands, and preserve separate cancellation authority.
+- [GitLab CI/CD CLI adapter](../samples/gitlab-ci-cli/README.md): prepare bounded pipeline reads and
+  reject unauthorized cancellation and unsupported trigger translation.
 - [GitHub Issues CLI adapter](../samples/github-issues-cli/README.md): prepare native issue searches
   and constrain dynamic transitions to close or reopen.
 - [GitLab Issues CLI adapter](../samples/gitlab-issues-cli/README.md): prepare native issue reads and

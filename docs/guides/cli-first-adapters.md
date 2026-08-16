@@ -186,6 +186,27 @@ list and view reviews, create and comment on Pull Requests, inspect checks, and 
 request-changes decisions. Merge remains a distinct `review.merge` capability granted to no bundled
 role. See [Code-review integrations](code-review-integrations.md) for the complete flow.
 
+## GitLab CI/CD through `glab`
+
+The `gitlab-ci` adapter implements exact pipeline listing, inspection, and cancellation through
+GitLab CLI 1.109.0 or newer:
+
+```bash
+agora tool adapter install --id gitlab-ci --scope project
+agora tool invoke \
+  --id inspect-gitlab-pipeline \
+  --tool gitlab-ci \
+  --operation view-run \
+  --actor developer \
+  --swarm delivery \
+  --input run=12345
+```
+
+Pipeline reads are JSON and bounded. Inspection includes job details but not variables or logs.
+Cancellation retains destructive risk and ungranted `ci.cancel` authority. Trigger and deployment
+operations are omitted because the native CLI cannot bind every required neutral input; see
+[CI/CD integrations](ci-cd-integrations.md).
+
 ## Jira through Atlassian CLI
 
 The `jira` adapter implements the complete `work-management` contract through ACLI:

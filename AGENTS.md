@@ -32,6 +32,8 @@
   preserve its required work-item type; restrict dynamic lifecycle subcommands to close or reopen.
 - Keep CI cancellation and deployment capabilities opt-in; combine production authority with
   explicit Method Pack policy, evidence, and operation approval requirements.
+- Keep GitLab CI/CD adapters on an exact native subset; do not discard the neutral pipeline identity
+  when translating triggers or expose deployment operations without immutable artifact binding.
 - Keep documentation publication and archival opt-in; treat remote pages as external state and
   persist their identifiers as Agora artifacts or evidence when lifecycle gates require them.
 - Keep Confluence updates bound to native optimistic-concurrency tokens; expose only an explicit

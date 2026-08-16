@@ -101,6 +101,22 @@ def test_loads_the_github_actions_cli_adapter() -> None:
     assert contract.operations["cancel-run"].risk == "destructive"
 
 
+def test_loads_the_gitlab_ci_adapter_as_an_explicit_subset() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "gitlab-ci")
+    implemented = load_tool_contract(template_root() / "tools" / "ci-cd")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == "gitlab"
+    assert contract.executable == "glab"
+    assert contract.version_command == ["version"]
+    assert contract.minimum_runtime_version == "1.109.0"
+    assert contract.implements_operations == ["list-runs", "view-run", "cancel-run"]
+    assert sorted(contract.operations) == ["cancel-run", "list-runs", "view-run"]
+    assert contract.operations["view-run"].arguments[:3] == ["ci", "get", "--pipeline-id"]
+    assert contract.operations["cancel-run"].risk == "destructive"
+    assert "trigger" not in contract.operations
+
+
 def test_loads_the_terraform_cli_adapter() -> None:
     contract = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
     implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
@@ -247,6 +263,7 @@ def test_loads_the_twg_confluence_adapter_as_an_explicit_subset() -> None:
         ("twg-confluence", "1.2.5", "1.2.5"),
         ("gitlab-issues", "glab version 1.109.0", "1.109.0"),
         ("gitlab-merge-requests", "glab version 1.109.0", "1.109.0"),
+        ("gitlab-ci", "glab version 1.109.0", "1.109.0"),
     ],
 )
 def test_probes_compatible_cli_adapter_versions(

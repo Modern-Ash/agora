@@ -483,6 +483,7 @@ agora tool adapter list --check
 agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id github-issues --scope project
+agora tool adapter install --id gitlab-ci --scope project
 agora tool adapter install --id gitlab-issues --scope project
 agora tool adapter install --id gitlab-merge-requests --scope project
 agora tool adapter install --id jira --scope project
@@ -572,8 +573,10 @@ to `glab` without weakening unsupported decisions or merge strategies. No bundle
 
 The `ci-cd` pack defines a stable `cictl` interface for GitHub Actions, GitLab CI/CD, Jenkins, or an
 internal platform. Routine pipeline access is separate from cancellation and deployment authority.
-The independently installable `github-actions` adapter maps those capabilities directly to the
-developer's existing `gh` CLI. See the
+The independently installable `github-actions` adapter maps the complete contract to the
+developer's existing `gh` CLI. The partial `gitlab-ci` adapter maps bounded pipeline listing,
+inspection, and cancellation to `glab` without claiming trigger or deployment translations that
+lose required neutral inputs. See the
 [CLI-first adapter guide](docs/guides/cli-first-adapters.md) and
 [CI/CD integration guide](docs/guides/ci-cd-integrations.md).
 
@@ -758,6 +761,7 @@ uv run python samples/pack-dependencies/run.py
 uv run python samples/remote-registry/run.py
 uv run python samples/gate-waivers/run.py
 uv run python samples/approval-delegation/run.py
+uv run python samples/gitlab-ci-cli/run.py
 uv run python samples/gitlab-issues-cli/run.py
 uv run python samples/gitlab-merge-requests-cli/run.py
 uv run python samples/distributed-coordination/run.py
@@ -794,6 +798,8 @@ compatible Tool Pack before copying either catalog selection. The
 versioned registry snapshot without persisting a private key.
 The [GitLab Issues sample](samples/gitlab-issues-cli/README.md) prepares native issue reads and
 transitions while rejecting deletion and unsupported typed creation.
+The [GitLab CI/CD sample](samples/gitlab-ci-cli/README.md) prepares bounded pipeline reads while
+rejecting unauthorized cancellation and unsupported trigger translation.
 The [GitLab Merge Requests sample](samples/gitlab-merge-requests-cli/README.md) prepares native
 review creation and head-pipeline inspection while rejecting unsupported merge translation.
 The [environment permissions sample](samples/environment-permissions/README.md) gates a production
@@ -841,8 +847,8 @@ mutation in a structured external lease while retaining the local operating-syst
 - The Tool Pack kernel plus Git repository, provider-neutral code-review, work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, GitHub Pull Requests, Jira, and
-  Terraform CLI adapters, partial GitLab Issues and Atlassian TWG Confluence adapters, plus partial
-  AWS and Google Cloud inventory adapters.
+  Terraform CLI adapters, partial GitLab CI/CD, Issues, Merge Requests, and Atlassian TWG Confluence
+  adapters, plus partial AWS and Google Cloud inventory adapters.
 - Governed same-swarm work decomposition and provider-neutral delegation budgets are implemented;
   the selected human, agent, or swarm remains responsible for proposing useful child contracts and
   external runtimes remain responsible for measuring usage. Agora provides an append-only,

@@ -1087,6 +1087,91 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
     assert any(item.code == "tool-adapter.contract-invalid" for item in report.issues)
 
 
+def test_installs_and_governs_the_gitlab_ci_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/glab" if executable == "glab" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="gitlab-ci", scope="project")
+    )
+    assert installed.implements_operations == ["list-runs", "view-run", "cancel-run"]
+
+    listed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-ci-runs",
+            tool_id="gitlab-ci",
+            operation_id="list-runs",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify"},
+        )
+    )
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-ci-run",
+            tool_id="gitlab-ci",
+            operation_id="view-run",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"run": "12345"},
+        )
+    )
+
+    assert listed.command == [
+        "glab",
+        "ci",
+        "list",
+        "--name",
+        "verify",
+        "--per-page",
+        "50",
+        "--output",
+        "json",
+    ]
+    assert viewed.command == [
+        "glab",
+        "ci",
+        "get",
+        "--pipeline-id",
+        "12345",
+        "--with-job-details",
+        "--output",
+        "json",
+    ]
+    with pytest.raises(PermissionError, match="ci.cancel"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="gitlab-ci-cancel",
+                tool_id="gitlab-ci",
+                operation_id="cancel-run",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"run": "12345"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "gitlab-ci-cancel").exists()
+
+    for operation in ("trigger", "view-deployment", "create-deployment"):
+        run_id = f"gitlab-ci-unsupported-{operation}"
+        with pytest.raises(FileNotFoundError, match=operation):
+            workspace.invoke_tool(
+                InvokeToolInput(
+                    id=run_id,
+                    tool_id="gitlab-ci",
+                    operation_id=operation,
+                    actor_id="developer",
+                    swarm_id="delivery",
+                )
+            )
+        assert not (root / ".agora" / "tool-runs" / run_id).exists()
+    assert workspace.validate().ok
+
+
 def test_discovers_installs_and_governs_the_terraform_cli_adapter(
     project: tuple[Path, AgoraWorkspace], monkeypatch
 ) -> None:
