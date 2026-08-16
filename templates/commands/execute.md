@@ -22,6 +22,8 @@ results are durable. When an operation requires an environment, select a policy 
 `.agora/environments`, confirm the assigned role permits it, and satisfy its approvals and evidence.
 When a runtime or reviewed adapter reports measured resource consumption, append it with
 `agora usage add` and cite the authoritative telemetry reference. Never estimate or invent usage.
+Check `agora usage status --swarm <swarm> --work <work>` before allocating or launching bounded
+work so the next operation fits the durable remaining budget.
 When work is delegated, read the related `DELEGATION.md` and act only within its parent or child
 contract. Do not invent a transition or bypass a gate.
 

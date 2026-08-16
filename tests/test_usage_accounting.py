@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,11 @@ def test_accumulates_evidence_backed_usage_and_enforces_work_budget(
         "model-call-1",
         "model-call-2",
     ]
+    summary = workspace.summarize_usage("delivery", "increment")
+    assert summary.budget_limits == {"cost-cents": 50, "tokens": 100}
+    assert summary.consumed == {"cost-cents": 50, "tokens": 100}
+    assert summary.remaining == {"cost-cents": 0, "tokens": 0}
+    assert summary.records == 2
     assert workspace.validate().ok
 
     with pytest.raises(ValueError, match="Usage exceeds work budget"):
@@ -140,6 +146,54 @@ def test_accumulates_evidence_backed_usage_and_enforces_work_budget(
                 evidence_refs=["telemetry://gpu/run-1"],
             )
         )
+
+
+def test_summarizes_unbounded_usage_through_cli(tmp_path: Path, monkeypatch) -> None:
+    workspace = _budgeted_workspace(tmp_path, monkeypatch)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="exploration",
+            title="Unbounded exploration",
+            actor_id="owner",
+        )
+    )
+    workspace.add_usage(
+        AddUsageInput(
+            id="runtime-1",
+            swarm_id="delivery",
+            work_id="exploration",
+            actor_id="developer",
+            amounts={"gpu-seconds": 12},
+            evidence_refs=["telemetry://runtime/1"],
+        )
+    )
+    output = io.StringIO()
+
+    assert (
+        main(
+            [
+                "usage",
+                "status",
+                "--swarm",
+                "delivery",
+                "--work",
+                "exploration",
+            ],
+            cwd=workspace.project_root(),
+            stdout=output,
+        )
+        == 0
+    )
+    result = json.loads(output.getvalue())
+    assert result == {
+        "budget_limits": None,
+        "consumed": {"gpu-seconds": 12},
+        "records": 1,
+        "remaining": None,
+        "swarm_id": "delivery",
+        "work_id": "exploration",
+    }
 
 
 def test_validation_detects_usage_tampering(tmp_path: Path, monkeypatch) -> None:

@@ -217,6 +217,16 @@ class UsageRecord:
 
 
 @dataclass(frozen=True)
+class UsageSummary:
+    swarm_id: str
+    work_id: str
+    budget_limits: dict[str, int] | None
+    consumed: dict[str, int]
+    remaining: dict[str, int] | None
+    records: int
+
+
+@dataclass(frozen=True)
 class GateWaiverRecord:
     id: str
     swarm_id: str

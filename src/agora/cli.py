@@ -1003,6 +1003,9 @@ def _build_parser() -> argparse.ArgumentParser:
     usage_list = usage.add_parser("list", help="List durable usage records")
     usage_list.add_argument("--swarm", required=True)
     usage_list.add_argument("--work", required=True)
+    usage_status = usage.add_parser("status", help="Summarize usage and remaining budget")
+    usage_status.add_argument("--swarm", required=True)
+    usage_status.add_argument("--work", required=True)
 
     approval = commands.add_parser(
         "approval", help="Manage explicit work approvals"
@@ -1936,6 +1939,8 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.add_usage(usage_input)
     if args.command == "usage" and args.usage_command == "list":
         return workspace.list_usage(args.swarm, args.work)
+    if args.command == "usage" and args.usage_command == "status":
+        return workspace.summarize_usage(args.swarm, args.work)
     if args.command == "approval" and args.approval_command == "add":
         return workspace.add_approval(
             AddApprovalInput(
