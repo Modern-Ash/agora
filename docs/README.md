@@ -63,8 +63,8 @@ do not exist as one static agent file in this repository.
   actors, stop at human authority, and resume durable failures.
 - [Complete verification](guides/verification.md): run format, lint, tests, documentation, samples,
   and distribution checks.
-- [Role conformance self-test](guides/self-test.md): exercise every bundled method with human, AI,
-  and swarm role holders in temporary workspaces using one command.
+- [Role conformance test harness](guides/self-test.md): visually trace and exercise every bundled
+  method with human, AI, and swarm role holders in temporary workspaces using one command.
 - [Interruptions and cancellation](guides/interruptions-and-cancellation.md): block, resume, reject,
   or cancel work without erasing history.
 

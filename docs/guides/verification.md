@@ -54,7 +54,7 @@ The runner continues through independent failures and returns status `1` if any 
 2. Python linting.
 3. The complete test suite.
 4. Local Markdown link validation.
-5. The bundled human, AI-agent, and swarm role conformance self-test.
+5. The bundled human, AI-agent, and swarm [role conformance test harness](self-test.md).
 6. Every `samples/*/run.py` scenario.
 7. Source and wheel distribution builds.
 
