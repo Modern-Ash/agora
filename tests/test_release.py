@@ -32,7 +32,7 @@ def test_release_uses_separate_oidc_pypi_publication() -> None:
     assert "name: pypi" in workflow
     assert "id-token: write" in workflow
     assert "https://pypi.org/p/agora-framework" in workflow
-    assert "pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26" in workflow
+    assert "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33" in workflow
     assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in workflow
 
