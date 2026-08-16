@@ -56,6 +56,52 @@ def test_targets_a_project_outside_the_current_environment(tmp_path: Path, monke
     assert '"reference": "project:ada"' in output.getvalue()
 
 
+def test_manages_environment_policies_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert main(["init"], cwd=project, stdout=output, stderr=errors) == 0
+    assert (
+        main(
+            [
+                "environment",
+                "add",
+                "--id",
+                "production",
+                "--name",
+                "Production",
+                "--capability",
+                "deployment.create",
+                "--required-approval-role",
+                "product-owner",
+                "--require-successful-evidence",
+            ],
+            cwd=project,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            ["environment", "show", "--id", "production"],
+            cwd=project,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert main(["environment", "list"], cwd=project, stdout=output, stderr=errors) == 0
+
+    assert errors.getvalue() == ""
+    assert '"id": "production"' in output.getvalue()
+    assert '"require_successful_evidence": true' in output.getvalue()
+    assert (project / ".agora" / "environments" / "production.md").is_file()
+
+
 def test_installs_a_custom_method_without_an_initialized_project(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -415,6 +461,10 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
                 "usable:The result is usable",
                 "--required-artifact",
                 "specialist-result",
+                "--budget",
+                "effort=8",
+                "--promote-artifact",
+                "specialist-result=promoted-specialist-result",
                 "--by",
                 "specialist-swarm",
             ],
@@ -504,6 +554,10 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
     assert output.getvalue().count('"status": "accepted"') >= 2
     assert '"action": "delegation.block"' in output.getvalue()
     assert '"action": "delegation.resume"' in output.getvalue()
+    assert workspace.show_work("specialists", "specialist-work").budget_limits == {"effort": 8}
+    assert workspace.show_delegation("cli-delegation").artifact_promotions == {
+        "specialist-result": "promoted-specialist-result"
+    }
     assert (
         root / ".agora" / "swarms" / "specialists" / "work" / "specialist-work" / "WORK.md"
     ).exists()
@@ -559,6 +613,33 @@ def test_blocks_resumes_and_lists_work_status_from_the_cli(tmp_path: Path, monke
     output = io.StringIO()
     errors = io.StringIO()
 
+    assert (
+        main(
+            [
+                "work",
+                "decompose",
+                "--swarm",
+                "delivery",
+                "--work",
+                "cli-work",
+                "--child",
+                "cli-child",
+                "--title",
+                "Implement the child slice",
+                "--criterion",
+                "reviewed:The slice is reviewed",
+                "--required-artifact",
+                "source-code",
+                "--by",
+                "owner",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
     for arguments in (
         [
             "work",
@@ -601,6 +682,7 @@ def test_blocks_resumes_and_lists_work_status_from_the_cli(tmp_path: Path, monke
         assert main(arguments, cwd=root, stdout=output, stderr=errors) == 0
 
     assert errors.getvalue() == ""
+    assert workspace.show_work("delivery", "cli-child").parent_work_ref == "delivery/cli-work"
     assert '"operational_status": "blocked"' in output.getvalue()
     assert '"action": "work.resume"' in output.getvalue()
 
@@ -634,3 +716,157 @@ def test_queries_status_and_returns_a_failure_code_for_invalid_state(
     assert '"ok": false' in invalid_output.getvalue()
     assert '"code": "document.invalid"' in invalid_output.getvalue()
     assert errors.getvalue() == ""
+
+
+def test_creates_and_lists_a_granular_gate_waiver_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    for actor_id, name, capabilities in (
+        ("owner", "Owner", ["backlog-management", "acceptance"]),
+        ("alternate-owner", "Alternate Owner", ["backlog-management", "acceptance"]),
+        ("facilitator", "Facilitator", ["facilitation", "governance"]),
+        ("developer", "Developer", ["implementation"]),
+    ):
+        workspace.add_actor(
+            AddActorInput(
+                id=actor_id,
+                name=name,
+                kind="human",
+                capabilities=capabilities,
+                scope="project",
+            )
+        )
+    workspace.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Test Gate Waivers", create_branch=False)
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "facilitator"),
+        ("developer", "developer"),
+    ):
+        workspace.assign_actor(
+            AssignActorInput(swarm_id="delivery", role_id=role, actor_id=actor_id)
+        )
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="release",
+            title="Release",
+            actor_id="owner",
+            acceptance_criteria=[("verified", "Verify the release")],
+        )
+    )
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert (
+        main(
+            [
+                "gate",
+                "waive",
+                "--id",
+                "accepted-risk",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--gate",
+                "completion",
+                "--by",
+                "owner",
+                "--criterion",
+                "verified",
+                "--reason",
+                "Risk accepted",
+                "--evidence",
+                "repo://risk/release.md",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            ["gate", "list", "--swarm", "delivery", "--work", "release"],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "approval",
+                "delegate",
+                "--id",
+                "alternate-release-approval",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--role",
+                "product-owner",
+                "--to",
+                "alternate-owner",
+                "--by",
+                "owner",
+                "--reason",
+                "Alternate review requested",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "approval",
+                "add",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--role",
+                "product-owner",
+                "--by",
+                "alternate-owner",
+                "--delegation",
+                "alternate-release-approval",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "approval",
+                "delegations",
+                "--swarm",
+                "delivery",
+                "--work",
+                "release",
+                "--status",
+                "used",
+            ],
+            cwd=root,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
+    assert errors.getvalue() == ""
+    assert '"id": "accepted-risk"' in output.getvalue()
+    assert '"id": "alternate-release-approval"' in output.getvalue()
+    assert '"status": "used"' in output.getvalue()

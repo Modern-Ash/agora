@@ -20,7 +20,12 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 from agora.filesystem import assert_slug
 from agora.markdown import parse_markdown, string_attribute
-from agora.model import RegistryIndexRecord, RegistryReleaseRecord, RegistryTrustKeyRecord
+from agora.model import (
+    RegistryIndexRecord,
+    RegistryReleaseRecord,
+    RegistryReleaseSignatureRecord,
+    RegistryTrustKeyRecord,
+)
 from agora.trust import decode_trusted_public_key
 
 INDEX_SCHEMA = "agora/registry-index/v1"
@@ -42,14 +47,16 @@ def download_registry_release(
     version: str | None,
     public_key: str | None,
     require_signature: bool,
+    signature_threshold: int = 0,
     allow_insecure_http: bool,
     trusted_keys: list[RegistryTrustKeyRecord] | None = None,
-) -> Iterator[tuple[Path, RegistryIndexRecord, RegistryReleaseRecord, bool, str]]:
-    index, release, signature_verified = inspect_registry_release(
+) -> Iterator[tuple[Path, RegistryIndexRecord, RegistryReleaseRecord, list[str], str]]:
+    index, release, verified_key_ids = inspect_registry_release(
         source,
         version=version,
         public_key=public_key,
         require_signature=require_signature,
+        signature_threshold=signature_threshold,
         allow_insecure_http=allow_insecure_http,
         trusted_keys=trusted_keys,
     )
@@ -70,7 +77,7 @@ def download_registry_release(
         extraction_root.mkdir()
         _extract_archive(archive_bytes, resolved_archive, extraction_root)
         registry_root = _find_registry_root(extraction_root)
-        yield registry_root, index, release, signature_verified, resolved_archive
+        yield registry_root, index, release, verified_key_ids, resolved_archive
 
 
 def inspect_registry_release(
@@ -79,9 +86,10 @@ def inspect_registry_release(
     version: str | None,
     public_key: str | None,
     require_signature: bool,
+    signature_threshold: int = 0,
     allow_insecure_http: bool,
     trusted_keys: list[RegistryTrustKeyRecord] | None = None,
-) -> tuple[RegistryIndexRecord, RegistryReleaseRecord, bool]:
+) -> tuple[RegistryIndexRecord, RegistryReleaseRecord, list[str]]:
     index_bytes, resolved_index = _read_source(
         source,
         maximum=MAX_INDEX_BYTES,
@@ -90,13 +98,14 @@ def inspect_registry_release(
     )
     index = load_registry_index(index_bytes, resolved_index)
     release = select_registry_release(index, version)
-    signature_verified = verify_release_signature(
+    verified_key_ids = verify_release_signature(
         release,
         public_key=public_key,
         require_signature=require_signature,
+        signature_threshold=signature_threshold,
         trusted_keys=trusted_keys or [],
     )
-    return index, release, signature_verified
+    return index, release, verified_key_ids
 
 
 def load_registry_index(contents: bytes, source: str) -> RegistryIndexRecord:
@@ -131,12 +140,40 @@ def load_registry_index(contents: bytes, source: str) -> RegistryIndexRecord:
             )
         signature = _optional_release_string(raw, "signature")
         key_id = _optional_release_string(raw, "key-id")
+        raw_signatures = raw.get("signatures")
         if (signature is None) != (key_id is None):
             raise ValueError(
                 f"Registry release signature and key-id must appear together: {version}"
             )
         if key_id is not None:
             assert_slug(key_id, "Registry release key id")
+        if raw_signatures is not None and signature is not None:
+            raise ValueError(f"Registry release cannot mix signature and signatures: {version}")
+        signatures: list[RegistryReleaseSignatureRecord] = []
+        if raw_signatures is not None:
+            if not isinstance(raw_signatures, list) or not raw_signatures:
+                raise ValueError(
+                    f"Registry release signatures must be a non-empty array: {version}"
+                )
+            for index, item in enumerate(raw_signatures):
+                if not isinstance(item, dict) or set(item) != {"key-id", "signature"}:
+                    raise ValueError(f"Registry release signature {index} is invalid: {version}")
+                signer_id = item.get("key-id")
+                signer_signature = item.get("signature")
+                if not isinstance(signer_id, str) or not isinstance(signer_signature, str):
+                    raise ValueError(f"Registry release signature {index} is invalid: {version}")
+                assert_slug(signer_id, "Registry release key id")
+                signatures.append(
+                    RegistryReleaseSignatureRecord(
+                        key_id=signer_id,
+                        signature=signer_signature,
+                    )
+                )
+            signer_ids = [item.key_id for item in signatures]
+            if len(signer_ids) != len(set(signer_ids)):
+                raise ValueError(
+                    f"Registry release signatures contain duplicate key ids: {version}"
+                )
         releases.append(
             RegistryReleaseRecord(
                 registry=id_,
@@ -145,6 +182,7 @@ def load_registry_index(contents: bytes, source: str) -> RegistryIndexRecord:
                 sha256=sha256,
                 signature=signature,
                 key_id=key_id,
+                signatures=signatures,
             )
         )
     releases.sort(key=lambda item: _version_parts(item.version), reverse=True)
@@ -168,28 +206,27 @@ def verify_release_signature(
     *,
     public_key: str | None,
     require_signature: bool,
+    signature_threshold: int = 0,
     trusted_keys: list[RegistryTrustKeyRecord] | None = None,
-) -> bool:
-    if release.signature is None:
-        if require_signature:
-            raise ValueError(f"Registry release is unsigned: {release.registry}@{release.version}")
-        return False
-    matching_key = next(
-        (
-            item
-            for item in trusted_keys or []
-            if item.id == release.key_id and item.registry == release.registry
-        ),
-        None,
-    )
-    if matching_key is not None and matching_key.status == "revoked":
-        raise PermissionError(
-            f"Registry release key is revoked: {release.registry}/{matching_key.id}"
+) -> list[str]:
+    if signature_threshold < 0:
+        raise ValueError("Registry signature threshold cannot be negative")
+    if public_key is not None and signature_threshold > 1:
+        raise ValueError("An explicit public key cannot satisfy a signature threshold above one")
+    signatures = list(release.signatures)
+    if release.signature is not None:
+        assert release.key_id is not None
+        signatures.append(
+            RegistryReleaseSignatureRecord(
+                key_id=release.key_id,
+                signature=release.signature,
+            )
         )
-    if public_key is None and matching_key is None:
-        if require_signature:
-            raise ValueError(f"No active trusted key found for {release.registry}/{release.key_id}")
-        return False
+    required = max(signature_threshold, 1 if require_signature else 0)
+    if not signatures:
+        if required:
+            raise ValueError(f"Registry release is unsigned: {release.registry}@{release.version}")
+        return []
     if public_key is not None:
         key_path = Path(public_key).expanduser().resolve()
         if not key_path.is_file():
@@ -197,22 +234,67 @@ def verify_release_signature(
         loaded_key = load_pem_public_key(key_path.read_bytes())
         if not isinstance(loaded_key, Ed25519PublicKey):
             raise ValueError(f"Registry public key must be Ed25519: {key_path}")
-    else:
-        assert matching_key is not None
-        loaded_key = Ed25519PublicKey.from_public_bytes(
-            decode_trusted_public_key(matching_key.public_key)
+    verified: list[str] = []
+    verified_fingerprints: set[str] = set()
+    for item in signatures:
+        matching_key = next(
+            (
+                key
+                for key in trusted_keys or []
+                if key.id == item.key_id and key.registry == release.registry
+            ),
+            None,
         )
-    try:
-        signature = base64.b64decode(release.signature, validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise ValueError("Registry release signature must be valid base64") from error
-    try:
-        loaded_key.verify(signature, release_signature_payload(release))
-    except InvalidSignature as error:
+        if matching_key is not None and matching_key.status == "revoked":
+            raise PermissionError(
+                f"Registry release key is revoked: {release.registry}/{matching_key.id}"
+            )
+        if public_key is None and matching_key is None:
+            continue
+        candidate_key = (
+            loaded_key
+            if public_key is not None
+            else Ed25519PublicKey.from_public_bytes(
+                decode_trusted_public_key(matching_key.public_key)  # type: ignore[union-attr]
+            )
+        )
+        try:
+            signature = base64.b64decode(item.signature, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise ValueError("Registry release signature must be valid base64") from error
+        try:
+            candidate_key.verify(signature, release_signature_payload(release))
+        except InvalidSignature as error:
+            if public_key is not None:
+                continue
+            raise ValueError(
+                f"Registry release signature is invalid: {release.registry}@{release.version}"
+            ) from error
+        fingerprint = (
+            matching_key.fingerprint
+            if matching_key is not None
+            else hashlib.sha256(candidate_key.public_bytes_raw()).hexdigest()
+        )
+        if fingerprint in verified_fingerprints:
+            continue
+        verified_fingerprints.add(fingerprint)
+        verified.append(item.key_id)
+        if public_key is not None:
+            break
+    if len(verified) < required:
+        if public_key is not None:
+            raise ValueError(
+                f"Registry release signature is invalid: {release.registry}@{release.version}"
+            )
+        if required == 1 and len(signatures) == 1:
+            raise ValueError(
+                f"No active trusted key found for {release.registry}/{signatures[0].key_id}"
+            )
         raise ValueError(
-            f"Registry release signature is invalid: {release.registry}@{release.version}"
-        ) from error
-    return True
+            f"Registry release requires {required} valid signatures, verified {len(verified)}: "
+            f"{release.registry}@{release.version}"
+        )
+    return verified
 
 
 def release_signature_payload(release: RegistryReleaseRecord) -> bytes:

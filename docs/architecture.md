@@ -23,7 +23,8 @@ Python CLI + templates
 `src/agora/cli.py` translates shell commands into workspace operations. It does not maintain a server
 or database, invoke an LLM, inspect project source languages, or impose a development methodology.
 `src/agora/workspace.py` materializes and validates documents, capabilities, actions, workflows,
-gates, approvals, handoffs, interruptions, delegations, sessions, and tool runs.
+gates, granular waivers, direct and delegated approvals, handoffs, interruptions, work delegations,
+sessions, and tool runs.
 `src/agora/methods.py` loads
 transition graphs, WIP limits, and gate policies. `src/agora/tools.py` validates provider-neutral
 Tool Packs and structured external operations. `src/agora/markdown.py` implements the
@@ -38,6 +39,9 @@ enforces transport and archive limits, verifies SHA-256 and optional Ed25519 sig
 snapshots into temporary directories before the local registry path accepts them.
 `src/agora/trust.py` validates Ed25519 public-key records and durable revocation state without
 handling private signing material.
+`src/agora/identity.py` validates actor public identities, canonicalizes lifecycle, Tool Run, and
+session authorization payloads, and verifies both live and persisted signatures without handling
+private keys.
 
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
@@ -56,8 +60,8 @@ adapters install as Codex skills or commands for other agents.
 
 - Distribution: defaults versioned with the Python package.
 - User: reusable preferences and actors under `~/.agora` or `$AGORA_HOME`.
-- Project: shared constitution, integration, standards, methods, policies, and maximum delegation
-  depth.
+- Project: shared constitution, integration, standards, methods, environment policies, and maximum
+  delegation depth.
 - Swarm: objective, current assignments, handoff history, branch, work, and evidence.
 
 More specific scopes may restrict broader scopes. They must not silently grant permissions prohibited
@@ -76,12 +80,32 @@ A remote registry index is a distribution mechanism, not runtime state. Agora ve
 archive and persists a complete local snapshot plus `SOURCE.md`. Governed work never depends on the
 index remaining available.
 
+Remote releases may require a threshold of distinct active Ed25519 trust keys. Multiple signer ids
+sharing one fingerprint count once. The installed threshold and verified ids persist in `SOURCE.md`,
+cannot be lowered by an update, and are repeated in immutable update history.
+
 Registry trust uses the same scope rule: project keys precede user keys. Verification binds a key id
 to one registry id, and a matching revocation blocks both automatic resolution and an explicit PEM.
+Organizations may distribute those public keys and revocations through a signed Markdown snapshot.
+Agora pins the organization's public root locally, requires a consecutive sequence and previous
+checksum, previews changes before application, then transactionally archives the bundle and updates
+the ordinary scoped trust store. Root rotation requires a Markdown declaration signed by both the
+outgoing and incoming roots, bound to the applied bundle position and previous rotation checksum.
+Historical bundles remain verified against their active root epoch. Private root keys remain
+external.
+
+Transparency log checkpoint keys live in a separate public-only trust store with independent
+rotation and revocation history. Explicit verification binds the canonical registry release leaf to
+an RFC 6962-style Merkle path and an Ed25519-signed checkpoint, then optionally persists the proof
+for project validation. Their authority cannot satisfy a registry release signature, and proof
+verification becomes a forward-only registry mutation gate only when explicitly required in
+persisted registry provenance. Proof acquisition remains outside the kernel.
 
 Registry updates are read-only plans unless application is explicit. Update staging carries forward
 installer-owned history, adds the next transition record, validates the complete candidate, and only
 then replaces the installed snapshot. Registry updates never mutate separately installed packs.
+Aggregate audits apply the same authenticated read path to every remote registry in one scope and
+may persist a Markdown notification for an external scheduler. They never apply releases or packs.
 
 Method and Tool Pack manifests declare semantic versions and optional cross-kind dependencies.
 Catalog installation resolves the complete dependency graph using registry precedence, checks the
@@ -93,6 +117,10 @@ Each catalog-installed pack carries installer-owned `SOURCE.md` provenance with 
 published version, and deterministic tree checksum. Pack updates are preview-only until `--apply`,
 reject downgrades and mutable versions, re-resolve the complete composition, and stage clean atomic
 pack replacements. Local amendments remain valid but require explicit `--force` before replacement.
+Aggregate pack audits run those previews over every managed pack in a scope and may persist a
+Markdown notification. They omit direct installations and never apply a plan.
+Explicit audit application binds current trees and dependency plans to the reviewed audit checksum,
+rechecks the complete managed set, merges compatible plans, and performs one transactional swap.
 
 `PACKS.lock.md` is the deterministic current-state inventory for user or project scope. Managed pack
 mutations regenerate it; validation compares it with installed trees, while `agora pack lock` accepts
@@ -157,6 +185,17 @@ deployment and destructive operations, while provider identity and state remain 
 The observability pack applies the same adapter boundary to health signals and incidents, keeping
 resolution distinct from evidence that recovery actually occurred.
 
+Actor authentication is separate from provider authentication. An actor may require an Ed25519
+signature over a prepared lifecycle action, Tool Run, or agent session before execution. Agora
+stores only the public key and durable proof, revalidates that proof during workspace validation,
+and never signs on the actor's behalf. Lifecycle actions additionally bind authorization to a digest
+of the work policy files and reapply Method Pack rules before mutation. Planned rotation is itself a
+signed lifecycle action authorized by the current key; revocation and recovery require another
+authenticated actor with explicit Method Pack authority and a distinct fingerprint. Public key
+histories live beside the actor record; a revoked current key blocks new signed
+operations while historical evidence remains independently verifiable. External CLIs still
+authenticate independently to GitHub, Jira, cloud, or another provider.
+
 Provider adapters are independently installable Tool Packs. Agora prefers a reviewed native CLI
 when it is already present in the developer environment, then a team wrapper when normalization is
 needed. MCP remains an optional external transport and never replaces Markdown or Git as the source
@@ -196,14 +235,21 @@ authority.
 
 This slice validates actor kind, capabilities, assignment, handoff authority, allowed action,
 transition-specific role, WIP, gates, approval records, Tool Pack inputs, tool capabilities,
-interruption edges, status attribution, sequence continuity, and derived swarm state.
+environment capability and role policy, interruption edges, status attribution, sequence
+continuity, and derived swarm state.
 Mutating workspace operations hold a reentrant operating-system lock keyed by the canonical project
-or Agora home path. Initialization acquires home and target locks in deterministic order. Lock
-metadata is runtime-only Markdown outside the repository; atomic document replacement still protects
-readers. This prevents lost updates between local processes and releases automatically after process
-termination.
+or Agora home path. Initialization acquires home and target locks in deterministic order. A project
+may additionally configure a provider-neutral external lease CLI for cross-host coordination; local
+locks are acquired first and remain mandatory. Lock metadata is runtime-only while external lease
+configuration is reviewed Markdown. Atomic document replacement still protects readers.
 
-External commands still run with the caller's operating-system permissions. Agora does not yet
-implement sandboxing, signatures, distributed leases across separate hosts, or actor authentication.
-Those rules must be added without turning chat history or a proprietary service into the source of
-truth.
+External commands still run with the caller's operating-system permissions. Tool Pack manifests
+bound the direct process by elapsed time and captured output; those values are persisted in the Tool
+Run and covered by signed actor authorization. The built-in runner terminates timeout and output
+violations, but does not isolate filesystems, networks, syscalls, resources, credentials, or detached
+descendants. Signed actor authorization currently covers work creation and decomposition, criteria,
+artifacts, evidence, transitions, interruptions, approvals, handoffs, actor key rotation, independently
+authorized revocation and recovery, actor runtime updates, vacant-role assignment, the complete
+delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not
+implement an operating-system sandbox, remote lease service, or scheduler. Optional lease adapters
+coordinate writers without turning chat history or a proprietary service into the source of truth.

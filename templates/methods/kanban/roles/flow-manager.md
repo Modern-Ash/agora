@@ -3,8 +3,9 @@ schema: "agora/role/v1"
 id: "flow-manager"
 required-capabilities: ["flow-management", "governance"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm"]
-allowed-actions: ["work.transition", "work.block", "work.resume", "delegation.manage", "delegation.block", "delegation.resume", "evidence.add", "handoff.create", "handoff.manage"]
+allowed-actions: ["actor.key.recover", "actor.key.revoke", "actor.key.rotate", "actor.runtime.update", "swarm.assign", "work.transition", "work.block", "work.resume", "delegation.manage", "delegation.block", "delegation.resume", "evidence.add", "handoff.create", "handoff.manage"]
 allowed-tool-capabilities: ["repository.read", "issue.read", "ci.read", "docs.read", "cloud.read", "observability.read", "incident.write"]
+allowed-environments: ["*"]
 ---
 
 # Flow Manager

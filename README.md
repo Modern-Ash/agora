@@ -33,6 +33,7 @@ Agora distribution
 ~/.agora/
   config.md             Runtime, method, and delegation defaults
   actors/*.md           Reusable user actors
+  actors/*/keys/        Public actor key lifecycle histories
 
 <project>/.agora/
   project.md            Effective project configuration
@@ -40,15 +41,18 @@ Agora distribution
   pack-removals/        Auditable records for applied composition removals
   constitution.md       Local principles and restrictions
   PROTOCOL.md           Shared collaboration protocol
+  coordination.md       Optional external writer lease policy
   STANDARDS.md          Enforced cross-actor engineering standards
   commands/*.md         Portable agent commands
   methods/              Built-in and custom lifecycle Method Packs
+  environments/*.md     Project-defined Tool Run permission boundaries
   registries/           Project-local pack catalog snapshots
-  actors/               Project-specific actors
+  actors/               Project actors and public key lifecycle histories
   tools/                Policy and installed Tool Packs
   artifacts/            Artifact catalog
   delegations/          Parent-to-child work contracts and collection state
   swarms/               Durable work state
+  actions/              Prepared and applied lifecycle mutation intents
   sessions/             Resolved runtimes and compiled execution context
   tool-runs/             Governed external invocations and results
   upgrades/              Applied migrations, manifests, and pre-change backups
@@ -77,7 +81,36 @@ Run the development checkout without a global installation:
 uv run agora --help
 ```
 
+## Quickstart
+
+Scaffold a runnable project in one command: it initializes `.agora`, registers a human
+actor and an AI actor, creates a swarm with the default method, and assigns every
+required role between the two.
+
+```bash
+cd my-project
+agora quickstart --objective "Ship the MVP"
+```
+
+By default the created actors are unauthenticated: no keys and no signing. Add `--secure` to require
+signed authentication for both actors. Quickstart then generates a local Ed25519 keypair per actor
+for exploration, keeping private keys outside `.agora`. Production actors should manage their own
+keys instead; see the
+[actor authentication guide](docs/guides/actor-authentication.md).
+
+```bash
+agora quickstart --objective "Ship the MVP" --secure
+agora quickstart --objective "Ship the MVP" --secure --key-dir ~/.my-team/dev-keys
+```
+
+Without `--key-dir`, the external key directory is
+`~/.config/agora-quickstart-keys/<project-hash>/`. The command reports its exact path. See the
+[quickstart guide](docs/guides/quickstart.md) for rerun, custom Method Pack, and security behavior.
+
 ## Configure and initialize
+
+The commands above are what `quickstart` runs for you. Use them directly for full control
+over integration, provider, actors, and roles:
 
 ```bash
 agora configure \
@@ -147,16 +180,29 @@ Discover bundled and registered packs, or install a reviewed local or remote reg
 agora registry install --source ./team-registry --scope user
 agora trust add --id team-release --registry team-catalog \
   --public-key ./team-release.pem --scope user
+agora trust organization add --id example-org \
+  --public-key ./example-org-root.pem --scope project
+agora trust organization sync --id example-org \
+  --source https://trust.example.com/agora/BUNDLE.md --scope project
+agora trust organization sync --id example-org --scope project --apply
+agora trust organization rotate --id example-org \
+  --source ./ROOT-ROTATION.md --scope project --apply
+agora trust transparency add --id rekor-2026 --log rekor-public \
+  --public-key ./rekor-public.pem --scope project
+agora registry verify-transparency --source ./PROOF.md --scope project --record
 agora registry install --source https://catalog.example.com/INDEX.md \
-  --version 1.0.0 --require-signature --scope user
+  --version 1.0.0 --signature-threshold 2 --require-transparency --scope project
 agora registry update --id team-catalog
 agora registry update --id team-catalog --apply
+agora registry audit --scope project --record
 agora registry list
 agora pack search --kind method --query release
 agora pack install --kind method --id release-flow \
   --registry team-catalog --scope project
 agora pack update --kind method --id release-flow
 agora pack update --kind method --id release-flow --apply
+agora pack audit --scope project --record
+agora pack apply-audit --id audit-20260815t120000z --scope project
 ```
 
 Project registries override user registries, which override the bundled catalog when the same pack id
@@ -169,14 +215,26 @@ Each catalog-installed pack persists its registry and checksum in `SOURCE.md`. E
 [pack update guide](docs/guides/pack-updates.md).
 `PACKS.lock.md` inventories the exact installed composition, while per-pack `UPDATE.md` files retain
 each applied transition; see the [pack lock guide](docs/guides/pack-locks.md).
-Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
-provenance beside the installed snapshot. See the
+Aggregate pack audits can record update and local-modification notifications without changing the
+installed composition.
+An explicitly selected, unchanged audit can then apply its bound dependency plans as one
+transaction and persist an application record.
+Remote releases are checksum-pinned and may require a threshold of distinct Ed25519 signatures;
+Agora persists their signer evidence and policy beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
 Trusted public keys, rotations, and revocations can be persisted at user or project scope. See the
 [registry trust guide](docs/guides/registry-trust.md).
+Transparency checkpoint keys use a separate scoped trust store, so they cannot authorize registry
+releases.
+Signed organization feeds synchronize those keys and revocations through preview-first,
+sequence-bound updates with a durable local history.
+Organization roots rotate through an explicitly applied declaration signed by both the outgoing and
+incoming roots and bound to the current feed position.
 Registry updates are preview-only unless `--apply` is passed, preserve provenance and history, and
 never update installed packs implicitly. See the
 [registry update guide](docs/guides/registry-updates.md).
+Aggregate registry audits can persist authenticated Markdown notifications for an external
+scheduler without applying any update.
 
 ## Actors and swarms
 
@@ -203,6 +261,89 @@ agora swarm assign --swarm payments --role product-owner --actor user:owner
 agora swarm assign --swarm payments --role scrum-master --actor facilitator
 agora swarm assign --swarm payments --role developer --actor delivery-swarm
 ```
+
+Direct assignment bootstraps vacant roles. Once a governance actor is assigned, remaining roles can
+be authorized through a durable Lifecycle Action:
+
+```bash
+agora swarm assign-prepare --id assign-payments-developer \
+  --swarm payments --role developer --actor delivery-swarm --by user:owner
+agora action authorization --action assign-payments-developer \
+  --output /tmp/assign-payments-developer.json
+agora action apply --action assign-payments-developer \
+  --signature /tmp/assign-payments-developer.sig
+```
+
+Assignments never overwrite an occupied role; use a governed handoff for replacement.
+
+An actor may bind its identity to an external Ed25519 key and require signed authorization before
+applying supported lifecycle mutations or launching a Tool Run:
+
+```bash
+agora actor add --id authenticated-developer \
+  --name "Authenticated Developer" --kind ai-agent \
+  --capability implementation \
+  --public-key developer-public.pem \
+  --require-authentication
+```
+
+Agora stores only the public key and durable signature evidence. The private key remains in the
+actor's keychain, hardware, workload identity, or secret manager. See the
+[actor authentication guide](docs/guides/actor-authentication.md) for the prepare, sign, and launch
+flow.
+
+Authenticated work transitions use a two-phase lifecycle action:
+
+```bash
+agora work transition-prepare --id begin-payment-work \
+  --swarm payments --work payment-retry --to implementing --by authenticated-developer
+agora action authorization --action begin-payment-work --output /tmp/begin-payment-work.json
+agora action apply --action begin-payment-work --signature /tmp/begin-payment-work.sig
+```
+
+The external signer signs the exact bytes in `/tmp/begin-payment-work.json`. See
+[signed lifecycle actions](docs/guides/signed-lifecycle-actions.md) for signing commands,
+precondition rules, replay protection, and audit behavior.
+
+Authenticated actors use the same boundary to change their own runtime selection:
+
+```bash
+agora actor runtime-prepare --id update-authenticated-runtime \
+  --actor authenticated-developer --swarm payments \
+  --integration generic --provider internal-gateway --model reviewed-model
+agora action authorization --action update-authenticated-runtime \
+  --output /tmp/update-authenticated-runtime.json
+agora action apply --action update-authenticated-runtime \
+  --signature /tmp/update-authenticated-runtime.sig
+```
+
+Authorize planned rotation with the active key. A different authenticated governance actor handles
+revocation and recovery without replacing historical evidence:
+
+```bash
+agora actor key rotate-prepare --id rotate-authenticated-developer \
+  --actor authenticated-developer --swarm payments \
+  --public-key developer-next-public.pem --reason "Scheduled rotation"
+agora action authorization --action rotate-authenticated-developer \
+  --output /tmp/rotate-authenticated-developer.json
+agora action apply --action rotate-authenticated-developer \
+  --signature /tmp/rotate-authenticated-developer.sig
+agora actor key revoke-prepare --id revoke-authenticated-developer \
+  --actor authenticated-developer --swarm payments --by security-governor \
+  --reason "Credential exposure"
+agora action authorization --action revoke-authenticated-developer \
+  --output /tmp/revoke-authenticated-developer.json
+agora action apply --action revoke-authenticated-developer \
+  --signature /tmp/revoke-authenticated-developer.sig
+agora actor key recover-prepare --id recover-authenticated-developer \
+  --actor authenticated-developer --swarm payments --by security-governor \
+  --public-key developer-recovery-public.pem --reason "Credential replacement"
+agora actor key list --actor authenticated-developer
+```
+
+The governance authorizer must hold explicit Method Pack authority, be assigned with the target, and
+use a different public-key fingerprint. Recovery follows the same `action authorization` and
+`action apply` steps; the revoked key never authorizes its successor.
 
 In a Git repository, `swarm create` creates `agora/<swarm-id>` by default. Use `--no-branch` to retain
 the current branch. The global `--project <path>` option lets IDEs, runners, and cloud environments
@@ -310,6 +451,11 @@ Agora includes Git-backed `repository` plus provider-neutral `work-management`, 
 `knowledge-base`, `cloud-infrastructure`, and `observability` packs:
 
 ```bash
+agora environment add --id staging --name "Staging" \
+  --capability cloud.read --capability cloud.plan
+agora environment add --id production --name "Production" \
+  --capability observability.read
+
 agora tool show --tool repository
 agora tool invoke --id payment-status \
   --tool repository --operation status \
@@ -340,12 +486,14 @@ agora tool invoke --id inspect-payment-guide \
 agora tool invoke --id plan-payment-capacity \
   --tool cloud-infrastructure --operation plan \
   --actor delivery-swarm --swarm payments \
+  --environment staging \
   --input environment=staging \
   --input change=increase-payment-capacity --launch
 
 agora tool invoke --id payment-health \
   --tool observability --operation service-health \
   --actor delivery-swarm --swarm payments \
+  --environment production \
   --input service=payments --input environment=production --launch
 ```
 
@@ -353,6 +501,11 @@ The executable runs without a shell. Agora persists `RUN.md`, captures output an
 `RESULT.md`, and stores no credentials. Omitting `--launch` creates a portable invocation for an IDE,
 CI worker, or cloud executor. The commit operation validates Conventional Commits 1.0.0 before a run
 record or Git commit is created.
+
+Environment-aware operations additionally require a project policy, an assigned role that permits
+the environment, and any configured work approvals or successful evidence. Agora records the stable
+environment id separately from provider-specific Tool Pack inputs and rechecks it before launch. See
+the [environment permissions guide](docs/guides/environment-permissions.md).
 
 The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
 tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
@@ -388,6 +541,10 @@ agora work create --swarm payments --id payment-api --title "Implement payment A
   --by owner --criterion api-works:"The API satisfies its contract" \
   --required-artifact source-code --required-artifact test-report
 
+agora work decompose --swarm payments --work payment-api \
+  --child payment-validation --title "Validate payment requests" \
+  --by owner --criterion covered:"Validation paths have tests"
+
 agora work transition --swarm payments --work payment-api --to planned --by delivery-swarm
 agora artifact add --swarm payments --work payment-api \
   --kind source-code --uri repo://src/payment.py --by delivery-swarm
@@ -414,6 +571,11 @@ agora work cancel --swarm payments --work payment-api --by owner \
 
 See [interruptions and cancellation](docs/guides/interruptions-and-cancellation.md) for state,
 authority, delegation, and child-ownership rules.
+
+Local decomposition links independently governed child work inside the same swarm. The parent
+cannot complete or be cancelled while a child remains open. See the
+[work decomposition guide](docs/guides/work-decomposition.md). Cross-swarm child work continues to
+use the separate delegation protocol.
 
 Transitions come from Markdown files in the installed Method Pack. Packs may define rework paths and
 per-state WIP limits. A gated terminal transition can require:
@@ -468,8 +630,9 @@ AGORA_LOCK_TIMEOUT=10 agora work transition \
 ```
 
 Locks are reentrant for nested Agora operations and release on success, exceptions, or process exit.
-They coordinate processes that share one host and lock directory; distributed leases across separate
-hosts remain future work. See the [concurrent writers guide](docs/guides/concurrent-writers.md).
+Projects may layer a reviewed external lease CLI over the mandatory local lock to coordinate
+separate hosts while keeping Markdown and Git authoritative. See the
+[concurrent writers guide](docs/guides/concurrent-writers.md).
 
 ## Operational queries and validation
 
@@ -492,9 +655,10 @@ agora validate
 ```
 
 `doctor` checks environment prerequisites. `validate` performs a complete, non-mutating integrity
-audit across schemas, portable commands, generated agent adapters, Method and Tool Packs, actors,
-role assignments, work, WIP, handoffs, delegations, sessions, tool runs, events, and recursive swarm
-constraints. Validation emits all findings and exits with status `1` when errors are present. See the
+audit across schemas, portable commands, generated agent adapters, Method and Tool Packs,
+environment policies, actors, role assignments, work, WIP, handoffs, delegations, sessions, tool
+runs, events, and recursive swarm constraints. Validation emits all findings and exits with status
+`1` when errors are present. See the
 [operations and validation guide](docs/guides/operations-and-validation.md).
 
 ## Development
@@ -506,8 +670,10 @@ uv run python scripts/verify_all.py
 ```
 
 It checks Python, Markdown links, generated adapter semantics, all samples, tests, and both package
-distributions. See the [complete verification guide](docs/guides/verification.md). The individual
-commands are:
+distributions. GitHub Actions runs the test suite on Python 3.11 through 3.13 and executes this same
+complete verifier on Python 3.13. Version-matched `vMAJOR.MINOR.PATCH` tags publish checksum-protected
+wheel and source artifacts as a GitHub release. See the
+[complete verification guide](docs/guides/verification.md). The individual commands are:
 
 ```bash
 uv run ruff format --check .
@@ -529,6 +695,10 @@ uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
 uv run python samples/pack-dependencies/run.py
 uv run python samples/remote-registry/run.py
+uv run python samples/gate-waivers/run.py
+uv run python samples/approval-delegation/run.py
+uv run python samples/distributed-coordination/run.py
+uv run python samples/environment-permissions/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -555,6 +725,10 @@ local process contention and recovery. The
 compatible Tool Pack before copying either catalog selection. The
 [remote registry sample](samples/remote-registry/README.md) signs, verifies, installs, and validates a
 versioned registry snapshot without persisting a private key.
+The [environment permissions sample](samples/environment-permissions/README.md) gates a production
+Tool Run on role scope, Product Owner approval, and successful work evidence.
+The [distributed coordination sample](samples/distributed-coordination/README.md) wraps a project
+mutation in a structured external lease while retaining the local operating-system lock.
 
 ## Documentation
 
@@ -568,17 +742,25 @@ versioned registry snapshot without persisting a private key.
 - [Governed handoffs](docs/guides/handoffs.md)
 - [Recursive swarms](docs/guides/recursive-swarms.md)
 - [Delegated work](docs/guides/delegated-work.md)
+- [Delegation budgets](docs/guides/delegation-budgets.md)
+- [Delegated artifact promotion](docs/guides/delegated-artifacts.md)
+- [Work decomposition](docs/guides/work-decomposition.md)
+- [Granular Gate Waivers](docs/guides/gate-waivers.md)
+- [Approval Delegation](docs/guides/approval-delegation.md)
+- [Environment permissions](docs/guides/environment-permissions.md)
 - [Operations and validation](docs/guides/operations-and-validation.md)
 - [Complete verification](docs/guides/verification.md)
 - [Interruptions and cancellation](docs/guides/interruptions-and-cancellation.md)
 - [Concurrent writers](docs/guides/concurrent-writers.md)
 - [Conventional Commits](docs/guides/conventional-commits.md)
+- [Actor authentication](docs/guides/actor-authentication.md)
+- [Portable Tool execution boundaries](docs/guides/execution-boundaries.md)
 - [Pack registries](docs/guides/pack-registries.md)
 - [Pack dependencies](docs/guides/pack-dependencies.md)
 - [Pack updates](docs/guides/pack-updates.md)
 - [Pack composition locks](docs/guides/pack-locks.md)
 - [Remote registry releases](docs/guides/remote-registries.md)
-- [Registry trust stores](docs/guides/registry-trust.md)
+- [Registry trust stores and organization feeds](docs/guides/registry-trust.md)
 - [Registry updates](docs/guides/registry-updates.md)
 - [Architecture](docs/architecture.md) and [domain model](docs/domain-model.md)
 - [ADR 0001](docs/decisions/0001-initial-architecture.md)
@@ -592,16 +774,33 @@ versioned registry snapshot without persisting a private key.
   registry snapshots. Local and project trust stores, rotation, and revocation are implemented;
   explicit update checks, transactional application, and dependency-aware installation are
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
-  Organization trust synchronization, transparency, automatic background pack updates, and
-  notifications are not.
+  Signed organization trust synchronization and a locally verified feed history are implemented.
+  Dual-signed organization root rotation and registry release signature thresholds are implemented.
+  Explicit third-party transparency inclusion-proof verification and durable recording are
+  implemented, and a recorded proof can be made a forward-only installation and update policy.
+  Automatic proof discovery and background pack updates are not implemented. Aggregate update
+  notifications and explicit audited batch application are available for external schedulers.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,
   plus partial AWS and Google Cloud inventory adapters.
-- Automatic child-work decomposition, delegation budgets, artifact copying, gate waivers,
-  distributed leases, and remote concurrency remain future work. Local cross-process writer locks,
-  explicit child work acceptance, interruption, cancellation, and reference-based result collection
-  are implemented.
+- Governed same-swarm work decomposition and provider-neutral delegation budgets are implemented;
+  the selected human, agent, or swarm remains responsible for proposing useful child contracts and
+  external runtimes remain responsible for usage metering. Opt-in typed child artifact promotion is
+  implemented as a reference to the authoritative child record; Agora deliberately does not copy
+  opaque external bytes. Granular, evidence-backed Gate Waivers and single-use, work-scoped
+  Approval Delegation are implemented. Distributed coordination is available through an optional
+  reviewed lease CLI; remote scheduling remains external. Local cross-process writer locks,
+  explicit child work acceptance, interruption,
+  cancellation, and reference-based result collection are implemented.
+- Optional Ed25519 actor authentication protects key rotation, independently authorized revocation
+  and recovery, actor runtime updates, vacant-role assignment, work creation and decomposition,
+  criteria, artifacts, evidence, transitions, interruptions, direct and delegated approvals, Gate
+  Waivers, handoffs, the complete work-delegation lifecycle, Tool Run launch, and agent-session
+  preparation and launch while leaving private keys external. Public-key rotation and revocation
+  histories are implemented. Tool Packs declare portable direct-process timeouts and
+  captured-output limits. Filesystem/network/syscall isolation, resource quotas, and process-tree
+  containment are not yet covered by that policy.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.
 

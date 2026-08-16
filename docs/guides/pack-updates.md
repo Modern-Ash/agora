@@ -87,6 +87,88 @@ swap restores every previous pack and leaves the existing lock untouched.
 Use `--scope user` or `--scope project` when the same pack is installed in both locations. Without a
 scope, an initialized project takes precedence over the user installation.
 
+## Aggregate pack audits
+
+After updating a registry snapshot, inspect every catalog-installed pack in one scope:
+
+```bash
+agora pack audit --scope project
+```
+
+Directly installed packs have no catalog provenance and are omitted. Each JSON entry reports its
+kind, id, registry, installed and target versions, update availability, and whether the installed
+tree has local modifications. The audit calls the same dependency-aware preview used by
+`agora pack update`; it does not write a pack, history record, or composition lock.
+
+Persist a durable notification for a human, agent, CI job, or external scheduler:
+
+```bash
+agora pack audit --scope project --record
+```
+
+Reports live under:
+
+```text
+.agora/notifications/pack-updates/<audit-id>/AUDIT.md
+```
+
+`agora validate` checks report identities, version direction, update flags, and duplicate entries.
+A catalog error, incompatible dependency graph, or mutable published version fails the audit rather
+than producing a successful notification.
+
+The complete scheduled detection sequence may be automated without granting mutation authority:
+
+```bash
+agora registry audit --scope project --record
+agora pack audit --scope project --record
+```
+
+Registry application and pack application remain separate, explicit commands. Agora never turns a
+notification into an automatic update.
+
+## Apply a reviewed audit
+
+After reviewing and versioning a recorded pack audit, apply its available updates as one batch:
+
+```bash
+agora pack apply-audit --id audit-20260815t120000z --scope project
+```
+
+Application is permitted only when all audited preconditions still match. Each entry binds:
+
+- the exact installed tree SHA-256;
+- installed and target versions;
+- update and local-modification flags;
+- the SHA-256 of the complete dependency-first update plan;
+- the registry selected by the installed provenance.
+
+Agora also requires the current set of catalog-managed packs to equal the audited set. A new or
+removed managed pack, changed local file, republished catalog plan, changed dependency, or second
+application makes the audit stale and blocks mutation.
+
+All compatible audited plans are merged, checked as one prospective composition, staged, and
+swapped transactionally. One update id is shared by every affected pack, the composition lock is
+refreshed, and the audit directory receives:
+
+```text
+.agora/notifications/pack-updates/<audit-id>/APPLICATION.md
+```
+
+That record binds the application to the exact audit checksum and portable update-history paths.
+`agora validate` detects audit changes after application and missing histories.
+
+An audit that recorded local modifications still requires explicit replacement authority:
+
+```bash
+agora pack apply-audit \
+  --id audit-20260815t120000z \
+  --scope project \
+  --force
+```
+
+`--force` only acknowledges modifications already captured by the audit. Any change after the audit
+is stale and cannot be bypassed with `--force`.
+
 Run the end-to-end example:
 
 ```bash

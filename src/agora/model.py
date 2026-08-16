@@ -56,6 +56,26 @@ class ActorRecord:
     provider: str | None = None
     model: str | None = None
     represented_swarm: str | None = None
+    authentication_required: bool = False
+    authentication_algorithm: str | None = None
+    authentication_public_key: str | None = None
+    authentication_fingerprint: str | None = None
+    authentication_revoked_at: str | None = None
+    authentication_revoked_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ActorKeyRecord:
+    actor: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    status: Literal["active", "rotated", "revoked"]
+    path: str
+    created_at: str
+    ended_at: str | None = None
+    reason: str | None = None
+    replaced_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -169,10 +189,54 @@ class WorkRecord:
     evidence_results: list[str]
     approval_roles: list[str]
     path: str
+    child_work_refs: list[str] = field(default_factory=list)
+    budget_limits: dict[str, int] | None = None
     operational_status: WorkOperationalStatus = "active"
     status_reason: str | None = None
     status_by: str | None = None
     status_at: str | None = None
+    delegation_id: str | None = None
+    parent_work_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class GateWaiverRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    gate_id: str
+    waived_criteria: list[str]
+    waived_artifacts: list[str]
+    waive_successful_evidence: bool
+    waived_approval_roles: list[str]
+    reason: str
+    evidence_refs: list[str]
+    authorized_by: str
+    created_at: str
+    path: str
+    action_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalDelegationRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    role_id: str
+    from_actor: str
+    to_actor: str
+    reason: str
+    status: Literal["active", "used", "revoked"]
+    created_at: str
+    path: str
+    action_id: str | None = None
+    used_by: str | None = None
+    used_at: str | None = None
+    used_action_id: str | None = None
+    revoked_by: str | None = None
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
+    revocation_action_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +256,23 @@ class SessionRecord:
     runtime_available: bool
     created_at: str
     exit_code: int | None = None
+    context_sha256: str | None = None
+    authentication_verified: bool = False
+    authentication_fingerprint: str | None = None
+    authentication_public_key: str | None = None
+    authorization_sha256: str | None = None
+    authorization_signature: str | None = None
+    preparation_action_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionAuthorizationRecord:
+    session_id: str
+    actor: str
+    algorithm: str
+    fingerprint: str
+    payload_sha256: str
+    path: str
 
 
 @dataclass(frozen=True)
@@ -228,6 +309,7 @@ class ToolOperation:
     input_values: dict[str, list[str]] = field(default_factory=dict)
     approval_role: str | None = None
     result_kind: str | None = None
+    environment_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,6 +328,8 @@ class ToolContract:
     implements_operations: list[str] = field(default_factory=list)
     version_command: list[str] = field(default_factory=list)
     minimum_runtime_version: str | None = None
+    timeout_seconds: int = 300
+    max_output_bytes: int = 1048576
 
 
 @dataclass(frozen=True)
@@ -265,6 +349,8 @@ class ToolPackRecord:
     implements_operations: list[str] = field(default_factory=list)
     version_command: list[str] = field(default_factory=list)
     minimum_runtime_version: str | None = None
+    timeout_seconds: int = 300
+    max_output_bytes: int = 1048576
     source: PackSourceRecord | None = None
     updates: list[PackUpdateHistoryRecord] = field(default_factory=list)
 
@@ -309,6 +395,14 @@ class RegistryRecord:
     source: str | None = None
     checksum: str | None = None
     signature_verified: bool = False
+    verified_key_ids: list[str] = field(default_factory=list)
+    signature_threshold: int = 0
+
+
+@dataclass(frozen=True)
+class RegistryReleaseSignatureRecord:
+    key_id: str
+    signature: str
 
 
 @dataclass(frozen=True)
@@ -319,6 +413,7 @@ class RegistryReleaseRecord:
     sha256: str
     signature: str | None = None
     key_id: str | None = None
+    signatures: list[RegistryReleaseSignatureRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -339,6 +434,11 @@ class RegistrySourceRecord:
     signature_verified: bool
     key_id: str | None
     installed_at: str
+    verified_key_ids: list[str] = field(default_factory=list)
+    signature_threshold: int = 0
+    transparency_required: bool = False
+    transparency_proof: str | None = None
+    release_archive: str | None = None
 
 
 @dataclass(frozen=True)
@@ -358,6 +458,124 @@ class RegistryTrustKeyRecord:
 
 
 @dataclass(frozen=True)
+class TransparencyTrustKeyRecord:
+    id: str
+    log: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    status: Literal["active", "revoked"]
+    scope: Literal["user", "project"]
+    path: str
+    created_at: str
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
+    replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class TransparencyInclusionProofRecord:
+    log: str
+    key_id: str
+    registry: str
+    version: str
+    archive: str
+    sha256: str
+    tree_size: int
+    leaf_index: int
+    root_sha256: str
+    inclusion_path: list[str]
+    checkpoint_signature: str
+    integrated_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class TransparencyVerificationResult:
+    log: str
+    registry: str
+    version: str
+    tree_size: int
+    leaf_index: int
+    root_sha256: str
+    key_id: str
+    signature_verified: bool
+    inclusion_verified: bool
+    recorded: bool
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class OrganizationTrustRootRecord:
+    id: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    initial_public_key: str
+    initial_fingerprint: str
+    scope: Literal["user", "project"]
+    path: str
+    created_at: str
+    source: str | None = None
+    last_sequence: int = 0
+    last_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class OrganizationTrustSyncStep:
+    id: str
+    registry: str
+    action: Literal["add", "revoke", "unchanged"]
+
+
+@dataclass(frozen=True)
+class OrganizationTrustSyncResult:
+    organization: str
+    scope: Literal["user", "project"]
+    sequence: int
+    sha256: str
+    signature_verified: bool
+    applied: bool
+    source: str
+    steps: list[OrganizationTrustSyncStep]
+    history_path: str | None = None
+
+
+@dataclass(frozen=True)
+class OrganizationTrustRootRotationRecord:
+    organization: str
+    rotation: int
+    rotated_at: str
+    reason: str
+    from_public_key: str
+    from_fingerprint: str
+    to_public_key: str
+    to_fingerprint: str
+    bundle_sequence: int
+    bundle_sha256: str | None
+    previous_rotation_sha256: str | None
+    old_signature: str
+    new_signature: str
+    sha256: str
+    path: str
+
+
+@dataclass(frozen=True)
+class OrganizationTrustRootRotationResult:
+    organization: str
+    scope: Literal["user", "project"]
+    rotation: int
+    from_fingerprint: str
+    to_fingerprint: str
+    bundle_sequence: int
+    sha256: str
+    signature_verified: bool
+    applied: bool
+    source: str
+    history_path: str | None = None
+
+
+@dataclass(frozen=True)
 class RegistryUpdateRecord:
     id: str
     registry: str
@@ -369,6 +587,10 @@ class RegistryUpdateRecord:
     signature_verified: bool
     applied_at: str
     path: str
+    verified_key_ids: list[str] = field(default_factory=list)
+    signature_threshold: int = 0
+    transparency_verified: bool = False
+    transparency_proof: str | None = None
 
 
 @dataclass(frozen=True)
@@ -382,7 +604,27 @@ class RegistryUpdateResult:
     index: str
     checksum: str
     signature_verified: bool
+    transparency_verified: bool = False
     record_path: str | None = None
+
+
+@dataclass(frozen=True)
+class RegistryUpdateAuditEntry:
+    registry: str
+    scope: Literal["user", "project"]
+    from_version: str
+    to_version: str
+    update_available: bool
+    signature_verified: bool
+
+
+@dataclass(frozen=True)
+class RegistryUpdateAuditRecord:
+    id: str
+    scope: Literal["user", "project"]
+    checked_at: str
+    entries: list[RegistryUpdateAuditEntry]
+    path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -405,6 +647,7 @@ class PackUpdateStep:
     from_version: str | None
     to_version: str
     registry: str
+    registry_scope: Literal["bundled", "user", "project"]
     sha256: str
 
 
@@ -420,6 +663,49 @@ class PackUpdateResult:
     modified: bool
     packs: list[PackUpdateStep]
     history_paths: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PackUpdateAuditEntry:
+    kind: PackKind
+    id: str
+    scope: Literal["user", "project"]
+    registry: str
+    registry_scope: Literal["bundled", "user", "project"]
+    from_version: str
+    to_version: str
+    update_available: bool
+    modified: bool
+    current_sha256: str
+    plan_sha256: str
+
+
+@dataclass(frozen=True)
+class PackUpdateAuditRecord:
+    id: str
+    scope: Literal["user", "project"]
+    checked_at: str
+    entries: list[PackUpdateAuditEntry]
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class ApplyPackUpdateAuditInput:
+    id: str
+    scope: Literal["user", "project"]
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class PackUpdateAuditApplicationRecord:
+    id: str
+    scope: Literal["user", "project"]
+    audit_sha256: str
+    applied_at: str
+    force: bool
+    packs: list[PackUpdateStep]
+    history_paths: list[str]
+    path: str
 
 
 @dataclass(frozen=True)
@@ -461,6 +747,7 @@ class ToolRunRecord:
     actor: str
     swarm_id: str
     work_id: str | None
+    environment_id: str | None
     capability: str
     risk: ToolRisk
     inputs: dict[str, str]
@@ -471,6 +758,33 @@ class ToolRunRecord:
     created_at: str
     result_kind: str | None = None
     exit_code: int | None = None
+    authentication_verified: bool = False
+    authentication_fingerprint: str | None = None
+    authentication_public_key: str | None = None
+    authorization_sha256: str | None = None
+    authorization_signature: str | None = None
+    timeout_seconds: int = 300
+    max_output_bytes: int = 1048576
+
+
+@dataclass(frozen=True)
+class EnvironmentPolicyRecord:
+    id: str
+    name: str
+    allowed_tool_capabilities: list[str]
+    required_approval_roles: list[str]
+    require_successful_evidence: bool
+    path: str
+
+
+@dataclass(frozen=True)
+class ToolAuthorizationRecord:
+    run_id: str
+    actor: str
+    algorithm: str
+    fingerprint: str
+    payload_sha256: str
+    path: str
 
 
 @dataclass(frozen=True)
@@ -504,6 +818,8 @@ class DelegationRecord:
     status: DelegationStatus
     created_at: str
     path: str
+    budget_limits: dict[str, int] | None = None
+    artifact_promotions: dict[str, str] = field(default_factory=dict)
     accepted_by: str | None = None
     accepted_at: str | None = None
     collected_by: str | None = None
@@ -563,6 +879,32 @@ class WorkspaceLockStatus:
     pid: int | None
     hostname: str | None
     acquired_at: str | None
+
+
+@dataclass(frozen=True)
+class CoordinationPolicyRecord:
+    mode: Literal["local", "external-lease"]
+    resource_id: str | None
+    executable: str | None
+    arguments: list[str]
+    version_arguments: list[str]
+    minimum_runtime_version: str | None
+    lease_seconds: int
+    command_timeout_seconds: int
+    path: str
+
+
+@dataclass(frozen=True)
+class ConfigureCoordinationInput:
+    mode: Literal["local", "external-lease"]
+    resource_id: str | None = None
+    executable: str | None = None
+    arguments: list[str] = field(default_factory=list)
+    version_arguments: list[str] = field(default_factory=list)
+    minimum_runtime_version: str | None = None
+    lease_seconds: int = 300
+    command_timeout_seconds: int = 10
+    force: bool = False
 
 
 @dataclass(frozen=True)
@@ -656,6 +998,8 @@ class InstallRegistryInput:
     version: str | None = None
     public_key: str | None = None
     require_signature: bool = False
+    signature_threshold: int = 0
+    require_transparency: bool = False
     allow_insecure_http: bool = False
 
 
@@ -668,11 +1012,59 @@ class AddRegistryTrustKeyInput:
 
 
 @dataclass(frozen=True)
+class AddTransparencyTrustKeyInput:
+    id: str
+    log: str
+    public_key: str
+    scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class RevokeTransparencyTrustKeyInput:
+    id: str
+    scope: Literal["user", "project"]
+    reason: str
+    replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class VerifyTransparencyProofInput:
+    source: str
+    scope: Literal["user", "project"]
+    record: bool = False
+
+
+@dataclass(frozen=True)
 class RevokeRegistryTrustKeyInput:
     id: str
     scope: Literal["user", "project"]
     reason: str
     replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class AddOrganizationTrustRootInput:
+    id: str
+    public_key: str
+    scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class SyncOrganizationTrustInput:
+    id: str
+    scope: Literal["user", "project"]
+    source: str | None = None
+    apply: bool = False
+    allow_insecure_http: bool = False
+
+
+@dataclass(frozen=True)
+class RotateOrganizationTrustRootInput:
+    id: str
+    scope: Literal["user", "project"]
+    source: str
+    apply: bool = False
+    allow_insecure_http: bool = False
 
 
 @dataclass(frozen=True)
@@ -683,6 +1075,15 @@ class UpdateRegistryInput:
     apply: bool = False
     public_key: str | None = None
     require_signature: bool = False
+    signature_threshold: int | None = None
+    require_transparency: bool = False
+    allow_insecure_http: bool = False
+
+
+@dataclass(frozen=True)
+class AuditRegistryUpdatesInput:
+    scope: Literal["user", "project"]
+    record: bool = False
     allow_insecure_http: bool = False
 
 
@@ -703,6 +1104,12 @@ class UpdateCatalogPackInput:
     registry_id: str | None = None
     apply: bool = False
     force: bool = False
+
+
+@dataclass(frozen=True)
+class AuditPackUpdatesInput:
+    scope: Literal["user", "project"]
+    record: bool = False
 
 
 @dataclass(frozen=True)
@@ -731,7 +1138,61 @@ class AddActorInput:
     provider: str | None = None
     model: str | None = None
     represented_swarm: str | None = None
+    public_key: str | None = None
+    require_authentication: bool = False
     force: bool = False
+
+
+@dataclass(frozen=True)
+class RotateActorKeyInput:
+    actor_id: str
+    public_key: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepareActorKeyRotationInput:
+    action_id: str
+    swarm_id: str
+    rotation: RotateActorKeyInput
+
+
+@dataclass(frozen=True)
+class PrepareActorKeyRevocationInput:
+    action_id: str
+    swarm_id: str
+    target_actor_id: str
+    authorized_by: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepareActorKeyRecoveryInput:
+    action_id: str
+    swarm_id: str
+    target_actor_id: str
+    authorized_by: str
+    public_key: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class RevokeActorKeyInput:
+    actor_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepareToolAuthorizationInput:
+    run_id: str
+    output: str
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class LaunchToolRunInput:
+    run_id: str
+    signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -741,6 +1202,13 @@ class SetActorRuntimeInput:
     provider: str | None = None
     model: str | None = None
     clear: bool = False
+
+
+@dataclass(frozen=True)
+class PrepareActorRuntimeInput:
+    action_id: str
+    swarm_id: str
+    runtime: SetActorRuntimeInput
 
 
 @dataclass(frozen=True)
@@ -757,6 +1225,34 @@ class AssignActorInput:
     swarm_id: str
     role_id: str
     actor_id: str
+
+
+@dataclass(frozen=True)
+class QuickstartInput:
+    swarm_id: str = "quickstart"
+    objective: str = "Deliver the objective"
+    method: Method | None = None
+    secure: bool = False
+    path: str | None = None
+    key_directory: str | None = None
+
+
+@dataclass(frozen=True)
+class QuickstartResult:
+    project: ProjectConfiguration
+    swarm: SwarmRecord
+    human_actor: str
+    ai_actor: str
+    assignments: dict[str, str]
+    secure: bool
+    key_directory: str | None = None
+
+
+@dataclass(frozen=True)
+class PrepareActorAssignmentInput:
+    action_id: str
+    assignment: AssignActorInput
+    authorized_by: str
 
 
 @dataclass(frozen=True)
@@ -784,12 +1280,25 @@ class CreateDelegationInput:
     result_kind: str = "delegated-result"
     description: str = ""
     id: str | None = None
+    budget_limits: dict[str, int] | None = None
+    artifact_promotions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class DelegationActorInput:
     delegation_id: str
     actor_id: str
+
+
+@dataclass(frozen=True)
+class PrepareCreateDelegationInput:
+    action_id: str
+    delegation: CreateDelegationInput
+
+
+@dataclass(frozen=True)
+class PrepareDelegationActionInput(DelegationActorInput):
+    id: str = ""
 
 
 @dataclass(frozen=True)
@@ -801,6 +1310,51 @@ class CreateWorkInput:
     acceptance_criteria: list[tuple[str, str]] = field(default_factory=list)
     required_artifacts: list[str] = field(default_factory=list)
     description: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareCreateWorkInput:
+    action_id: str
+    work: CreateWorkInput
+
+
+@dataclass(frozen=True)
+class DecomposeWorkInput:
+    swarm_id: str
+    parent_work_id: str
+    child_work_id: str
+    title: str
+    actor_id: str
+    acceptance_criteria: list[tuple[str, str]] = field(default_factory=list)
+    required_artifacts: list[str] = field(default_factory=list)
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareDecomposeWorkInput:
+    action_id: str
+    decomposition: DecomposeWorkInput
+
+
+@dataclass(frozen=True)
+class WaiveGateInput:
+    id: str
+    swarm_id: str
+    work_id: str
+    gate_id: str
+    actor_id: str
+    reason: str
+    evidence_refs: list[str]
+    criteria: list[str] = field(default_factory=list)
+    artifacts: list[str] = field(default_factory=list)
+    successful_evidence: bool = False
+    approval_roles: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PrepareGateWaiverInput:
+    action_id: str
+    waiver: WaiveGateInput
 
 
 @dataclass(frozen=True)
@@ -828,6 +1382,60 @@ class TransitionWorkInput(WorkActorInput):
 
 
 @dataclass(frozen=True)
+class PrepareWorkTransitionInput(TransitionWorkInput):
+    id: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareCriterionInput(WorkActorInput):
+    id: str = ""
+    criterion_id: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareLifecycleAuthorizationInput:
+    action_id: str
+    output: str
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class ApplyLifecycleActionInput:
+    action_id: str
+    signature: str | None = None
+
+
+@dataclass(frozen=True)
+class LifecycleActionRecord:
+    id: str
+    action: str
+    actor: str
+    swarm_id: str
+    work_id: str | None
+    parameters: dict[str, str]
+    precondition_sha256: str
+    status: Literal["prepared", "applied"]
+    path: str
+    created_at: str
+    applied_at: str | None = None
+    authentication_verified: bool = False
+    authentication_fingerprint: str | None = None
+    authentication_public_key: str | None = None
+    authorization_sha256: str | None = None
+    authorization_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class LifecycleAuthorizationRecord:
+    action_id: str
+    actor: str
+    algorithm: str
+    fingerprint: str
+    payload_sha256: str
+    path: str
+
+
+@dataclass(frozen=True)
 class AddArtifactInput(WorkActorInput):
     kind: str = ""
     uri: str = ""
@@ -841,9 +1449,52 @@ class AddEvidenceInput(WorkActorInput):
 
 
 @dataclass(frozen=True)
+class PrepareArtifactInput(AddArtifactInput):
+    id: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareEvidenceInput(AddEvidenceInput):
+    id: str = ""
+
+
+@dataclass(frozen=True)
 class AddApprovalInput(WorkActorInput):
     role_id: str = ""
     note: str = ""
+    delegation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class PrepareApprovalInput(AddApprovalInput):
+    id: str = ""
+
+
+@dataclass(frozen=True)
+class DelegateApprovalInput:
+    id: str
+    swarm_id: str
+    work_id: str
+    role_id: str
+    actor_id: str
+    to_actor_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepareApprovalDelegationInput:
+    action_id: str
+    delegation: DelegateApprovalInput
+
+
+@dataclass(frozen=True)
+class RevokeApprovalDelegationInput:
+    delegation_id: str
+    swarm_id: str
+    work_id: str
+    actor_id: str
+    reason: str
+    action_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -858,6 +1509,25 @@ class StartSessionInput:
 
 
 @dataclass(frozen=True)
+class PrepareSessionInput:
+    action_id: str
+    session: StartSessionInput
+
+
+@dataclass(frozen=True)
+class PrepareSessionAuthorizationInput:
+    session_id: str
+    output: str
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class LaunchSessionInput:
+    session_id: str
+    signature: str | None = None
+
+
+@dataclass(frozen=True)
 class InvokeToolInput:
     tool_id: str
     operation_id: str
@@ -865,6 +1535,17 @@ class InvokeToolInput:
     swarm_id: str
     id: str | None = None
     work_id: str | None = None
+    environment_id: str | None = None
     inputs: dict[str, str] = field(default_factory=dict)
     launch: bool = False
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class AddEnvironmentInput:
+    id: str
+    name: str
+    allowed_tool_capabilities: list[str] = field(default_factory=list)
+    required_approval_roles: list[str] = field(default_factory=list)
+    require_successful_evidence: bool = False
     force: bool = False

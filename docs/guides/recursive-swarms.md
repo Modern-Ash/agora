@@ -112,8 +112,11 @@ agora start \
 ```
 
 Linked swarms establish governance and traceability. Agora can explicitly propose, accept, and
-collect bounded child work through the [delegated work protocol](delegated-work.md). Automatic work
-decomposition, budget propagation, and child artifact copying remain future capabilities.
+collect bounded child work through the [delegated work protocol](delegated-work.md). Same-swarm
+child contracts use [work decomposition](work-decomposition.md). Cross-swarm limits use
+[delegation budgets](delegation-budgets.md). [Delegated artifact
+promotion](delegated-artifacts.md) can expose promised child artifact kinds as typed parent
+references without copying provider-owned bytes.
 
 Run the [recursive swarm sample](../../samples/recursive-swarms/README.md) for an executable depth
 limit example.

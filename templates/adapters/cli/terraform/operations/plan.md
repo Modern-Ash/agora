@@ -4,6 +4,7 @@ id: "plan"
 name: "Create a saved Terraform plan"
 capability: "cloud.plan"
 risk: "read"
+environment-required: true
 arguments: ["-chdir={environment}","plan","-input=false","-no-color","-out={change}"]
 inputs: ["environment","change"]
 result-kind: "infrastructure-plan"

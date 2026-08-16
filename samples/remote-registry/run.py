@@ -52,24 +52,25 @@ def main() -> None:
         version="1.0.0",
         archive=archive_name,
         sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
-        key_id="sample-release",
     )
-    private_key = Ed25519PrivateKey.generate()
-    signature = base64.b64encode(private_key.sign(release_signature_payload(release))).decode()
-    public_key = runtime / "sample-release.pem"
-    public_key.write_bytes(
-        private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-    )
+    signers = [
+        ("sample-release-a", Ed25519PrivateKey.generate()),
+        ("sample-release-b", Ed25519PrivateKey.generate()),
+    ]
     releases = [
         {
             "version": release.version,
             "archive": release.archive,
             "sha256": release.sha256,
-            "signature": signature,
-            "key-id": release.key_id,
+            "signatures": [
+                {
+                    "key-id": signer_id,
+                    "signature": base64.b64encode(
+                        private_key.sign(release_signature_payload(release))
+                    ).decode(),
+                }
+                for signer_id, private_key in signers
+            ],
         }
     ]
     index = runtime / "INDEX.md"
@@ -82,20 +83,31 @@ def main() -> None:
 
     agora = AgoraWorkspace(cwd=project)
     agora.initialize(InitInput(integration="generic"))
-    trusted_key = agora.add_registry_trust_key(
-        AddRegistryTrustKeyInput(
-            id="sample-release",
-            registry_id="team-catalog",
-            public_key=str(public_key),
-            scope="project",
+    trusted_keys = []
+    for signer_id, private_key in signers:
+        public_key = runtime / f"{signer_id}.pem"
+        public_key.write_bytes(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
         )
-    )
+        trusted_keys.append(
+            agora.add_registry_trust_key(
+                AddRegistryTrustKeyInput(
+                    id=signer_id,
+                    registry_id="team-catalog",
+                    public_key=str(public_key),
+                    scope="project",
+                )
+            )
+        )
     installed_registry = agora.install_registry(
         InstallRegistryInput(
             source=index.as_uri(),
             scope="project",
             version="1.0.0",
-            require_signature=True,
+            signature_threshold=2,
         )
     )
     installed_method = agora.install_catalog_pack(
@@ -121,18 +133,21 @@ def main() -> None:
         version="1.1.0",
         archive=archive_v2_name,
         sha256=hashlib.sha256(archive_v2_path.read_bytes()).hexdigest(),
-        key_id="sample-release",
     )
-    signature_v2 = base64.b64encode(
-        private_key.sign(release_signature_payload(release_v2))
-    ).decode()
     releases.append(
         {
             "version": release_v2.version,
             "archive": release_v2.archive,
             "sha256": release_v2.sha256,
-            "signature": signature_v2,
-            "key-id": release_v2.key_id,
+            "signatures": [
+                {
+                    "key-id": signer_id,
+                    "signature": base64.b64encode(
+                        private_key.sign(release_signature_payload(release_v2))
+                    ).decode(),
+                }
+                for signer_id, private_key in signers
+            ],
         }
     )
     index.write_text(
@@ -150,7 +165,8 @@ def main() -> None:
     assert applied_update.applied
 
     print(f"Runtime: {runtime}")
-    print(f"Trusted key: {trusted_key.id} ({trusted_key.fingerprint})")
+    for trusted_key in trusted_keys:
+        print(f"Trusted key: {trusted_key.id} ({trusted_key.fingerprint})")
     print("Verified registry:")
     print(json.dumps(asdict(installed_registry), indent=2))
     print("Installed pack:")

@@ -4,6 +4,7 @@ id: "destroy-resource"
 name: "Destroy a targeted Terraform resource"
 capability: "cloud.destroy"
 risk: "destructive"
+environment-required: true
 arguments: ["-chdir={environment}","destroy","-input=false","-auto-approve","-target={resource}","-no-color"]
 inputs: ["resource","environment"]
 result-kind: "cloud-destruction"

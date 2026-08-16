@@ -103,6 +103,7 @@ agora tool invoke \
   --actor developer \
   --swarm release \
   --work capacity-change \
+  --environment staging \
   --input environment=staging \
   --input change=increase-api-capacity \
   --launch
@@ -111,9 +112,10 @@ agora tool invoke \
 The adapter should return a stable immutable plan identity and enough evidence for review. Apply
 must consume that identity rather than regenerate a change from free-form text.
 
-The `change`, `plan`, environment, and resource values are durable inputs. They must not contain
-credentials, private keys, secret values, or sensitive connection strings. Authentication belongs
-to workload identity, the provider CLI, a keychain, or a secret manager.
+The governed environment policy must admit `cloud.plan`. The `change`, `plan`, provider environment,
+and resource values are durable inputs. They must not contain credentials, private keys, secret
+values, or sensitive connection strings. Authentication belongs to workload identity, the provider
+CLI, a keychain, or a secret manager.
 
 ## Guard apply with approval
 
@@ -127,6 +129,7 @@ id: "apply-plan"
 name: "Apply an infrastructure plan"
 capability: "cloud.deploy"
 risk: "write"
+environment-required: true
 arguments: ["change","apply","{plan}","--environment","{environment}","--output","json"]
 inputs: ["plan","environment"]
 approval-role: "product-owner"

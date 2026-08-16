@@ -4,6 +4,7 @@ id: "inspect-resource"
 name: "Inspect an AWS resource tag mapping"
 capability: "cloud.read"
 risk: "read"
+environment-required: true
 arguments: ["resourcegroupstaggingapi","get-resources","--resource-arn-list","{resource}","--region","{environment}","--output","json","--no-cli-pager"]
 inputs: ["resource","environment"]
 result-kind: "cloud-resource"

@@ -7,6 +7,8 @@ dependencies: []
 category: "repository"
 executable: "git"
 authentication-reference: "local-git-configuration"
+timeout-seconds: 300
+max-output-bytes: 1048576
 ---
 
 # Local Git repository

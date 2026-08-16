@@ -13,6 +13,8 @@ from agora.model import (
     CatalogPackRecord,
     RegistryRecord,
     RegistrySourceRecord,
+    RegistryUpdateAuditEntry,
+    RegistryUpdateAuditRecord,
     RegistryUpdateRecord,
 )
 from agora.registry_distribution import (
@@ -72,12 +74,24 @@ def load_registry(root: Path, scope: str) -> RegistryRecord:
             raise ValueError(f"Registry update version history is discontinuous: {current.path}")
         if previous.to_sha256 != current.from_sha256:
             raise ValueError(f"Registry update checksum history is discontinuous: {current.path}")
+        if current.signature_threshold < previous.signature_threshold:
+            raise ValueError(f"Registry update signature threshold decreased: {current.path}")
+        if previous.transparency_verified and not current.transparency_verified:
+            raise ValueError(f"Registry update transparency policy decreased: {current.path}")
     if updates:
         if provenance is None or version is None:
             raise ValueError(f"Registry update history requires remote provenance: {root}")
         latest = updates[-1]
         if latest.to_version != version or latest.to_sha256 != provenance.sha256:
             raise ValueError(f"Registry update history does not match current provenance: {root}")
+        if latest.signature_threshold != provenance.signature_threshold:
+            raise ValueError(
+                f"Registry update signature threshold does not match provenance: {root}"
+            )
+        if latest.transparency_verified != provenance.transparency_required:
+            raise ValueError(
+                f"Registry update transparency policy does not match provenance: {root}"
+            )
     return _registry_record(
         id_=id_,
         name=name,
@@ -109,6 +123,53 @@ def read_registry_source(path: Path) -> RegistrySourceRecord:
         raise ValueError(f"Verified registry source requires key-id: {path}")
     if key_id is not None:
         assert_slug(key_id, "Registry source key id")
+    raw_verified_key_ids = attributes.get("verified-key-ids")
+    if raw_verified_key_ids is None:
+        verified_key_ids = [key_id] if verified and key_id is not None else []
+    elif not isinstance(raw_verified_key_ids, list) or any(
+        not isinstance(item, str) for item in raw_verified_key_ids
+    ):
+        raise ValueError(f"Registry source verified-key-ids must be an array: {path}")
+    else:
+        verified_key_ids = raw_verified_key_ids
+    if len(verified_key_ids) != len(set(verified_key_ids)):
+        raise ValueError(f"Registry source verified-key-ids contains duplicates: {path}")
+    for verified_key_id in verified_key_ids:
+        assert_slug(verified_key_id, "Registry source verified key id")
+    signature_threshold = attributes.get("signature-threshold")
+    if signature_threshold is None:
+        signature_threshold = 1 if verified else 0
+    if (
+        not isinstance(signature_threshold, int)
+        or isinstance(signature_threshold, bool)
+        or signature_threshold < 0
+        or (raw_verified_key_ids is not None and signature_threshold > len(verified_key_ids))
+        or verified != bool(verified_key_ids)
+        or (verified and signature_threshold < 1)
+        or (not verified and signature_threshold != 0)
+    ):
+        raise ValueError(f"Registry source signature threshold is invalid: {path}")
+    transparency_required = attributes.get("transparency-required", False)
+    transparency_proof = optional_string_attribute(attributes, "transparency-proof")
+    release_archive = optional_string_attribute(attributes, "release-archive")
+    if not isinstance(transparency_required, bool):
+        raise ValueError(f"Registry source transparency-required must be boolean: {path}")
+    if transparency_required:
+        if transparency_proof is None or release_archive is None:
+            raise ValueError(f"Registry source transparency proof path is invalid: {path}")
+        proof_parts = Path(transparency_proof).parts
+        if (
+            Path(transparency_proof).is_absolute()
+            or ".." in proof_parts
+            or len(proof_parts) != 5
+            or proof_parts[0] != "transparency"
+            or proof_parts[2:] != (registry, version, "PROOF.md")
+        ):
+            raise ValueError(f"Registry source transparency proof path is not portable: {path}")
+    elif transparency_proof is not None or release_archive is not None:
+        raise ValueError(
+            f"Registry source has transparency fields without requiring transparency: {path}"
+        )
     installed_at = string_attribute(attributes, "installed-at")
     return RegistrySourceRecord(
         registry=registry,
@@ -119,6 +180,11 @@ def read_registry_source(path: Path) -> RegistrySourceRecord:
         signature_verified=verified,
         key_id=key_id,
         installed_at=installed_at,
+        verified_key_ids=verified_key_ids,
+        signature_threshold=signature_threshold,
+        transparency_required=transparency_required,
+        transparency_proof=transparency_proof,
+        release_archive=release_archive,
     )
 
 
@@ -134,6 +200,11 @@ def render_registry_source(record: RegistrySourceRecord) -> str:
                 "sha256": record.sha256,
                 "signature-verified": record.signature_verified,
                 "key-id": record.key_id,
+                "verified-key-ids": record.verified_key_ids,
+                "signature-threshold": record.signature_threshold,
+                "transparency-required": record.transparency_required,
+                "transparency-proof": record.transparency_proof,
+                "release-archive": record.release_archive,
                 "installed-at": record.installed_at,
             },
             body=(
@@ -167,6 +238,47 @@ def read_registry_update(path: Path) -> RegistryUpdateRecord:
     if not isinstance(signature_verified, bool):
         raise ValueError(f"Registry update signature-verified must be boolean: {path}")
     applied_at = string_attribute(attributes, "applied-at")
+    raw_verified_key_ids = attributes.get("verified-key-ids")
+    if raw_verified_key_ids is None:
+        verified_key_ids: list[str] = []
+        signature_threshold = 1 if signature_verified else 0
+    elif not isinstance(raw_verified_key_ids, list) or any(
+        not isinstance(item, str) for item in raw_verified_key_ids
+    ):
+        raise ValueError(f"Registry update verified-key-ids must be an array: {path}")
+    else:
+        verified_key_ids = raw_verified_key_ids
+        signature_threshold = attributes.get("signature-threshold")
+    if len(verified_key_ids) != len(set(verified_key_ids)):
+        raise ValueError(f"Registry update verified-key-ids contains duplicates: {path}")
+    for verified_key_id in verified_key_ids:
+        assert_slug(verified_key_id, "Registry update verified key id")
+    if (
+        not isinstance(signature_threshold, int)
+        or isinstance(signature_threshold, bool)
+        or signature_threshold < 0
+        or (raw_verified_key_ids is not None and signature_threshold > len(verified_key_ids))
+        or (raw_verified_key_ids is not None and signature_verified != bool(verified_key_ids))
+        or (signature_verified and signature_threshold < 1)
+        or (not signature_verified and signature_threshold != 0)
+    ):
+        raise ValueError(f"Registry update signature threshold is invalid: {path}")
+    transparency_verified = attributes.get("transparency-verified", False)
+    transparency_proof = optional_string_attribute(attributes, "transparency-proof")
+    if not isinstance(transparency_verified, bool):
+        raise ValueError(f"Registry update transparency-verified must be boolean: {path}")
+    if transparency_verified != (transparency_proof is not None):
+        raise ValueError(f"Registry update transparency proof is inconsistent: {path}")
+    if transparency_proof is not None:
+        proof_parts = Path(transparency_proof).parts
+        if (
+            Path(transparency_proof).is_absolute()
+            or ".." in proof_parts
+            or len(proof_parts) != 5
+            or proof_parts[0] != "transparency"
+            or proof_parts[2:] != (registry, to_version, "PROOF.md")
+        ):
+            raise ValueError(f"Registry update transparency proof path is invalid: {path}")
     return RegistryUpdateRecord(
         id=id_,
         registry=registry,
@@ -178,6 +290,10 @@ def read_registry_update(path: Path) -> RegistryUpdateRecord:
         signature_verified=signature_verified,
         applied_at=applied_at,
         path=str(path),
+        verified_key_ids=verified_key_ids,
+        signature_threshold=signature_threshold,
+        transparency_verified=transparency_verified,
+        transparency_proof=transparency_proof,
     )
 
 
@@ -194,12 +310,108 @@ def render_registry_update(record: RegistryUpdateRecord) -> str:
                 "to-sha256": record.to_sha256,
                 "index": record.index,
                 "signature-verified": record.signature_verified,
+                "verified-key-ids": record.verified_key_ids,
+                "signature-threshold": record.signature_threshold,
+                "transparency-verified": record.transparency_verified,
+                "transparency-proof": record.transparency_proof,
                 "applied-at": record.applied_at,
             },
             body=(
                 f"# Registry update {record.id}\n\n"
                 f"Agora updated `{record.registry}` from {record.from_version} to "
                 f"{record.to_version} after release verification."
+            ),
+        )
+    )
+
+
+def read_registry_update_audit(path: Path) -> RegistryUpdateAuditRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/registry-update-audit/v1":
+        raise ValueError(f"Expected schema agora/registry-update-audit/v1: {path}")
+    id_ = string_attribute(attributes, "id")
+    assert_slug(id_, "Registry update audit id")
+    scope = string_attribute(attributes, "scope")
+    if scope not in {"user", "project"}:
+        raise ValueError(f"Unsupported registry update audit scope: {path}")
+    raw_entries = attributes.get("entries")
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Registry update audit entries must be an array: {path}")
+    entries: list[RegistryUpdateAuditEntry] = []
+    for index, item in enumerate(raw_entries):
+        if not isinstance(item, dict) or set(item) != {
+            "registry",
+            "scope",
+            "from-version",
+            "to-version",
+            "update-available",
+            "signature-verified",
+        }:
+            raise ValueError(f"Registry update audit entry {index} is invalid: {path}")
+        registry = item.get("registry")
+        entry_scope = item.get("scope")
+        from_version = item.get("from-version")
+        to_version = item.get("to-version")
+        update_available = item.get("update-available")
+        signature_verified = item.get("signature-verified")
+        if not isinstance(registry, str):
+            raise ValueError(f"Registry update audit entry {index} registry is invalid: {path}")
+        assert_slug(registry, "Registry update audit registry")
+        if entry_scope != scope:
+            raise ValueError(f"Registry update audit entry {index} scope is invalid: {path}")
+        if not isinstance(from_version, str) or not isinstance(to_version, str):
+            raise ValueError(f"Registry update audit entry {index} versions are invalid: {path}")
+        validate_registry_version(from_version)
+        validate_registry_version(to_version)
+        if not isinstance(update_available, bool) or not isinstance(signature_verified, bool):
+            raise ValueError(f"Registry update audit entry {index} flags are invalid: {path}")
+        relation = compare_registry_versions(to_version, from_version)
+        if (relation > 0) != update_available or relation < 0:
+            raise ValueError(f"Registry update audit entry {index} relation is invalid: {path}")
+        entries.append(
+            RegistryUpdateAuditEntry(
+                registry=registry,
+                scope=scope,  # type: ignore[arg-type]
+                from_version=from_version,
+                to_version=to_version,
+                update_available=update_available,
+                signature_verified=signature_verified,
+            )
+        )
+    return RegistryUpdateAuditRecord(
+        id=id_,
+        scope=scope,  # type: ignore[arg-type]
+        checked_at=string_attribute(attributes, "checked-at"),
+        entries=entries,
+        path=str(path),
+    )
+
+
+def render_registry_update_audit(record: RegistryUpdateAuditRecord) -> str:
+    updates = sum(item.update_available for item in record.entries)
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/registry-update-audit/v1",
+                "id": record.id,
+                "scope": record.scope,
+                "checked-at": record.checked_at,
+                "entries": [
+                    {
+                        "registry": item.registry,
+                        "scope": item.scope,
+                        "from-version": item.from_version,
+                        "to-version": item.to_version,
+                        "update-available": item.update_available,
+                        "signature-verified": item.signature_verified,
+                    }
+                    for item in record.entries
+                ],
+            },
+            body=(
+                f"# Registry update audit {record.id}\n\n"
+                f"Checked {len(record.entries)} remote registries and found {updates} updates."
             ),
         )
     )
@@ -293,6 +505,8 @@ def _registry_record(
         source=provenance.index if provenance else None,
         checksum=provenance.sha256 if provenance else None,
         signature_verified=provenance.signature_verified if provenance else False,
+        verified_key_ids=provenance.verified_key_ids if provenance else [],
+        signature_threshold=provenance.signature_threshold if provenance else 0,
     )
 
 

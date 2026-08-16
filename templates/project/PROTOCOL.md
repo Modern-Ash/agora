@@ -15,6 +15,12 @@ project: "{{PROJECT_NAME}}"
 8. Stop and request approval when a policy or gate cannot be satisfied.
 9. Use installed Tool Pack operations for governed external actions and retain their results.
 10. Read `.agora/STANDARDS.md` and validate commit messages before creating repository history.
+11. When an actor requires authentication, prepare, externally sign, and apply each covered
+    lifecycle mutation through its durable `ACTION.md` intent.
+12. For environment-aware Tool Runs, select a project environment and satisfy its role, approval,
+    and evidence policy before preparation and again before launch.
+13. When `.agora/coordination.md` selects an external lease, do not bypass the Agora mutation path;
+    local and distributed writer coordination are cumulative.
 
 The repository and its active branch are the shared source of truth. Chat history is not durable
 project state unless its relevant outcome is recorded in Agora files.

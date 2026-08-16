@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,11 @@ from agora.model import (
     PackRemovalRecord,
     PackRemovalStep,
     PackSourceRecord,
+    PackUpdateAuditApplicationRecord,
+    PackUpdateAuditEntry,
+    PackUpdateAuditRecord,
     PackUpdateHistoryRecord,
+    PackUpdateStep,
 )
 
 PACK_KINDS: tuple[PackKind, ...] = ("method", "tool")
@@ -476,6 +481,285 @@ def render_pack_removal(record: PackRemovalRecord) -> str:
                 f"# Pack removal {record.id}\n\n"
                 "This installer-owned record preserves the composition change after the pack "
                 "directories are removed."
+            ),
+        )
+    )
+
+
+def read_pack_update_audit(path: Path) -> PackUpdateAuditRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/pack-update-audit/v1":
+        raise ValueError(f"Expected schema agora/pack-update-audit/v1: {path}")
+    id_ = string_attribute(attributes, "id")
+    assert_slug(id_, "Pack update audit id")
+    scope = string_attribute(attributes, "scope")
+    if scope not in {"user", "project"}:
+        raise ValueError(f"Unsupported pack update audit scope: {path}")
+    raw_entries = attributes.get("entries")
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Pack update audit entries must be an array: {path}")
+    entries: list[PackUpdateAuditEntry] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(raw_entries):
+        if not isinstance(item, dict) or set(item) != {
+            "kind",
+            "id",
+            "scope",
+            "registry",
+            "registry-scope",
+            "from-version",
+            "to-version",
+            "update-available",
+            "modified",
+            "current-sha256",
+            "plan-sha256",
+        }:
+            raise ValueError(f"Pack update audit entry {index} is invalid: {path}")
+        kind = item.get("kind")
+        pack_id = item.get("id")
+        entry_scope = item.get("scope")
+        registry = item.get("registry")
+        registry_scope = item.get("registry-scope")
+        from_version = item.get("from-version")
+        to_version = item.get("to-version")
+        update_available = item.get("update-available")
+        modified = item.get("modified")
+        current_sha256 = item.get("current-sha256")
+        plan_sha256 = item.get("plan-sha256")
+        if kind not in PACK_KINDS or not isinstance(pack_id, str):
+            raise ValueError(f"Pack update audit entry {index} identity is invalid: {path}")
+        assert_slug(pack_id, "Pack update audit pack id")
+        if (
+            entry_scope != scope
+            or not isinstance(registry, str)
+            or registry_scope not in {"bundled", "user", "project"}
+        ):
+            raise ValueError(f"Pack update audit entry {index} source is invalid: {path}")
+        assert_slug(registry, "Pack update audit registry")
+        if not isinstance(from_version, str) or not isinstance(to_version, str):
+            raise ValueError(f"Pack update audit entry {index} versions are invalid: {path}")
+        validate_pack_version(from_version)
+        validate_pack_version(to_version)
+        if not isinstance(update_available, bool) or not isinstance(modified, bool):
+            raise ValueError(f"Pack update audit entry {index} flags are invalid: {path}")
+        if (
+            not isinstance(current_sha256, str)
+            or not PACK_SOURCE_SHA256_PATTERN.fullmatch(current_sha256)
+            or not isinstance(plan_sha256, str)
+            or not PACK_SOURCE_SHA256_PATTERN.fullmatch(plan_sha256)
+        ):
+            raise ValueError(f"Pack update audit entry {index} checksums are invalid: {path}")
+        relation = compare_pack_versions(to_version, from_version)
+        if relation < 0 or update_available != (relation > 0 or modified):
+            raise ValueError(f"Pack update audit entry {index} relation is invalid: {path}")
+        key = (kind, pack_id)
+        if key in seen:
+            raise ValueError(f"Pack update audit contains a duplicate pack: {kind}/{pack_id}")
+        seen.add(key)
+        entries.append(
+            PackUpdateAuditEntry(
+                kind=kind,  # type: ignore[arg-type]
+                id=pack_id,
+                scope=scope,  # type: ignore[arg-type]
+                registry=registry,
+                registry_scope=registry_scope,  # type: ignore[arg-type]
+                from_version=from_version,
+                to_version=to_version,
+                update_available=update_available,
+                modified=modified,
+                current_sha256=current_sha256,
+                plan_sha256=plan_sha256,
+            )
+        )
+    return PackUpdateAuditRecord(
+        id=id_,
+        scope=scope,  # type: ignore[arg-type]
+        checked_at=string_attribute(attributes, "checked-at"),
+        entries=entries,
+        path=str(path),
+    )
+
+
+def render_pack_update_audit(record: PackUpdateAuditRecord) -> str:
+    updates = sum(item.update_available for item in record.entries)
+    modified = sum(item.modified for item in record.entries)
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/pack-update-audit/v1",
+                "id": record.id,
+                "scope": record.scope,
+                "checked-at": record.checked_at,
+                "entries": [
+                    {
+                        "kind": item.kind,
+                        "id": item.id,
+                        "scope": item.scope,
+                        "registry": item.registry,
+                        "registry-scope": item.registry_scope,
+                        "from-version": item.from_version,
+                        "to-version": item.to_version,
+                        "update-available": item.update_available,
+                        "modified": item.modified,
+                        "current-sha256": item.current_sha256,
+                        "plan-sha256": item.plan_sha256,
+                    }
+                    for item in record.entries
+                ],
+            },
+            body=(
+                f"# Pack update audit {record.id}\n\n"
+                f"Checked {len(record.entries)} catalog packs, found {updates} updates, and "
+                f"detected {modified} locally modified packs."
+            ),
+        )
+    )
+
+
+def pack_update_plan_sha256(steps: list[PackUpdateStep]) -> str:
+    payload = [
+        {
+            "kind": item.kind,
+            "id": item.id,
+            "from-version": item.from_version,
+            "to-version": item.to_version,
+            "registry": item.registry,
+            "registry-scope": item.registry_scope,
+            "sha256": item.sha256,
+        }
+        for item in steps
+    ]
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256((encoded + "\n").encode()).hexdigest()
+
+
+def read_pack_update_audit_application(path: Path) -> PackUpdateAuditApplicationRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/pack-update-audit-application/v1":
+        raise ValueError(f"Expected schema agora/pack-update-audit-application/v1: {path}")
+    id_ = string_attribute(attributes, "id")
+    assert_slug(id_, "Pack update audit application id")
+    scope = string_attribute(attributes, "scope")
+    if scope not in {"user", "project"}:
+        raise ValueError(f"Unsupported pack update audit application scope: {path}")
+    audit_sha256 = string_attribute(attributes, "audit-sha256")
+    if not PACK_SOURCE_SHA256_PATTERN.fullmatch(audit_sha256):
+        raise ValueError(f"Pack update audit application checksum is invalid: {path}")
+    force = attributes.get("force")
+    if not isinstance(force, bool):
+        raise ValueError(f"Pack update audit application force must be boolean: {path}")
+    raw_packs = attributes.get("packs")
+    history_paths = attributes.get("history-paths")
+    if (
+        not isinstance(raw_packs, list)
+        or not isinstance(history_paths, list)
+        or any(not isinstance(item, str) for item in history_paths)
+    ):
+        raise ValueError(f"Pack update audit application arrays are invalid: {path}")
+    packs: list[PackUpdateStep] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(raw_packs):
+        if not isinstance(item, dict) or set(item) != {
+            "kind",
+            "id",
+            "from-version",
+            "to-version",
+            "registry",
+            "registry-scope",
+            "sha256",
+        }:
+            raise ValueError(f"Pack update audit application pack {index} is invalid: {path}")
+        kind = item.get("kind")
+        pack_id = item.get("id")
+        from_version = item.get("from-version")
+        to_version = item.get("to-version")
+        registry = item.get("registry")
+        registry_scope = item.get("registry-scope")
+        sha256 = item.get("sha256")
+        if kind not in PACK_KINDS or not isinstance(pack_id, str):
+            raise ValueError(f"Pack update audit application pack {index} identity is invalid")
+        assert_slug(pack_id, "Applied pack id")
+        if from_version is not None and not isinstance(from_version, str):
+            raise ValueError(f"Pack update audit application pack {index} source is invalid")
+        if isinstance(from_version, str):
+            validate_pack_version(from_version)
+        if (
+            not isinstance(to_version, str)
+            or not isinstance(registry, str)
+            or registry_scope not in {"bundled", "user", "project"}
+        ):
+            raise ValueError(f"Pack update audit application pack {index} target is invalid")
+        validate_pack_version(to_version)
+        if isinstance(from_version, str) and compare_pack_versions(to_version, from_version) < 0:
+            raise ValueError(f"Pack update audit application pack {index} moves backward: {path}")
+        assert_slug(registry, "Applied pack registry")
+        if not isinstance(sha256, str) or not PACK_SOURCE_SHA256_PATTERN.fullmatch(sha256):
+            raise ValueError(f"Pack update audit application pack {index} checksum is invalid")
+        key = (kind, pack_id)
+        if key in seen:
+            raise ValueError(f"Pack update audit application contains duplicate {kind}/{pack_id}")
+        seen.add(key)
+        packs.append(
+            PackUpdateStep(
+                kind=kind,  # type: ignore[arg-type]
+                id=pack_id,
+                from_version=from_version,
+                to_version=to_version,
+                registry=registry,
+                registry_scope=registry_scope,  # type: ignore[arg-type]
+                sha256=sha256,
+            )
+        )
+    if (
+        not packs
+        or len(packs) != len(history_paths)
+        or len(set(history_paths)) != len(history_paths)
+        or any(Path(item).is_absolute() or ".." in Path(item).parts for item in history_paths)
+    ):
+        raise ValueError(f"Pack update audit application history is incomplete: {path}")
+    return PackUpdateAuditApplicationRecord(
+        id=id_,
+        scope=scope,  # type: ignore[arg-type]
+        audit_sha256=audit_sha256,
+        applied_at=string_attribute(attributes, "applied-at"),
+        force=force,
+        packs=packs,
+        history_paths=history_paths,
+        path=str(path),
+    )
+
+
+def render_pack_update_audit_application(
+    record: PackUpdateAuditApplicationRecord,
+) -> str:
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/pack-update-audit-application/v1",
+                "id": record.id,
+                "scope": record.scope,
+                "audit-sha256": record.audit_sha256,
+                "applied-at": record.applied_at,
+                "force": record.force,
+                "packs": [
+                    {
+                        "kind": item.kind,
+                        "id": item.id,
+                        "from-version": item.from_version,
+                        "to-version": item.to_version,
+                        "registry": item.registry,
+                        "registry-scope": item.registry_scope,
+                        "sha256": item.sha256,
+                    }
+                    for item in record.packs
+                ],
+                "history-paths": record.history_paths,
+            },
+            body=(
+                f"# Pack update audit application {record.id}\n\n"
+                "This record binds an explicitly applied batch to the reviewed audit checksum."
             ),
         )
     )

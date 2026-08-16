@@ -33,6 +33,7 @@ authority decision.
 agora tool invoke --id api-health \
   --tool observability --operation service-health \
   --actor developer --swarm incident-response --work restore-api \
+  --environment production \
   --input service=api --input environment=production --launch
 
 agora tool invoke --id declare-api-incident \

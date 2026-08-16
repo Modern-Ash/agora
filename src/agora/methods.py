@@ -71,6 +71,18 @@ def load_method_contract(root: Path) -> MethodContract:
             for item in tool_capabilities
         ):
             raise ValueError(f"Role {role} allowed-tool-capabilities must be a valid string array")
+        allowed_environments = attributes.get("allowed-environments", ["*"])
+        if (
+            not isinstance(allowed_environments, list)
+            or not allowed_environments
+            or len(set(allowed_environments)) != len(allowed_environments)
+            or any(
+                not isinstance(item, str)
+                or (item != "*" and re.fullmatch(r"[a-z][a-z0-9-]*", item) is None)
+                for item in allowed_environments
+            )
+        ):
+            raise ValueError(f"Role {role} allowed-environments must contain unique ids or '*'")
 
     gates = _load_gates(root)
     for gate in gates.values():

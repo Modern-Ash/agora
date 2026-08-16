@@ -9,6 +9,7 @@ from agora.markdown import read_markdown, render_markdown
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
+    AddEnvironmentInput,
     AssignActorInput,
     CreateSwarmInput,
     CreateWorkInput,
@@ -104,6 +105,18 @@ def main() -> None:
             actor_id="owner",
         )
     )
+    agora.add_environment(
+        AddEnvironmentInput(
+            id="staging",
+            name="Staging",
+            allowed_tool_capabilities=[
+                "cloud.read",
+                "cloud.plan",
+                "cloud.deploy",
+                "cloud.destroy",
+            ],
+        )
+    )
 
     inspected = agora.invoke_tool(
         InvokeToolInput(
@@ -113,6 +126,7 @@ def main() -> None:
             actor_id="facilitator",
             swarm_id="delivery",
             work_id="capacity-change",
+            environment_id="staging",
             inputs={"resource": "service/api", "environment": "staging"},
             launch=True,
         )
@@ -125,6 +139,7 @@ def main() -> None:
             actor_id="developer",
             swarm_id="delivery",
             work_id="capacity-change",
+            environment_id="staging",
             inputs={"environment": "staging", "change": "increase-api-capacity"},
             launch=True,
         )
@@ -138,6 +153,7 @@ def main() -> None:
         actor_id="developer",
         swarm_id="delivery",
         work_id="capacity-change",
+        environment_id="staging",
         inputs={"plan": "plan-42", "environment": "staging"},
         launch=True,
     )

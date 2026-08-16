@@ -3,8 +3,9 @@ schema: "agora/role/v1"
 id: "product-owner"
 required-capabilities: ["backlog-management", "acceptance"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm"]
-allowed-actions: ["work.create", "work.cancel", "delegation.accept", "delegation.reject", "delegation.cancel", "criterion.satisfy", "work.transition", "evidence.add", "approval.add", "handoff.create"]
+allowed-actions: ["actor.key.recover", "actor.key.revoke", "actor.key.rotate", "actor.runtime.update", "swarm.assign", "work.create", "work.decompose", "work.cancel", "delegation.accept", "delegation.reject", "delegation.cancel", "criterion.satisfy", "work.transition", "evidence.add", "approval.add", "approval.delegate", "approval.delegation.revoke", "gate.waive", "handoff.create"]
 allowed-tool-capabilities: ["repository.read", "issue.read", "issue.write", "issue.transition", "docs.read", "docs.write"]
+allowed-environments: ["*"]
 ---
 
 # Product Owner

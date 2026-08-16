@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agora.cli import main
+from agora.markdown import read_markdown, render_markdown
 from agora.model import (
     AddRegistryTrustKeyInput,
     InitInput,
@@ -21,7 +22,9 @@ from agora.model import (
     InstallRegistryInput,
     RegistryReleaseRecord,
     RevokeRegistryTrustKeyInput,
+    UpdateRegistryInput,
 )
+from agora.registries import read_registry_source, read_registry_update
 from agora.registry_distribution import (
     load_registry_index,
     release_signature_payload,
@@ -112,6 +115,80 @@ def _release_index(
         encoding="utf-8",
     )
     return index, public_key_path
+
+
+def _threshold_release_index(
+    destination: Path,
+    registry: Path,
+    signers: list[tuple[str, Ed25519PrivateKey]],
+    *,
+    version: str,
+) -> Path:
+    manifest = registry / "REGISTRY.md"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            'name: "Team Catalog"', f'name: "Team Catalog"\nversion: "{version}"'
+        ),
+        encoding="utf-8",
+    )
+    archive_name = f"team-catalog-{version}.tar.gz"
+    archive_path = destination / archive_name
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(registry, arcname="team-catalog")
+    release = RegistryReleaseRecord(
+        registry="team-catalog",
+        version=version,
+        archive=archive_name,
+        sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+    )
+    signatures = [
+        {
+            "key-id": signer_id,
+            "signature": base64.b64encode(
+                private_key.sign(release_signature_payload(release))
+            ).decode(),
+        }
+        for signer_id, private_key in signers
+    ]
+    values = [
+        {
+            "version": release.version,
+            "archive": release.archive,
+            "sha256": release.sha256,
+            "signatures": signatures,
+        }
+    ]
+    index = destination / "INDEX.md"
+    index.write_text(
+        '---\nschema: "agora/registry-index/v1"\nid: "team-catalog"\n'
+        f'name: "Team Catalog"\nreleases: {json.dumps(values, separators=(",", ":"))}\n'
+        "---\n\n# Team Catalog releases\n",
+        encoding="utf-8",
+    )
+    return index
+
+
+def _trust_signer(
+    workspace: AgoraWorkspace,
+    destination: Path,
+    signer_id: str,
+    private_key: Ed25519PrivateKey,
+) -> None:
+    public_key = destination / f"{signer_id}.pem"
+    public_key.write_bytes(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    workspace.add_registry_trust_key(
+        AddRegistryTrustKeyInput(
+            id=signer_id,
+            registry_id="team-catalog",
+            public_key=str(public_key),
+            scope="project",
+        )
+    )
 
 
 def test_discovers_bundled_packs_without_an_initialized_project(
@@ -310,6 +387,140 @@ def test_installs_a_signed_registry_release_with_durable_provenance(
     report = workspace.validate()
     assert report.ok is True
     assert report.checked["registries"] == 1
+
+
+def test_enforces_and_preserves_a_registry_signature_threshold(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    signer_a = Ed25519PrivateKey.generate()
+    signer_b = Ed25519PrivateKey.generate()
+    source_v1 = _registry(
+        tmp_path / "source-v1",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    index = _threshold_release_index(
+        tmp_path,
+        source_v1,
+        [("release-a", signer_a), ("release-b", signer_b)],
+        version="1.0.0",
+    )
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    _trust_signer(workspace, tmp_path, "release-a", signer_a)
+
+    with pytest.raises(ValueError, match="requires 2 valid signatures, verified 1"):
+        workspace.install_registry(
+            InstallRegistryInput(
+                source=str(index),
+                scope="project",
+                signature_threshold=2,
+            )
+        )
+    _trust_signer(workspace, tmp_path, "release-alias", signer_a)
+    alias_source = _registry(
+        tmp_path / "source-alias",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    _threshold_release_index(
+        tmp_path,
+        alias_source,
+        [("release-a", signer_a), ("release-alias", signer_a)],
+        version="1.0.0",
+    )
+    with pytest.raises(ValueError, match="requires 2 valid signatures, verified 1"):
+        workspace.install_registry(
+            InstallRegistryInput(
+                source=str(index),
+                scope="project",
+                signature_threshold=2,
+            )
+        )
+
+    _trust_signer(workspace, tmp_path, "release-b", signer_b)
+    install_source = _registry(
+        tmp_path / "source-install",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    _threshold_release_index(
+        tmp_path,
+        install_source,
+        [("release-a", signer_a), ("release-b", signer_b)],
+        version="1.0.0",
+    )
+    output = io.StringIO()
+    assert (
+        main(
+            [
+                "registry",
+                "install",
+                "--source",
+                str(index),
+                "--scope",
+                "project",
+                "--signature-threshold",
+                "2",
+            ],
+            cwd=root,
+            stdout=output,
+        )
+        == 0
+    )
+    installed = next(item for item in workspace.list_registries() if item.id == "team-catalog")
+    source_record = read_registry_source(Path(installed.path) / "SOURCE.md")
+    assert source_record.signature_threshold == 2
+    assert source_record.verified_key_ids == ["release-a", "release-b"]
+    with pytest.raises(ValueError, match="cannot lower the persisted signature threshold"):
+        workspace.update_registry(
+            UpdateRegistryInput(
+                id="team-catalog",
+                scope="project",
+                signature_threshold=1,
+            )
+        )
+
+    source_v2 = _registry(
+        tmp_path / "source-v2",
+        registry_id="team-catalog",
+        registry_name="Team Catalog",
+    )
+    _threshold_release_index(
+        tmp_path,
+        source_v2,
+        [("release-a", signer_a)],
+        version="2.0.0",
+    )
+    with pytest.raises(ValueError, match="requires 2 valid signatures, verified 1"):
+        workspace.update_registry(
+            UpdateRegistryInput(id="team-catalog", scope="project", apply=True)
+        )
+
+    _threshold_release_index(
+        tmp_path,
+        source_v2,
+        [("release-a", signer_a), ("release-b", signer_b)],
+        version="2.0.0",
+    )
+    updated = workspace.update_registry(
+        UpdateRegistryInput(id="team-catalog", scope="project", apply=True)
+    )
+    assert updated.record_path is not None
+    update_record = read_registry_update(Path(updated.record_path))
+    assert update_record.signature_threshold == 2
+    assert update_record.verified_key_ids == ["release-a", "release-b"]
+    assert read_registry_source(Path(installed.path) / "SOURCE.md").signature_threshold == 2
+    assert workspace.validate().ok is True
+
+    update_path = Path(updated.record_path)
+    document = read_markdown(update_path)
+    document.attributes["signature-threshold"] = 1
+    update_path.write_text(render_markdown(document), encoding="utf-8")
+    invalid = workspace.validate()
+    assert invalid.ok is False
+    assert any(issue.code == "registry.invalid" for issue in invalid.issues)
 
 
 def test_rejects_a_remote_registry_checksum_mismatch_before_copy(

@@ -81,6 +81,18 @@ def record_attribute(attributes: Attributes, key: str) -> dict[str, str]:
     return value
 
 
+def optional_integer_record_attribute(attributes: Attributes, key: str) -> dict[str, int] | None:
+    value = attributes.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, dict) or any(
+        not isinstance(name, str) or not isinstance(item, int) or isinstance(item, bool)
+        for name, item in value.items()
+    ):
+        raise ValueError(f"Expected integer map attribute or null: {key}")
+    return value
+
+
 def _parse_value(value: str) -> Any:
     if not value:
         return ""

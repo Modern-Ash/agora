@@ -279,6 +279,15 @@ Operational interruption authority is also role-defined. Grant `work.block` and 
 delivery or flow roles, `work.cancel` to the appropriate owner, and the corresponding delegation
 actions according to parent and child authority. See
 [Interruptions and cancellation](interruptions-and-cancellation.md) for the full action matrix.
+Grant `work.decompose` only to roles allowed to materialize same-swarm child contracts. Parent
+closure then remains blocked until every child is terminal or cancelled; see
+[Work decomposition](work-decomposition.md).
+Grant `gate.waive` only to roles allowed to accept residual delivery risk. Waivers remain granular,
+evidence-backed records and do not relax transition, WIP, assignment, child closure, or work-status
+rules; see [Granular Gate Waivers](gate-waivers.md).
+Grant `approval.delegate` and `approval.delegation.revoke` only to roles whose approval authority
+may be temporarily exercised by another compatible actor. The authority remains single-use and
+work-scoped; see [Approval Delegation](approval-delegation.md).
 
 ## Customize developer tool integrations
 
@@ -375,6 +384,22 @@ agora actor runtime --actor delivery-agent \
 agora actor runtime --actor delivery-agent --clear
 ```
 
+For an actor configured with `--require-authentication`, use `actor runtime-prepare` with an assigned
+swarm, then export, externally sign, and apply the resulting Lifecycle Action. The actor's current
+role must grant `actor.runtime.update`; the bundled Scrum and Kanban roles grant actors this
+self-service authority.
+
+Add `--public-key <pem> --require-authentication` when governed operations must be signed by an
+external Ed25519 identity. Planned active-key rotation uses `actor key rotate-prepare`; independent
+governance actors use `revoke-prepare` and `recover-prepare` for emergency handling. The relevant
+actors must share a swarm and the governance role must grant those actions. Public history is
+inspected through `agora actor key list`; private keys never enter Agora. See
+[Actor authentication](actor-authentication.md).
+
+Use direct `swarm assign` only to fill bootstrap vacancies. After assigning a governance actor, use
+`swarm assign-prepare` for auditable additions authorized by `swarm.assign`. Neither command replaces
+an occupied role; use a governed handoff for every responsibility change.
+
 Responsibility can move from a human to an AI agent or swarm by registering the receiver and using a
 governed handoff:
 
@@ -426,8 +451,23 @@ under `.agora/sessions/delivery-run`. Use `--launch` to run the detected `codex`
 or pass `--runner "your-command" --launch` for another CLI. Without `--launch`, the session remains a
 portable delegation record for an IDE, CI worker, or cloud orchestrator.
 
+For actors requiring authentication, use `agora session prepare` and apply its signed Lifecycle
+Action before exporting the separate launch payload through `agora session authorization`. Execute
+it through `agora session launch --signature`. Agora binds preparation to the prospective context
+and launch to the resolved runtime, exact command, assignments, and materialized context digest.
+
 Keep environment-specific behavior out of Method Packs. Roles and lifecycle rules must remain usable
 when the project changes model provider, IDE, CLI, or cloud environment.
+
+Project execution targets are governed separately through Markdown environment policies. Use
+`agora environment add` to restrict neutral Tool Pack capabilities, approvals, and evidence, then
+limit Method Pack roles with `allowed-environments`. Provider account and target translation still
+belongs in the adapter. See [Environment permissions](environment-permissions.md).
+
+Projects mutated from multiple hosts may also configure a reviewed external lease CLI with
+`agora coordination configure`. This layers remote mutual exclusion over the mandatory local lock;
+it does not introduce a database or make the lease service authoritative for work. See
+[Concurrent writers](concurrent-writers.md).
 
 ## Customize distribution templates
 

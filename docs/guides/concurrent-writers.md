@@ -55,10 +55,54 @@ The Markdown file remains after release as diagnostic metadata. The `active` fie
 operating-system lock, not file existence. Do not delete a lock file to release it. Normal exits,
 exceptions, and process termination release the operating-system lock automatically.
 
-## Scope boundary
+## Coordinate separate hosts
 
-This mechanism coordinates processes that see the same lock directory on one host. It does not
-claim distributed mutual exclusion across unrelated machines, containers, CI runners, or network
-filesystems with unreliable advisory locking. A future distributed lease adapter must preserve the
-same resource identity and owner metadata without making a remote service the source of project
-truth.
+Local locking remains the default. A project can additionally require a reviewed external lease
+CLI for every project mutation:
+
+```bash
+agora coordination configure \
+  --mode external-lease \
+  --resource-id repository:payments \
+  --executable team-leasectl \
+  --argument=--format \
+  --argument=json \
+  --version-argument=--version \
+  --minimum-runtime-version 1.2.0 \
+  --lease-seconds 300
+agora coordination show
+```
+
+Agora persists the provider-neutral policy in `.agora/coordination.md`. The stable `resource-id`
+must identify the same governed project from every clone and runner. It must not be a local path.
+Credentials and tokens are forbidden in fixed arguments and remain in the executable's environment,
+workload identity, or credential store. Agora runs the structured version command before acquisition
+and rejects a missing, unverifiable, or older runtime.
+
+For each outermost project mutation, Agora acquires local locks first and then invokes the external
+CLI without a shell. Acquisition receives the resource, a `host:pid:nonce` owner, operation, and TTL.
+It must return one bounded JSON object:
+
+```json
+{"lease-id":"lease-42","fencing-token":"fence-7"}
+```
+
+Agora renews the lease at one third of its TTL and releases it with the exact lease id and fencing
+token. Commands have bounded runtime and captured output. Failed acquisition prevents mutation; a
+renewal or release failure is reported as indeterminate and requires Git reconciliation plus
+`agora validate`.
+
+The adapter must provide atomic exclusive acquisition, owner-checked renewal and release, expiry for
+dead clients, and monotonically ordered fencing tokens. Agora does not implement the remote service
+or store its credentials. The service coordinates writers; Markdown and Git remain authoritative.
+
+Return to local-only mode through a reviewed change:
+
+```bash
+agora coordination configure --mode local --force
+```
+
+Reconfiguration uses the active policy. Emergency recovery from an unavailable service must be a
+manual, reviewed Git change to `.agora/coordination.md`, followed by validation and reconciliation
+across hosts. See the
+[distributed coordination sample](../../samples/distributed-coordination/README.md).

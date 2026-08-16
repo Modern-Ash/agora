@@ -38,10 +38,16 @@ validation, so front matter preserves structured metadata and gates remain execu
 
 ## Future work
 
-- Organization trust synchronization, revocation feeds, and transparency for remote registry
-  releases. Local and project trust keys, rotation, and revocation are implemented.
-- Background registry notifications and automatic installed-pack updates. Explicit authenticated
-  checks, transactional registry replacement, durable update history, dependency manifests, and
+- Automatic transparency-proof discovery for registry releases. Explicit RFC 6962-style inclusion
+  verification, signed checkpoint verification, durable proof recording, forward-only install and
+  update enforcement, the independent checkpoint authority store, distinct-key release signature
+  thresholds, signed sequential trust and revocation feeds, and dual-signed organization root
+  rotation are implemented.
+- Automatic installed-pack updates and in-process background scheduling. Aggregate authenticated
+  registry and pack notifications can be invoked and recorded by an external scheduler. Reviewed
+  pack audits can be applied explicitly as one precondition-bound transaction. Release checks are
+  authenticated; transactional registry replacement, durable update history, dependency manifests,
+  and
   compatibility-aware catalog installation are implemented. Installed pack provenance and explicit,
   dependency-aware pack updates are also implemented, including per-pack transition history and
   deterministic scope composition locks. Preview-first, dependency-safe pack removal is implemented
@@ -52,7 +58,13 @@ validation, so front matter preserves structured metadata and gates remain execu
   native tools through the CLI-first adapter catalog. Partial AWS and Google Cloud inventory
   adapters provide bounded reads without claiming provider-wide deployment semantics. Jira has a
   complete ACLI adapter; Confluence still requires a reviewed wrapper or future supported CLI.
-- Delegation budgets, automatic child work decomposition, and child artifact copying. Explicit
-  reference-based result collection is part of the current filesystem protocol.
-- Distributed leases for work coordinated across separate hosts. Local writer locks are implemented.
-- Gate waivers, approval delegation, budgets, and environment-specific permissions.
+- Governed same-swarm work decomposition, provider-neutral delegation budgets, opt-in typed child
+  artifact promotion, and explicit cross-swarm reference-based result collection are part of the
+  current filesystem protocol. Opaque external artifact bytes remain provider-owned.
+- Optional distributed writer coordination is implemented through a provider-neutral external lease
+  CLI layered over mandatory local locks. The lease service and remote scheduling remain external.
+- Environment-specific Tool Run permissions are implemented through project-defined Markdown
+  policies, Method Pack role restrictions, operation opt-in, approvals, evidence, launch-time
+  revalidation, and signed environment binding. Single-use, work-scoped Approval Delegation and
+  granular, evidence-backed Gate Waivers are also implemented without transferring roles or
+  bypassing transition, role, WIP, child-closure, or work-status policy.

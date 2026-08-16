@@ -33,8 +33,16 @@ Method Packs choose their own policy.
 The incoming actor must satisfy all `required-capabilities` and appear in `allowed-actor-kinds` for
 the role. Authority does not bypass compatibility.
 
+`agora swarm assign` and signed `swarm.assign` only fill vacant roles. They reject an occupied role
+even when the proposed actor is unchanged. Use a handoff for every replacement so the outgoing
+identity and reason cannot disappear from history.
+
 When the receiver is linked through `represented-swarm`, Agora also checks child readiness, graph
 cycles, and project delegation depth before completing the handoff.
+
+A role with an active Approval Delegation cannot be handed off. Consume or revoke the scoped
+authority first so the outgoing actor does not leave behind a live approval grant. See
+[Approval Delegation](approval-delegation.md).
 
 ## Self-initiated handoff
 

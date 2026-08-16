@@ -8,6 +8,7 @@ from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddEnvironmentInput,
     AddEvidenceInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
@@ -16,6 +17,8 @@ from agora.model import (
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecomposeWorkInput,
+    DelegateApprovalInput,
     DelegationActorInput,
     HandoffActorInput,
     InitInput,
@@ -23,10 +26,12 @@ from agora.model import (
     InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
+    RevokeApprovalDelegationInput,
     SetActorRuntimeInput,
     StartSessionInput,
     ToolRuntimeProbe,
     TransitionWorkInput,
+    WaiveGateInput,
     WorkActorInput,
 )
 from agora.workspace import AgoraWorkspace
@@ -62,6 +67,7 @@ def test_persists_defaults_and_materializes_a_codex_project(
     assert configuration.max_delegation_depth == 3
     assert (root / ".agora" / "methods" / "scrum" / "METHOD.md").exists()
     assert (root / ".agora" / "methods" / "kanban" / "METHOD.md").exists()
+    assert (root / ".agora" / "environments" / "README.md").exists()
     assert (root / ".agents" / "skills" / "agora-objective" / "SKILL.md").exists()
     assert "conventional-commits/v1.0.0" in (root / ".agora" / "STANDARDS.md").read_text()
     assert 'integration: "codex"' in (root / ".agora" / "project.md").read_text()
@@ -482,6 +488,254 @@ def test_applies_a_method_defined_gate_policy(
     assert completed.state == "completed"
 
 
+def test_waives_only_named_outstanding_gate_obligations(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="exceptional-release",
+            title="Release with accepted residual risk",
+            actor_id="owner",
+            acceptance_criteria=[("load-test", "Complete the load test")],
+            required_artifacts=["performance-report"],
+        )
+    )
+    for state, actor in (
+        ("planned", "developer"),
+        ("implementing", "developer"),
+        ("reviewing", "developer"),
+        ("verifying", "facilitator"),
+    ):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="exceptional-release",
+                actor_id=actor,
+                target_state=state,
+            )
+        )
+
+    with pytest.raises(PermissionError, match="not allowed to perform gate.waive"):
+        workspace.waive_gate(
+            WaiveGateInput(
+                id="developer-exception",
+                swarm_id="delivery",
+                work_id="exceptional-release",
+                gate_id="completion",
+                actor_id="developer",
+                reason="Unauthorized",
+                evidence_refs=["repo://risk/unauthorized.md"],
+                criteria=["load-test"],
+            )
+        )
+    with pytest.raises(ValueError, match="not outstanding gate obligations"):
+        workspace.waive_gate(
+            WaiveGateInput(
+                id="invalid-exception",
+                swarm_id="delivery",
+                work_id="exceptional-release",
+                gate_id="completion",
+                actor_id="owner",
+                reason="Invalid scope",
+                evidence_refs=["repo://risk/invalid.md"],
+                criteria=["undeclared"],
+            )
+        )
+
+    waiver = workspace.waive_gate(
+        WaiveGateInput(
+            id="accepted-release-risk",
+            swarm_id="delivery",
+            work_id="exceptional-release",
+            gate_id="completion",
+            actor_id="owner",
+            reason="Customer deadline accepted by product governance",
+            evidence_refs=["repo://risk/accepted-release-risk.md"],
+            criteria=["load-test"],
+            artifacts=["performance-report"],
+            successful_evidence=True,
+            approval_roles=["product-owner"],
+        )
+    )
+    completed = workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery",
+            work_id="exceptional-release",
+            actor_id="owner",
+            target_state="completed",
+        )
+    )
+
+    assert completed.state == "completed"
+    assert workspace.list_gate_waivers("delivery", "exceptional-release") == [waiver]
+    assert workspace.validate().checked["gate-waivers"] == 1
+    waiver_path = Path(waiver.path)
+    waiver_path.write_text(waiver_path.read_text().replace('gate: "completion"', 'gate: "unknown"'))
+    report = workspace.validate()
+    assert any(issue.code == "gate-waiver.gate-missing" for issue in report.issues)
+
+
+def test_delegates_one_work_scoped_approval_and_supports_revocation(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.add_actor(
+        AddActorInput(
+            id="alternate-owner",
+            name="Alternate Product Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+        )
+    )
+    for work_id in ("delegated-approval", "revoked-approval"):
+        workspace.create_work(
+            CreateWorkInput(
+                swarm_id="delivery",
+                id=work_id,
+                title=f"Exercise {work_id}",
+                actor_id="owner",
+            )
+        )
+
+    delegated = workspace.delegate_approval(
+        DelegateApprovalInput(
+            id="release-approval",
+            swarm_id="delivery",
+            work_id="delegated-approval",
+            role_id="product-owner",
+            actor_id="owner",
+            to_actor_id="alternate-owner",
+            reason="The primary owner is unavailable for this decision",
+        )
+    )
+    assert delegated.status == "active"
+    with pytest.raises(ValueError, match="active Approval Delegations"):
+        workspace.cancel_work(
+            ChangeWorkStatusInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="owner",
+                reason="Attempt closure while approval authority remains active",
+            )
+        )
+    with pytest.raises(ValueError, match="active Approval Delegations"):
+        workspace.handoff_actor(
+            HandoffActorInput(
+                swarm_id="delivery",
+                role_id="product-owner",
+                from_actor_id="owner",
+                to_actor_id="alternate-owner",
+                authorized_by="owner",
+                reason="Attempt a role transfer while authority remains active",
+            )
+        )
+    with pytest.raises(ValueError, match="Revoke the active Approval Delegation"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="owner",
+                role_id="product-owner",
+            )
+        )
+    with pytest.raises(PermissionError, match="belongs to project:alternate-owner"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="developer",
+                role_id="product-owner",
+                delegation_id="release-approval",
+            )
+        )
+
+    approved = workspace.add_approval(
+        AddApprovalInput(
+            swarm_id="delivery",
+            work_id="delegated-approval",
+            actor_id="alternate-owner",
+            role_id="product-owner",
+            note="Approved under delegated authority",
+            delegation_id="release-approval",
+        )
+    )
+    used = workspace.list_approval_delegations("delivery", "delegated-approval", "used")[0]
+    assert approved.approval_roles == ["product-owner"]
+    assert used.status == "used"
+    assert used.used_by == "project:alternate-owner"
+    approval_path = Path(approved.path) / "approvals.md"
+    assert "project:alternate-owner via approval-delegation:release-approval" in (
+        approval_path.read_text()
+    )
+    with pytest.raises(ValueError, match="is not active"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="delegated-approval",
+                actor_id="alternate-owner",
+                role_id="product-owner",
+                delegation_id="release-approval",
+            )
+        )
+
+    workspace.delegate_approval(
+        DelegateApprovalInput(
+            id="withdrawn-approval",
+            swarm_id="delivery",
+            work_id="revoked-approval",
+            role_id="product-owner",
+            actor_id="owner",
+            to_actor_id="alternate-owner",
+            reason="Temporary coverage",
+        )
+    )
+    revoked = workspace.revoke_approval_delegation(
+        RevokeApprovalDelegationInput(
+            delegation_id="withdrawn-approval",
+            swarm_id="delivery",
+            work_id="revoked-approval",
+            actor_id="owner",
+            reason="The primary owner resumed the decision",
+        )
+    )
+    assert revoked.status == "revoked"
+    assert revoked.revoked_by == "project:owner"
+    assert revoked.revoked_reason == "The primary owner resumed the decision"
+    with pytest.raises(ValueError, match="is not active"):
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id="delivery",
+                work_id="revoked-approval",
+                actor_id="alternate-owner",
+                role_id="product-owner",
+                delegation_id="withdrawn-approval",
+            )
+        )
+    assert workspace.validate().ok
+    delegation_path = (
+        root
+        / ".agora"
+        / "swarms"
+        / "delivery"
+        / "work"
+        / "revoked-approval"
+        / "approval-delegations"
+        / "withdrawn-approval"
+        / "DELEGATION.md"
+    )
+    assert delegation_path.is_file()
+    delegation_path.write_text(
+        delegation_path.read_text().replace('status: "revoked"', 'status: "used"')
+    )
+    report = workspace.validate()
+    assert any(issue.code == "approval-delegation.invalid" for issue in report.issues)
+
+
 def test_prepares_and_launches_a_session_with_actor_runtime_override(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
@@ -818,6 +1072,13 @@ def test_discovers_installs_and_governs_the_terraform_cli_adapter(
     )
     assert installed.provider == "hashicorp"
     assert installed.implements == "cloud-infrastructure"
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="staging",
+            name="Staging",
+            allowed_tool_capabilities=["cloud.read", "cloud.plan"],
+        )
+    )
 
     governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
     resources = governed.invoke_tool(
@@ -827,6 +1088,7 @@ def test_discovers_installs_and_governs_the_terraform_cli_adapter(
             operation_id="list-resources",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="staging",
             inputs={"environment": "infra/staging"},
         )
     )
@@ -837,6 +1099,7 @@ def test_discovers_installs_and_governs_the_terraform_cli_adapter(
             operation_id="plan",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="staging",
             inputs={"environment": "infra/staging", "change": "plans/capacity.tfplan"},
         )
     )
@@ -978,6 +1241,13 @@ def test_governs_partial_aws_and_gcp_inventory_adapters(
         workspace.install_tool_adapter(
             InstallToolAdapterInput(adapter_id=adapter_id, scope="project")
         )
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="inventory",
+            name="Cloud inventory",
+            allowed_tool_capabilities=["cloud.read"],
+        )
+    )
 
     aws_resources = workspace.invoke_tool(
         InvokeToolInput(
@@ -986,6 +1256,7 @@ def test_governs_partial_aws_and_gcp_inventory_adapters(
             operation_id="list-resources",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="inventory",
             inputs={"environment": "us-east-1"},
         )
     )
@@ -996,6 +1267,7 @@ def test_governs_partial_aws_and_gcp_inventory_adapters(
             operation_id="inspect-resource",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="inventory",
             inputs={
                 "environment": "projects/agora-production",
                 "resource": (
@@ -1289,6 +1561,13 @@ def test_governs_cloud_infrastructure_capabilities_by_role(
 ) -> None:
     root, workspace = project
     _prepare_scrum_team(workspace)
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="staging",
+            name="Staging",
+            allowed_tool_capabilities=["cloud.read", "cloud.plan"],
+        )
+    )
 
     plan = workspace.invoke_tool(
         InvokeToolInput(
@@ -1297,6 +1576,7 @@ def test_governs_cloud_infrastructure_capabilities_by_role(
             operation_id="plan",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="staging",
             inputs={"environment": "staging", "change": "increase-api-capacity"},
         )
     )
@@ -1340,11 +1620,134 @@ def test_governs_cloud_infrastructure_capabilities_by_role(
     assert not (root / ".agora" / "tool-runs" / "destroy-cloud-resource").exists()
 
 
+def test_enforces_environment_capabilities_role_scope_approvals_and_evidence(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="release",
+            title="Release a reviewed change",
+            actor_id="owner",
+        )
+    )
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="production",
+            name="Production",
+            allowed_tool_capabilities=["cloud.plan"],
+            required_approval_roles=["product-owner"],
+            require_successful_evidence=True,
+        )
+    )
+    invocation = InvokeToolInput(
+        id="production-plan",
+        tool_id="cloud-infrastructure",
+        operation_id="plan",
+        actor_id="developer",
+        swarm_id="delivery",
+        work_id="release",
+        environment_id="production",
+        inputs={"environment": "provider-production", "change": "release-v1"},
+    )
+
+    with pytest.raises(PermissionError, match="requires approval from: product-owner"):
+        workspace.invoke_tool(invocation)
+    workspace.add_approval(
+        AddApprovalInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="owner",
+            role_id="product-owner",
+        )
+    )
+    with pytest.raises(PermissionError, match="requires successful work evidence"):
+        workspace.invoke_tool(invocation)
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="facilitator",
+            type="test-run",
+            result="success",
+        )
+    )
+    prepared = workspace.invoke_tool(invocation)
+    assert prepared.environment_id == "production"
+    assert 'environment: "production"' in (Path(prepared.path) / "RUN.md").read_text()
+
+    role_path = root / ".agora" / "methods" / "scrum" / "roles" / "developer.md"
+    role_path.write_text(
+        role_path.read_text().replace(
+            'allowed-environments: ["*"]', 'allowed-environments: ["staging"]'
+        )
+    )
+    with pytest.raises(PermissionError, match="Actor roles do not allow"):
+        workspace.invoke_tool(
+            InvokeToolInput(**{**invocation.__dict__, "id": "role-denied-production-plan"})
+        )
+    report = workspace.validate()
+    assert not report.ok
+    assert {"role.environment-missing", "tool-run.environment-policy"}.issubset(
+        {issue.code for issue in report.issues}
+    )
+
+
+def test_rejects_missing_or_insufficient_environment_policy(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+    with pytest.raises(ValueError, match="at least one tool capability"):
+        workspace.add_environment(
+            AddEnvironmentInput(id="empty", name="Empty", allowed_tool_capabilities=[])
+        )
+    with pytest.raises(ValueError, match="requires a governed environment"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="unscoped-plan",
+                tool_id="cloud-infrastructure",
+                operation_id="plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"environment": "provider-sandbox", "change": "test"},
+            )
+        )
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="sandbox",
+            name="Sandbox",
+            allowed_tool_capabilities=["cloud.read"],
+        )
+    )
+    with pytest.raises(PermissionError, match="does not allow tool capability cloud.plan"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="capability-denied-plan",
+                tool_id="cloud-infrastructure",
+                operation_id="plan",
+                actor_id="developer",
+                swarm_id="delivery",
+                environment_id="sandbox",
+                inputs={"environment": "provider-sandbox", "change": "test"},
+            )
+        )
+
+
 def test_governs_observability_and_incident_capabilities_by_role(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:
     root, workspace = project
     _prepare_scrum_team(workspace)
+    workspace.add_environment(
+        AddEnvironmentInput(
+            id="production",
+            name="Production",
+            allowed_tool_capabilities=["observability.read"],
+        )
+    )
 
     health = workspace.invoke_tool(
         InvokeToolInput(
@@ -1353,6 +1756,7 @@ def test_governs_observability_and_incident_capabilities_by_role(
             operation_id="service-health",
             actor_id="developer",
             swarm_id="delivery",
+            environment_id="production",
             inputs={"service": "api", "environment": "production"},
         )
     )
@@ -1795,6 +2199,20 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
             )
         )
 
+    with pytest.raises(ValueError, match="must also be required artifacts"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="invalid-promotion",
+                parent_swarm_id="delivery",
+                parent_work_id="parent-slice",
+                child_actor_id="specialist-swarm",
+                child_work_id="invalid-promotion-child",
+                actor_id="specialist-swarm",
+                title="Promote an optional artifact",
+                artifact_promotions={"release-note": "specialist-result"},
+            )
+        )
+
     proposed = workspace.create_delegation(
         CreateDelegationInput(
             id="specialist-task",
@@ -1808,6 +2226,7 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
             acceptance_criteria=[("usable", "The output can be integrated")],
             required_artifacts=["child-result"],
             result_kind="delegated-result",
+            artifact_promotions={"child-result": "specialist-result"},
         )
     )
     assert proposed.status == "proposed"
@@ -1905,11 +2324,15 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
     assert collected.status == "collected"
     assert collected.collected_by == "project:specialist-swarm"
     parent = workspace.show_work("delivery", "parent-slice")
-    assert parent.artifact_kinds == ["delegated-result"]
+    assert parent.artifact_kinds == ["delegated-result", "specialist-result"]
     assert parent.evidence_results == ["success"]
     parent_root = root / ".agora" / "swarms" / "delivery" / "work" / "parent-slice"
     assert (
         "agora://swarms/specialists/work/child-slice" in (parent_root / "artifacts.md").read_text()
+    )
+    assert (
+        "agora://swarms/specialists/work/child-slice/artifacts/child-result"
+        in (parent_root / "artifacts.md").read_text()
     )
     assert "delegation.collected" in (parent_root / "events.md").read_text()
     assert (
@@ -1960,6 +2383,7 @@ def test_lists_and_summarizes_operational_workspace_state(
         "actors": 3,
         "methods": 2,
         "tools": 6,
+        "environments": 0,
         "swarms": 1,
         "work": 1,
         "delegations": 0,
@@ -2282,6 +2706,127 @@ def test_validation_reports_corrupt_status_change_semantics(
     assert "status-change.sequence-invalid" in codes
 
 
+def test_decomposes_work_and_requires_children_to_close(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="parent-work",
+            title="Deliver the parent outcome",
+            actor_id="owner",
+        )
+    )
+    decomposition = DecomposeWorkInput(
+        swarm_id="delivery",
+        parent_work_id="parent-work",
+        child_work_id="child-work",
+        title="Implement the child slice",
+        actor_id="owner",
+        acceptance_criteria=[("reviewed", "The child slice is reviewed")],
+        required_artifacts=["source-code"],
+    )
+
+    with pytest.raises(PermissionError, match="not allowed to perform work.decompose"):
+        workspace.decompose_work(
+            DecomposeWorkInput(**{**decomposition.__dict__, "actor_id": "developer"})
+        )
+    with pytest.raises(ValueError, match="must differ"):
+        workspace.decompose_work(
+            DecomposeWorkInput(
+                **{
+                    **decomposition.__dict__,
+                    "child_work_id": "parent-work",
+                }
+            )
+        )
+
+    child = workspace.decompose_work(decomposition)
+    parent = workspace.show_work("delivery", "parent-work")
+
+    assert child.parent_work_ref == "delivery/parent-work"
+    assert parent.child_work_refs == ["delivery/child-work"]
+    assert (
+        'parent-work: "delivery/parent-work"'
+        in (root / ".agora" / "swarms" / "delivery" / "work" / "child-work" / "WORK.md").read_text()
+    )
+    with pytest.raises(FileExistsError, match="Work already exists"):
+        workspace.decompose_work(decomposition)
+
+    for state, actor in (
+        ("planned", "developer"),
+        ("implementing", "developer"),
+        ("reviewing", "developer"),
+        ("verifying", "facilitator"),
+    ):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="parent-work",
+                actor_id=actor,
+                target_state=state,
+            )
+        )
+    with pytest.raises(ValueError, match="has open child work"):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="parent-work",
+                actor_id="owner",
+                target_state="completed",
+            )
+        )
+    with pytest.raises(ValueError, match="has open child work"):
+        workspace.cancel_work(
+            ChangeWorkStatusInput(
+                swarm_id="delivery",
+                work_id="parent-work",
+                actor_id="owner",
+                reason="Cancel the parent",
+            )
+        )
+
+    workspace.cancel_work(
+        ChangeWorkStatusInput(
+            swarm_id="delivery",
+            work_id="child-work",
+            actor_id="owner",
+            reason="The child is no longer required",
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="parent-work",
+            actor_id="facilitator",
+            type="review",
+            result="success",
+        )
+    )
+    workspace.add_approval(
+        AddApprovalInput(
+            swarm_id="delivery",
+            work_id="parent-work",
+            actor_id="owner",
+            role_id="product-owner",
+            note="Child closure reviewed",
+        )
+    )
+    completed = workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery",
+            work_id="parent-work",
+            actor_id="owner",
+            target_state="completed",
+        )
+    )
+
+    assert completed.state == "completed"
+    assert workspace.validate().ok
+
+
 def _prepare_scrum_team(workspace: AgoraWorkspace) -> None:
     workspace.initialize(
         InitInput(
@@ -2393,3 +2938,180 @@ def _prepare_delegated_scrum_teams(workspace: AgoraWorkspace) -> None:
             actor_id="owner",
         )
     )
+
+
+def test_propagates_and_enforces_delegation_budgets(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
+    for actor in (
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="facilitator",
+            name="Facilitator",
+            kind="ai-agent",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="leaf-developer",
+            name="Leaf Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        ),
+    ):
+        workspace.add_actor(actor)
+
+    def form_swarm(swarm_id: str, developer: str) -> None:
+        workspace.create_swarm(
+            CreateSwarmInput(
+                id=swarm_id,
+                objective=f"Deliver {swarm_id}",
+                create_branch=False,
+            )
+        )
+        for role, actor_id in (
+            ("product-owner", "owner"),
+            ("scrum-master", "facilitator"),
+            ("developer", developer),
+        ):
+            workspace.assign_actor(
+                AssignActorInput(swarm_id=swarm_id, role_id=role, actor_id=actor_id)
+            )
+
+    form_swarm("leaf", "leaf-developer")
+    workspace.add_actor(
+        AddActorInput(
+            id="leaf-swarm",
+            name="Leaf Swarm",
+            kind="swarm",
+            capabilities=["implementation"],
+            scope="project",
+            represented_swarm="leaf",
+        )
+    )
+    form_swarm("middle", "leaf-swarm")
+    workspace.add_actor(
+        AddActorInput(
+            id="middle-swarm",
+            name="Middle Swarm",
+            kind="swarm",
+            capabilities=["implementation"],
+            scope="project",
+            represented_swarm="middle",
+        )
+    )
+    form_swarm("root", "middle-swarm")
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="root",
+            id="root-work",
+            title="Fund bounded delegated work",
+            actor_id="owner",
+        )
+    )
+    root_delegation = workspace.create_delegation(
+        CreateDelegationInput(
+            id="root-to-middle",
+            parent_swarm_id="root",
+            parent_work_id="root-work",
+            child_actor_id="middle-swarm",
+            child_work_id="middle-work",
+            actor_id="middle-swarm",
+            title="Deliver within a bounded allocation",
+            budget_limits={"effort": 10, "tokens": 100},
+        )
+    )
+    workspace.accept_delegation(
+        DelegationActorInput(delegation_id=root_delegation.id, actor_id="owner")
+    )
+
+    middle_work = workspace.show_work("middle", "middle-work")
+    assert middle_work.budget_limits == {"effort": 10, "tokens": 100}
+
+    first = workspace.create_delegation(
+        CreateDelegationInput(
+            id="middle-to-leaf-one",
+            parent_swarm_id="middle",
+            parent_work_id="middle-work",
+            child_actor_id="leaf-swarm",
+            child_work_id="leaf-work-one",
+            actor_id="leaf-swarm",
+            title="Use the first allocation",
+            budget_limits={"effort": 6, "tokens": 80},
+        )
+    )
+    with pytest.raises(ValueError, match="exceeds parent work allocation"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="middle-to-leaf-two",
+                parent_swarm_id="middle",
+                parent_work_id="middle-work",
+                child_actor_id="leaf-swarm",
+                child_work_id="leaf-work-two",
+                actor_id="leaf-swarm",
+                title="Exceed the remaining allocation",
+                budget_limits={"effort": 5, "tokens": 20},
+            )
+        )
+    with pytest.raises(ValueError, match="not available from parent work"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="middle-to-leaf-cost",
+                parent_swarm_id="middle",
+                parent_work_id="middle-work",
+                child_actor_id="leaf-swarm",
+                child_work_id="leaf-work-cost",
+                actor_id="leaf-swarm",
+                title="Invent an unavailable dimension",
+                budget_limits={"cost-cents": 1},
+            )
+        )
+    with pytest.raises(ValueError, match="cannot be negative"):
+        workspace.create_delegation(
+            CreateDelegationInput(
+                id="middle-to-leaf-negative",
+                parent_swarm_id="middle",
+                parent_work_id="middle-work",
+                child_actor_id="leaf-swarm",
+                child_work_id="leaf-work-negative",
+                actor_id="leaf-swarm",
+                title="Reject a negative allocation",
+                budget_limits={"effort": -1},
+            )
+        )
+
+    workspace.reject_delegation(
+        ChangeDelegationStatusInput(
+            delegation_id=first.id,
+            actor_id="owner",
+            reason="The leaf rejects this allocation",
+        )
+    )
+    second = workspace.create_delegation(
+        CreateDelegationInput(
+            id="middle-to-leaf-two",
+            parent_swarm_id="middle",
+            parent_work_id="middle-work",
+            child_actor_id="leaf-swarm",
+            child_work_id="leaf-work-two",
+            actor_id="leaf-swarm",
+            title="Use the released allocation",
+            budget_limits={"effort": 10, "tokens": 100},
+        )
+    )
+    workspace.accept_delegation(DelegationActorInput(delegation_id=second.id, actor_id="owner"))
+
+    assert workspace.show_work("leaf", "leaf-work-two").budget_limits == {
+        "effort": 10,
+        "tokens": 100,
+    }
+    assert workspace.validate().ok

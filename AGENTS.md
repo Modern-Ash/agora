@@ -10,7 +10,14 @@
 - Use Conventional Commits 1.0.0 for every commit: `<type>[optional scope][!]: <description>` with
   bodies and footers separated by a blank line.
 - Keep environment-specific output in integration adapters.
+- Keep actor private keys outside Agora; persist only public identity and signed verification
+  evidence, preserve rotation and revocation history, and bind authorizations to exact durable
+  operations and materialized session context before execution.
+- Route authenticated lifecycle mutations through prepared `ACTION.md` intents, bind signatures to
+  their work preconditions, and reapply all Method Pack rules immediately before mutation.
 - Keep Tool Pack commands structured, shell-free, and free of credential inputs.
+- Give Tool Packs bounded direct-process timeouts and captured-output limits; describe external
+  containers or runners as the isolation boundary for filesystem, network, syscalls, and resources.
 - Keep ecosystem Tool Pack capabilities provider-neutral; place Jira, CI/CD, documentation, and
   cloud translation in reviewed external adapters rather than the kernel.
 - Prefer a reviewed native provider CLI when it is installed and non-interactive; use a team wrapper

@@ -21,6 +21,20 @@ An **Actor** has an identity, kind, and capabilities. Kinds include human, AI ag
 and automation. A **Role** declares required capabilities, allowed actor kinds, and allowed actions.
 An **Assignment** temporarily links an actor to a role within a swarm.
 
+Direct assignment bootstraps a forming swarm and can only fill a vacant role. Once a governance
+actor is present, `swarm.assign` offers a signed path for remaining vacancies and binds authorizer,
+target, role, and current swarm projection. Occupied roles can only change through a handoff, which
+preserves both identities and the reason.
+
+An actor may also declare an Ed25519 public identity and require authentication for supported
+lifecycle actions, Tool Run launch, and agent-session preparation and launch. Canonical
+authorizations bind the actor to one exact prepared operation. The external signer holds the private key; applied records
+retain public key, fingerprint, payload digest, and signature so validation can verify the
+historical proof independently of the actor's current key.
+Each public **Actor Key** has an `active`, `rotated`, or `revoked` lifecycle. Rotation links an old
+fingerprint to its replacement. Revocation disables new governed signed operations until an explicit
+replacement is installed, without invalidating historical signatures.
+
 Identity does not change when work moves from a person to an AI agent or swarm. The assignment changes
 and the handoff is preserved. A swarm can act as a composite actor inside another swarm.
 
@@ -48,6 +62,16 @@ child-work artifact reference and successful delegated-work evidence to the pare
 accepted delegation does not rewrite its independently owned child work. Child artifacts remain
 authoritative in the child and parent completion gates remain independent.
 
+A Delegation may carry provider-neutral integer budget limits. Acceptance copies those limits to
+the child work. Nested delegations may allocate only inherited dimensions, and non-rejected sibling
+allocations cannot exceed the parent work limit. Agora validates declared capacity; consumption
+evidence remains the responsibility of the selected runtime or external adapter.
+
+The delegation contract may also map required child artifact kinds to parent kinds. Collection
+materializes typed `agora://` references to those child records. The reference is copied into parent
+governance state while the underlying repository file, cloud object, page, or other content remains
+owned by its provider.
+
 ## Swarm
 
 A swarm is a temporary team associated with an objective, Method Pack, and branch. It starts as
@@ -60,6 +84,11 @@ is blocked and `cancelled` when every item is cancelled.
 
 A work item is a Markdown directory containing description, state, criteria, artifacts, and evidence.
 Its workflow comes from `METHOD.md`; it is not hard-coded into an LLM integration.
+
+Local decomposition creates child work under the same swarm and Method Pack. The child stores a
+`parent-work` reference and the parent stores the inverse `child-work-refs` list. Parent completion
+or cancellation requires every direct child to be terminal or explicitly cancelled. Cross-swarm
+child ownership uses a Delegation instead.
 
 Work also has an orthogonal operational status: `active`, `blocked`, or `cancelled`. Blocking
 preserves method state while suspending mutations. Resumption restores activity without traversing a
@@ -85,6 +114,76 @@ To act, an actor must:
 3. Have a kind and capabilities accepted by that role.
 4. Have the action listed in the role's `allowed-actions`.
 
+## Lifecycle Action
+
+A **Lifecycle Action** is a prepared mutation intent stored independently from current work state.
+Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
+SHA-256 precondition. Supported kinds cover planned actor key rotations, independently authorized
+revocation and recovery, actor runtime updates, work transitions, work interruptions, approvals,
+handoffs, work creation, same-swarm decomposition and material records, session preparation, the
+complete delegation lifecycle, Approval Delegation, and granular Gate Waivers. Existing-work
+mutations cover the work projection, artifacts, evidence, approvals, and scoped approval authority
+on which the mutation
+depends. Work creation instead covers the swarm projection and binds the complete initial work
+definition. Criterion, artifact, and evidence parameters bind their exact durable values.
+Interruption reasons are signed and successful actions link exactly to their `STATUS.md`. Approval
+parameters bind both the asserted role and durable note. A handoff instead covers the swarm
+assignment projection and optional referenced work while binding both actor identities, the role,
+and reason.
+
+Signed work decomposition binds the parent work precondition and the complete initial child
+contract. Applying it rechecks `work.decompose` authority, parent mutability, and child path
+availability. The child links to its parent and the parent retains the inverse child reference.
+
+## Approval Delegation
+
+An **Approval Delegation** grants one compatible actor the authority to record one named role's
+approval for one work item without changing the swarm assignment. The assigned role holder is the
+grantor. The record begins `active` and terminates as `used` by its exact target or `revoked` by its
+grantor. Only one active delegation may exist per work and role, and direct approval is blocked
+until that authority is consumed or revoked. Authenticated grants, uses, and revocations link their
+records to exact Lifecycle Actions.
+
+## Gate Waiver
+
+A **Gate Waiver** is an immutable, work-owned decision that names exact outstanding acceptance
+criteria, required artifact kinds, successful-evidence requirement, or approval roles from one
+Method Pack gate. It requires a reason, risk-evidence references, and a role granting `gate.waive`.
+The gate evaluator subtracts only those named obligations. Transition edges, transition roles, WIP,
+child closure, and operational mutability remain independent invariants. Authenticated decisions
+link the resulting `WAIVER.md` to an applied `gate.waive` Lifecycle Action.
+
+A signed delegation status decision binds its delegation id and reason to both `DELEGATION.md` and
+the parent work digest. Parent governance authorizes block, resume, and cancel; child authority
+authorizes reject. The applied action and sequenced delegation `STATUS.md` cross-reference by id.
+
+Signed delegation creation binds the complete child-work contract to the parent work, parent and
+child swarm manifests, and linked actor record. Acceptance also binds the current proposal and child
+swarm before materializing child work. Collection adds the terminal child work digest before
+recording its reference as parent artifact and evidence. Child `WORK.md` keeps its delegation and
+parent-work links through every subsequent projection rewrite.
+
+Signed session preparation is a Lifecycle Action whose precondition is the prospective
+`CONTEXT.md` digest. The applied action materializes `SESSION.md` and `CONTEXT.md`, and the session
+links back to that action. Launch authorization remains separate and signs the materialized context,
+resolved runtime, and exact command.
+
+A signed actor runtime update is self-authorized through an assigned swarm role. Its precondition
+covers the actor and swarm projections, while apply rechecks current `actor.runtime.update` Method
+Pack authority before updating the actor's optional integration, provider, and model overrides.
+
+A signed actor key rotation binds the old and replacement fingerprints, canonical replacement
+public key, and reason. Its precondition includes the actor, swarm, and complete public key history.
+The old key verifies the action before the replacement becomes active. Revocation and recovery stay
+separate because a revoked key cannot provide continuity evidence. A different authenticated actor
+must hold explicit Method Pack authority, share the target's swarm, and use a distinct fingerprint.
+The signed action binds the target, current key, reason, and recovery key when present.
+
+Applying the action rechecks the precondition, current actor assignment, Method Pack transition,
+role authority, WIP limit, gate, and active public key before changing `WORK.md`. Authenticated
+actors must provide an external Ed25519 signature. Applied actions retain public verification
+evidence; prepared actions whose work changes remain durable but stale and cannot execute.
+
 ## Artifact, evidence, and approval
 
 An artifact is a durable output or external reference, such as code, a specification, ticket, build,
@@ -103,6 +202,11 @@ provider-neutral capability, risk classification, arguments, required inputs, op
 and result kind. A role grants exact values through `allowed-tool-capabilities`; installing a pack
 does not grant authority.
 
+Every Tool Pack also resolves a portable execution policy: a direct-process timeout and a combined
+captured-output limit. Agora copies that policy into each Tool Run, includes it in signed launch
+authorization, and persists bounded results. This policy controls execution duration and audit data
+size; it is not filesystem, network, syscall, resource, or process-tree isolation.
+
 A **Tool Adapter** is a provider-specific Tool Pack that declares `provider`, `transport`, and the
 provider-neutral contract it `implements`. The adapter changes command translation, not lifecycle
 authority. Adapter discovery records whether its executable is available; installation and
@@ -117,9 +221,21 @@ whether it meets the manifest's minimum runtime version. Neither result implies 
 installation, authority, or a successful provider call. The Jira adapter demonstrates the absent
 state when ACLI is not installed.
 
-A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, and input map.
-It may remain `prepared` for external delegation or be launched locally. `RUN.md` persists attribution
-and command metadata, while `RESULT.md` captures status, output, and exit code.
+A **Coordination Policy** keeps local operating-system locking as the baseline and may require an
+external lease CLI for project mutations across hosts. The policy stores a stable resource id and
+structured command settings, never credentials. Lease ids and fencing tokens are runtime state;
+Markdown and Git remain the durable collaboration substrate.
+
+A project **Environment Policy** names a stable governance boundary and restricts provider-neutral
+Tool Pack capabilities. It may require work approvals and successful evidence. Method Pack roles
+independently restrict their capabilities through `allowed-environments`; provider accounts,
+regions, directories, credentials, and translation remain adapter-owned.
+
+A **Tool Run** binds the pack and operation to an assigned actor, swarm, optional work, optional
+environment, and input map. It may remain `prepared` for external delegation or be launched locally.
+`RUN.md` persists attribution and command metadata, optional actor authentication evidence, while
+`RESULT.md` captures status, output, and exit code. The selected environment is included in signed
+launch authorization and revalidated immediately before execution.
 
 The bundled **Work Management Tool Pack** separates `issue.read`, `issue.write`, and
 `issue.transition` authority behind a stable `workctl` interface. External ticket state and Agora
@@ -180,12 +296,29 @@ actual checksums, optional registries, and the removal timestamp. The pack direc
 current state; the removal record and Git preserve why they disappeared.
 
 A remote registry index publishes one or more semantic releases. Each release identifies an archive,
-mandatory SHA-256, and optional Ed25519 signature plus key id. After verification Agora installs the
-same local snapshot contract and adds a generated source record containing immutable provenance.
+mandatory SHA-256, and optional Ed25519 signature set. A required threshold counts distinct trusted
+public fingerprints, not merely signer ids. After verification Agora installs the same local snapshot
+contract and adds a generated source record containing immutable signer and threshold provenance.
 
 A registry trust key authorizes one Ed25519 public key id for one registry. Its user or project scope,
 fingerprint, active or revoked status, and optional replacement are durable Markdown. Rotation adds a
 new identity before revoking the previous identity; it never overwrites key history.
+
+A transparency trust key authorizes only signed checkpoints for one external log. It has the same
+scoped, append-by-new-id rotation and durable revocation properties as release trust, but resides in
+a separate namespace and grants no registry release authority.
+
+A transparency inclusion proof binds the canonical registry release payload to a Merkle leaf,
+inclusion path, tree position, and signed checkpoint from one transparency trust key. A verified
+proof may be persisted under the log, registry, and release version; validation repeats its
+cryptographic checks even if the key is later revoked. Revocation prevents accepting new evidence.
+Registry provenance may make that evidence mandatory. The policy is monotonic across update history,
+and each applied release references its exact recorded proof.
+
+An organization trust root verifies a sequential feed of registry trust keys and revocations. A
+root rotation is an immutable, dual-signed transition that binds both public roots to the current
+feed checksum and previous rotation. `ROOT.md` retains the initial public anchor plus current state;
+archived rotations reconstruct the root epoch required to verify each historical bundle.
 
 A registry update is a forward-only transition between immutable semantic releases. Preview state is
 ephemeral; each applied transition persists its previous and target versions, checksums, index,
@@ -212,8 +345,10 @@ than invoking a model SDK.
 
 A session binds an assigned actor, its active roles, a swarm, optional work, and effective runtime.
 `SESSION.md` records the selection and launch result; `CONTEXT.md` lists the project, method, roles,
-work, related delegations, policies, and operating rules the external agent must read. Conversation
-history remains external unless a material outcome is persisted in Agora files.
+work, related delegations, policies, and operating rules the external agent must read. An
+authenticated launch binds the runtime, exact command, and context digest to the actor's signature;
+the completed session retains public verification evidence. Conversation history remains external
+unless a material outcome is persisted in Agora files.
 
 ## Operational view and validation
 

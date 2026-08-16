@@ -60,6 +60,92 @@ The archive value is the literal value declared in `INDEX.md`, before relative U
 the private signing key outside the registry and publishing repository. Distribute the public key
 through an independently trusted channel.
 
+## Threshold signatures
+
+A release may carry a `signatures` array instead of the legacy `signature` and `key-id` pair:
+
+```json
+{"version":"1.0.0","archive":"team-catalog-1.0.0.tar.gz","sha256":"<sha256>","signatures":[{"key-id":"release-a","signature":"<base64>"},{"key-id":"release-b","signature":"<base64>"}]}
+```
+
+Every signer signs the same canonical payload above. Signer ids must be unique, and distinct ids
+backed by the same public-key fingerprint count only once. Require a quorum of independently trusted
+and active release keys with:
+
+```bash
+agora registry install \
+  --source https://catalog.example.com/agora/INDEX.md \
+  --signature-threshold 2 \
+  --scope project
+```
+
+An explicit PEM can satisfy at most one signature. Threshold verification therefore uses persisted
+user or project trust keys for values above one. A signature made by a persistently revoked key
+blocks the release even when other signatures would otherwise satisfy the threshold.
+
+## Transparency inclusion proofs
+
+Agora can independently verify that the canonical release payload is included in an RFC 6962-style
+Merkle tree and that the resulting checkpoint was signed by a trusted transparency log key. First
+pin the log's Ed25519 checkpoint key, then verify a proof supplied as a local Markdown artifact:
+
+```bash
+agora trust transparency add \
+  --id public-log-2026 \
+  --log public-log \
+  --public-key ./public-log-2026.pem \
+  --scope project
+agora registry verify-transparency \
+  --source ./PROOF.md \
+  --scope project \
+  --record
+```
+
+`--record` persists the canonical proof at
+`.agora/transparency/<log>/<registry>/<version>/PROOF.md`. `agora validate` repeats both checkpoint
+signature and inclusion verification. A later key revocation blocks new proof acceptance but does
+not erase the cryptographic audit of evidence recorded before rotation or revocation.
+
+The proof uses schema `agora/transparency-inclusion-proof/v1` and declares `log`, `key-id`,
+`registry`, `version`, `archive`, `sha256`, `tree-size`, `leaf-index`, `root-sha256`,
+`inclusion-path`, `checkpoint-signature`, and `integrated-at`. Each inclusion-path value is a
+lowercase SHA-256 hex digest. The leaf is:
+
+```text
+SHA256(0x00 || <canonical registry release signature payload>)
+```
+
+Each internal node is `SHA256(0x01 || left || right)`. The Ed25519 checkpoint signature covers these
+exact UTF-8 bytes, including the final newline:
+
+```text
+agora/transparency-checkpoint/v1
+log=public-log
+tree-size=<tree size>
+root-sha256=<Merkle root>
+integrated-at=<integration timestamp>
+```
+
+Proof files are bounded, contain an exact versioned attribute set, and are verified only against the
+separate transparency authority namespace. They cannot satisfy a registry release signature.
+
+After recording the proof, make it a mutation precondition with:
+
+```bash
+agora registry install \
+  --source https://catalog.example.com/agora/INDEX.md \
+  --version 1.0.0 \
+  --require-transparency \
+  --scope project
+```
+
+The gate selects the recorded proof by the exact registry and semantic version, then verifies its
+literal release archive, SHA-256, active log authority, Merkle path, and checkpoint again. Agora
+persists `transparency-required`, the portable proof reference, and the literal release archive in
+`SOURCE.md`. Once enabled, every later update inherits the requirement and records it in `UPDATE.md`;
+the policy cannot be lowered. Record the target release proof before previewing or applying that
+update. Agora never discovers or downloads a proof implicitly.
+
 ## Install a release
 
 Checksum verification is always mandatory:
@@ -97,7 +183,8 @@ Agora generates `SOURCE.md` inside a remotely installed registry. It records:
 
 - the final index and archive locations;
 - the selected version and archive SHA-256;
-- whether the Ed25519 signature was verified and its key id;
+- the verified Ed25519 signer ids and required signature threshold;
+- the forward-only transparency requirement and exact recorded proof reference, when enabled;
 - the installation timestamp.
 
 `agora registry list` exposes the version, source, checksum, and signature status. `agora validate`
@@ -111,9 +198,9 @@ path-length, individual-size, and expanded-size limits. Absolute paths, parent t
 paths, links, devices, pipes, and other non-file archive entries are rejected. Extraction happens in
 a new temporary directory, followed by normal registry and pack validation.
 
-The checksum authenticates bytes only against the index. A signature authenticates the release
-against the public key selected by the user or organization. An unsigned release may be installed
-when signature enforcement is not enabled, and its provenance explicitly reports that it was not
+The checksum authenticates bytes only against the index. Signatures authenticate the release
+against public keys selected by the user or organization. An unsigned release may be installed when
+signature enforcement is not enabled, and its provenance explicitly reports that it was not
 verified.
 
 When signature verification is requested, Agora verifies the signed index payload before following
@@ -127,10 +214,12 @@ directory. Removed files do not leak from an older release into a newer verified
 
 ## Current boundary
 
-Agora manages local and project trust keys, rotations, and revocations. It does not yet synchronize
-organization trust policy, consume revocation feeds, use transparency logs, resolve dependencies, or
-notify about registry updates. The index is a distribution convenience; installed filesystem state
-remains the governed operational record.
+Agora manages local and project trust keys, rotations, revocations, and signed sequential
+organization trust feeds. Organization roots rotate through dual-signed, feed-bound declarations.
+Agora enforces distinct-key signature thresholds for registry releases and explicitly verifies and
+records third-party transparency-log inclusion proofs. A recorded proof may be required for
+`registry install` and every later update. Proof discovery remains external and explicit. The index
+is a distribution convenience; installed filesystem state remains the governed operational record.
 
 Use [Registry updates](registry-updates.md) to check and apply later releases without replacing packs
 that were already installed from the catalog.

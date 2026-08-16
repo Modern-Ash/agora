@@ -1,15 +1,32 @@
+import hashlib
+import json
 import math
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+
+from agora.coordination import (
+    ExternalLease,
+    LeaseRunner,
+    load_coordination_policy,
+    render_coordination_policy,
+)
 from agora.filesystem import (
     agora_home,
     append_entry,
@@ -21,9 +38,31 @@ from agora.filesystem import (
     write_new,
 )
 from agora.git import create_branch, current_branch, is_git_repository
+from agora.identity import (
+    actor_identity_from_pem,
+    actor_key_from_actor,
+    actor_key_from_pem,
+    actor_key_from_public_key,
+    assert_actor_identity_available,
+    end_actor_key,
+    lifecycle_authorization_payload,
+    link_actor_key_replacement,
+    load_actor_key,
+    render_actor_key,
+    session_authorization_payload,
+    tool_authorization_payload,
+    validate_actor_identity,
+    validate_persisted_lifecycle_authorization,
+    validate_persisted_session_authorization,
+    validate_persisted_tool_authorization,
+    verify_lifecycle_authorization,
+    verify_session_authorization,
+    verify_tool_authorization,
+)
 from agora.locking import WorkspaceLock, inspect_workspace_lock
 from agora.markdown import (
     MarkdownDocument,
+    optional_integer_record_attribute,
     optional_string_attribute,
     read_markdown,
     record_attribute,
@@ -35,25 +74,40 @@ from agora.methods import load_method_contract
 from agora.model import (
     ACTOR_KINDS,
     INTEGRATIONS,
+    ActorKeyRecord,
     ActorRecord,
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddEnvironmentInput,
     AddEvidenceInput,
+    AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
+    AddTransparencyTrustKeyInput,
+    ApplyLifecycleActionInput,
+    ApplyPackUpdateAuditInput,
+    ApprovalDelegationRecord,
     AssignActorInput,
+    AuditPackUpdatesInput,
+    AuditRegistryUpdatesInput,
     CatalogPackRecord,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
+    ConfigureCoordinationInput,
     ConfigureInput,
+    CoordinationPolicyRecord,
     CreateDelegationInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecomposeWorkInput,
+    DelegateApprovalInput,
     DelegationActorInput,
     DelegationRecord,
     DoctorCheck,
+    EnvironmentPolicyRecord,
     EventRecord,
     GatePolicy,
+    GateWaiverRecord,
     HandoffActorInput,
     HandoffRecord,
     InitInput,
@@ -64,9 +118,18 @@ from agora.model import (
     InstallToolInput,
     Integration,
     InvokeToolInput,
+    LaunchSessionInput,
+    LaunchToolRunInput,
+    LifecycleActionRecord,
+    LifecycleAuthorizationRecord,
     Method,
     MethodContract,
     MethodPackRecord,
+    OrganizationTrustRootRecord,
+    OrganizationTrustRootRotationRecord,
+    OrganizationTrustRootRotationResult,
+    OrganizationTrustSyncResult,
+    OrganizationTrustSyncStep,
     PackKind,
     PackLockEntry,
     PackLockRecord,
@@ -74,30 +137,69 @@ from agora.model import (
     PackRemovalResult,
     PackRemovalStep,
     PackSourceRecord,
+    PackUpdateAuditApplicationRecord,
+    PackUpdateAuditEntry,
+    PackUpdateAuditRecord,
     PackUpdateHistoryRecord,
     PackUpdateResult,
     PackUpdateStep,
+    PrepareActorAssignmentInput,
+    PrepareActorKeyRecoveryInput,
+    PrepareActorKeyRevocationInput,
+    PrepareActorKeyRotationInput,
+    PrepareActorRuntimeInput,
+    PrepareApprovalDelegationInput,
+    PrepareApprovalInput,
+    PrepareArtifactInput,
+    PrepareCreateDelegationInput,
+    PrepareCreateWorkInput,
+    PrepareCriterionInput,
+    PrepareDecomposeWorkInput,
+    PrepareDelegationActionInput,
+    PrepareEvidenceInput,
+    PrepareGateWaiverInput,
+    PrepareLifecycleAuthorizationInput,
+    PrepareSessionAuthorizationInput,
+    PrepareSessionInput,
+    PrepareToolAuthorizationInput,
+    PrepareWorkTransitionInput,
     ProjectConfiguration,
+    QuickstartInput,
+    QuickstartResult,
     RefreshPackLockInput,
     RegistryRecord,
+    RegistryReleaseRecord,
     RegistrySourceRecord,
     RegistryTrustKeyRecord,
+    RegistryUpdateAuditEntry,
+    RegistryUpdateAuditRecord,
     RegistryUpdateRecord,
     RegistryUpdateResult,
     RemovePackInput,
+    RevokeActorKeyInput,
+    RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
+    RevokeTransparencyTrustKeyInput,
+    RotateActorKeyInput,
+    RotateOrganizationTrustRootInput,
+    SessionAuthorizationRecord,
     SessionRecord,
     SetActorRuntimeInput,
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
+    SyncOrganizationTrustInput,
     ToolAdapterRecord,
+    ToolAuthorizationRecord,
     ToolContract,
     ToolPackRecord,
     ToolRisk,
     ToolRunRecord,
     ToolRuntimeProbe,
     TransitionWorkInput,
+    TransparencyInclusionProofRecord,
+    TransparencyTrustKeyRecord,
+    TransparencyVerificationResult,
     UpdateCatalogPackInput,
     UpdateRegistryInput,
     UpgradeInput,
@@ -105,32 +207,51 @@ from agora.model import (
     UserConfiguration,
     ValidationIssue,
     ValidationReport,
+    VerifyTransparencyProofInput,
+    WaiveGateInput,
     WorkActorInput,
     WorkOperationalStatus,
     WorkRecord,
     WorkspaceLockStatus,
     WorkspaceStatus,
 )
+from agora.organization_trust import (
+    advance_organization_trust_root,
+    load_organization_trust_bundle,
+    load_organization_trust_root,
+    load_organization_trust_root_rotation,
+    organization_trust_root_from_pem,
+    read_organization_trust_source,
+    render_organization_trust_root,
+)
 from agora.packs import (
     compare_pack_versions,
     load_pack_update_history,
     pack_reference,
     pack_tree_sha256,
+    pack_update_plan_sha256,
     read_pack_lock,
     read_pack_removal,
     read_pack_source,
+    read_pack_update_audit,
+    read_pack_update_audit_application,
     render_pack_lock,
     render_pack_removal,
     render_pack_source,
     render_pack_update,
+    render_pack_update_audit,
+    render_pack_update_audit_application,
     version_satisfies,
 )
 from agora.registries import (
     bundled_registry,
     discover_registry_packs,
     load_registry,
+    read_registry_source,
+    read_registry_update_audit,
     render_registry_source,
     render_registry_update,
+    render_registry_update_audit,
 )
 from agora.registry_distribution import (
     compare_registry_versions,
@@ -138,10 +259,25 @@ from agora.registry_distribution import (
     inspect_registry_release,
 )
 from agora.tools import (
+    CAPABILITY_PATTERN,
+    DEFAULT_TOOL_MAX_OUTPUT_BYTES,
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
+    MAX_TOOL_MAX_OUTPUT_BYTES,
+    MAX_TOOL_TIMEOUT_SECONDS,
     load_tool_contract,
     probe_tool_runtime,
     validate_operation_inputs,
     validate_tool_adapter_contract,
+)
+from agora.transparency import (
+    load_transparency_key,
+    load_transparency_proof,
+    render_transparency_key,
+    render_transparency_proof,
+    require_proof_matches_release,
+    revoke_transparency_key,
+    transparency_key_from_pem,
+    verify_transparency_proof,
 )
 from agora.trust import load_trust_key, render_trust_key, revoke_trust_key, trust_key_from_pem
 from agora.upgrades import (
@@ -177,13 +313,15 @@ class AgoraWorkspace:
             Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess[str]] | None
         ) = None,
         runtime_probe: Callable[[ToolContract, str | None], ToolRuntimeProbe] | None = None,
+        lease_runner: LeaseRunner | None = None,
         lock_timeout: float | None = None,
     ) -> None:
         self.cwd = Path(cwd or Path.cwd()).resolve()
         self._now = now or (lambda: datetime.now(UTC))
         self._launcher = launcher or _launch_process
-        self._tool_runner = tool_runner or _run_tool_process
+        self._tool_runner = tool_runner
         self._runtime_probe = runtime_probe or probe_tool_runtime
+        self._lease_runner = lease_runner
         configured_timeout = os.environ.get("AGORA_LOCK_TIMEOUT", "0")
         try:
             self.lock_timeout = float(configured_timeout) if lock_timeout is None else lock_timeout
@@ -336,6 +474,98 @@ class AgoraWorkspace:
             id_=upgrade_id,
             applied_at=self._timestamp(),
         )
+
+    @_locked_mutation("project")
+    def add_environment(self, data: AddEnvironmentInput) -> EnvironmentPolicyRecord:
+        assert_slug(data.id, "Environment id")
+        if not data.name.strip():
+            raise ValueError("Environment name must not be empty")
+        if not data.allowed_tool_capabilities:
+            raise ValueError("Environment policy must allow at least one tool capability")
+        if len(set(data.allowed_tool_capabilities)) != len(data.allowed_tool_capabilities):
+            raise ValueError("Environment tool capabilities must be unique")
+        for capability in data.allowed_tool_capabilities:
+            if CAPABILITY_PATTERN.fullmatch(capability) is None:
+                raise ValueError(f"Invalid environment tool capability: {capability}")
+        if len(set(data.required_approval_roles)) != len(data.required_approval_roles):
+            raise ValueError("Environment approval roles must be unique")
+        for role_id in data.required_approval_roles:
+            assert_slug(role_id, "Environment approval role id")
+
+        root = self.project_root()
+        path = root / ".agora" / "environments" / f"{data.id}.md"
+        record = EnvironmentPolicyRecord(
+            id=data.id,
+            name=data.name.strip(),
+            allowed_tool_capabilities=data.allowed_tool_capabilities,
+            required_approval_roles=data.required_approval_roles,
+            require_successful_evidence=data.require_successful_evidence,
+            path=str(path),
+        )
+        write_new(path, self._render_environment(record), data.force)
+        append_entry(
+            root / ".agora" / "events.md",
+            f"- {self._timestamp()} | environment.configured | environment={record.id}",
+        )
+        return record
+
+    @_locked_mutation("project")
+    def configure_coordination(self, data: ConfigureCoordinationInput) -> CoordinationPolicyRecord:
+        if data.mode not in {"local", "external-lease"}:
+            raise ValueError(f"Unsupported coordination mode: {data.mode}")
+        record = CoordinationPolicyRecord(
+            mode=data.mode,
+            resource_id=data.resource_id,
+            executable=data.executable,
+            arguments=data.arguments,
+            version_arguments=data.version_arguments,
+            minimum_runtime_version=data.minimum_runtime_version,
+            lease_seconds=data.lease_seconds,
+            command_timeout_seconds=data.command_timeout_seconds,
+            path=str(self.project_root() / ".agora" / "coordination.md"),
+        )
+        contents = render_coordination_policy(record)
+        candidate = Path(record.path)
+        with tempfile.TemporaryDirectory(prefix="agora-coordination-") as temporary:
+            temporary_path = Path(temporary) / "coordination.md"
+            temporary_path.write_text(contents, encoding="utf-8")
+            load_coordination_policy(temporary_path)
+        write_new(candidate, contents, data.force)
+        append_entry(
+            self.project_root() / ".agora" / "events.md",
+            f"- {self._timestamp()} | coordination.configured | mode={record.mode}",
+        )
+        return record
+
+    def show_coordination(self) -> CoordinationPolicyRecord:
+        path = self.project_root() / ".agora" / "coordination.md"
+        if path.is_file():
+            return load_coordination_policy(path)
+        return CoordinationPolicyRecord(
+            mode="local",
+            resource_id=None,
+            executable=None,
+            arguments=[],
+            version_arguments=[],
+            minimum_runtime_version=None,
+            lease_seconds=300,
+            command_timeout_seconds=10,
+            path=str(path),
+        )
+
+    def show_environment(self, environment_id: str) -> EnvironmentPolicyRecord:
+        assert_slug(environment_id, "Environment id")
+        return self._load_environment(
+            self.project_root() / ".agora" / "environments" / f"{environment_id}.md"
+        )
+
+    def list_environments(self) -> list[EnvironmentPolicyRecord]:
+        root = self.project_root() / ".agora" / "environments"
+        return [
+            self._load_environment(path)
+            for path in sorted(root.glob("*.md"))
+            if path.name != "README.md"
+        ]
 
     @_locked_mutation("scoped")
     def install_method(self, data: InstallMethodInput) -> MethodPackRecord:
@@ -534,12 +764,21 @@ class AgoraWorkspace:
 
     @_locked_mutation("scoped")
     def install_registry(self, data: InstallRegistryInput) -> RegistryRecord:
+        if (
+            not isinstance(data.signature_threshold, int)
+            or isinstance(data.signature_threshold, bool)
+            or data.signature_threshold < 0
+        ):
+            raise ValueError("Registry signature threshold must be a non-negative integer")
+        required_threshold = max(data.signature_threshold, 1 if data.require_signature else 0)
         source = Path(data.source).expanduser().resolve()
         if source.is_dir():
             if (
                 data.version
                 or data.public_key
                 or data.require_signature
+                or data.signature_threshold
+                or data.require_transparency
                 or data.allow_insecure_http
             ):
                 raise ValueError("Remote registry options cannot be used with a local directory")
@@ -551,9 +790,10 @@ class AgoraWorkspace:
             version=data.version,
             public_key=data.public_key,
             require_signature=data.require_signature,
+            signature_threshold=required_threshold,
             allow_insecure_http=data.allow_insecure_http,
             trusted_keys=self.list_registry_trust_keys(),
-        ) as (registry_root, index, release, signature_verified, archive):
+        ) as (registry_root, index, release, verified_key_ids, archive):
             if (registry_root / "SOURCE.md").exists() or (registry_root / "updates").exists():
                 raise ValueError(
                     "Remote registry archives must not contain installer-owned SOURCE.md or updates"
@@ -568,15 +808,35 @@ class AgoraWorkspace:
                     f"Registry archive version {registry.version or 'missing'} does not match "
                     f"release {release.version}"
                 )
+            destination_root = (
+                agora_home() if data.scope == "user" else self.project_root() / ".agora"
+            )
+            existing_source = destination_root / "registries" / registry.id / "SOURCE.md"
+            inherited_transparency = (
+                read_registry_source(existing_source).transparency_required
+                if existing_source.is_file()
+                else False
+            )
+            transparency_required = data.require_transparency or inherited_transparency
+            transparency_proof = None
+            if transparency_required:
+                transparency_proof = self._required_recorded_transparency_proof(release, data.scope)
             provenance = RegistrySourceRecord(
                 registry=registry.id,
                 version=release.version,
                 index=index.source,
                 archive=archive,
                 sha256=release.sha256,
-                signature_verified=signature_verified,
-                key_id=release.key_id if signature_verified else None,
+                signature_verified=bool(verified_key_ids),
+                key_id=verified_key_ids[0] if verified_key_ids else None,
                 installed_at=self._timestamp(),
+                verified_key_ids=verified_key_ids,
+                signature_threshold=(
+                    required_threshold if required_threshold > 0 else (1 if verified_key_ids else 0)
+                ),
+                transparency_required=transparency_required,
+                transparency_proof=transparency_proof,
+                release_archive=release.archive if transparency_required else None,
             )
             return self._install_registry_snapshot(
                 registry_root,
@@ -597,6 +857,15 @@ class AgoraWorkspace:
         registry = load_registry(source, scope)
         destination_root = agora_home() if scope == "user" else self.project_root() / ".agora"
         destination = destination_root / "registries" / registry.id
+        existing_source = destination / "SOURCE.md"
+        if existing_source.is_file():
+            existing = read_registry_source(existing_source)
+            if existing.transparency_required and (
+                provenance is None or not provenance.transparency_required
+            ):
+                raise ValueError(
+                    "Registry replacement cannot lower the persisted transparency requirement"
+                )
         if destination.exists() and not force:
             raise FileExistsError(
                 f"Registry already exists: {destination}. Pass --force to replace its files."
@@ -639,13 +908,33 @@ class AgoraWorkspace:
         current, scope = self._installed_registry_for_update(data.id, data.scope)
         if current.source is None or current.version is None or current.checksum is None:
             raise ValueError(f"Registry is not a remotely installed release: {data.id}")
-        signature_required = current.signature_verified or data.require_signature
+        provenance = read_registry_source(Path(current.path) / "SOURCE.md")
+        requested_threshold = (
+            provenance.signature_threshold
+            if data.signature_threshold is None
+            else data.signature_threshold
+        )
+        if (
+            not isinstance(requested_threshold, int)
+            or isinstance(requested_threshold, bool)
+            or requested_threshold < 0
+        ):
+            raise ValueError("Registry signature threshold must be a non-negative integer")
+        requested_threshold = max(requested_threshold, 1 if data.require_signature else 0)
+        if requested_threshold < provenance.signature_threshold:
+            raise ValueError(
+                "Registry update cannot lower the persisted signature threshold from "
+                f"{provenance.signature_threshold} to {requested_threshold}"
+            )
+        signature_required = requested_threshold > 0
+        transparency_required = provenance.transparency_required or data.require_transparency
         trusted_keys = self.list_registry_trust_keys()
-        index, release, signature_verified = inspect_registry_release(
+        index, release, verified_key_ids = inspect_registry_release(
             current.source,
             version=data.version,
             public_key=data.public_key,
             require_signature=signature_required,
+            signature_threshold=requested_threshold,
             allow_insecure_http=data.allow_insecure_http,
             trusted_keys=trusted_keys,
         )
@@ -662,6 +951,9 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Registry release {current.id}@{current.version} changed checksum in its index"
                 )
+            transparency_proof = None
+            if transparency_required:
+                transparency_proof = self._required_recorded_transparency_proof(release, scope)
             return RegistryUpdateResult(
                 registry=current.id,
                 scope=scope,
@@ -671,8 +963,12 @@ class AgoraWorkspace:
                 applied=False,
                 index=index.source,
                 checksum=release.sha256,
-                signature_verified=signature_verified,
+                signature_verified=bool(verified_key_ids),
+                transparency_verified=transparency_proof is not None,
             )
+        transparency_proof = None
+        if transparency_required:
+            transparency_proof = self._required_recorded_transparency_proof(release, scope)
         preview = RegistryUpdateResult(
             registry=current.id,
             scope=scope,
@@ -682,7 +978,8 @@ class AgoraWorkspace:
             applied=False,
             index=index.source,
             checksum=release.sha256,
-            signature_verified=signature_verified,
+            signature_verified=bool(verified_key_ids),
+            transparency_verified=transparency_proof is not None,
         )
         if not data.apply:
             return preview
@@ -691,11 +988,16 @@ class AgoraWorkspace:
             version=release.version,
             public_key=data.public_key,
             require_signature=signature_required,
+            signature_threshold=requested_threshold,
             allow_insecure_http=data.allow_insecure_http,
             trusted_keys=trusted_keys,
-        ) as (registry_root, applied_index, applied_release, applied_signature, archive):
+        ) as (registry_root, applied_index, applied_release, applied_key_ids, archive):
             if applied_release != release:
                 raise RuntimeError("Registry index changed while applying the selected release")
+            if transparency_required:
+                reapplied_proof = self._required_recorded_transparency_proof(applied_release, scope)
+                if reapplied_proof != transparency_proof:
+                    raise RuntimeError("Registry transparency proof changed while applying update")
             if (registry_root / "SOURCE.md").exists() or (registry_root / "updates").exists():
                 raise ValueError(
                     "Remote registry archives must not contain installer-owned SOURCE.md or updates"
@@ -719,9 +1021,13 @@ class AgoraWorkspace:
                 from_sha256=current.checksum,
                 to_sha256=release.sha256,
                 index=applied_index.source,
-                signature_verified=applied_signature,
+                signature_verified=bool(applied_key_ids),
                 applied_at=applied_at,
                 path=str(record_path),
+                verified_key_ids=applied_key_ids,
+                signature_threshold=requested_threshold,
+                transparency_verified=transparency_required,
+                transparency_proof=transparency_proof,
             )
             provenance = RegistrySourceRecord(
                 registry=current.id,
@@ -729,9 +1035,14 @@ class AgoraWorkspace:
                 index=applied_index.source,
                 archive=archive,
                 sha256=release.sha256,
-                signature_verified=applied_signature,
-                key_id=release.key_id if applied_signature else None,
+                signature_verified=bool(applied_key_ids),
+                key_id=applied_key_ids[0] if applied_key_ids else None,
                 installed_at=applied_at,
+                verified_key_ids=applied_key_ids,
+                signature_threshold=requested_threshold,
+                transparency_required=transparency_required,
+                transparency_proof=transparency_proof,
+                release_archive=release.archive if transparency_required else None,
             )
             self._install_registry_snapshot(
                 registry_root,
@@ -749,9 +1060,62 @@ class AgoraWorkspace:
             applied=True,
             index=applied_index.source,
             checksum=release.sha256,
-            signature_verified=applied_signature,
+            signature_verified=bool(applied_key_ids),
+            transparency_verified=transparency_required,
             record_path=str(record_path),
         )
+
+    def audit_registry_updates(self, data: AuditRegistryUpdatesInput) -> RegistryUpdateAuditRecord:
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported registry update audit scope: {data.scope}")
+        candidates = [
+            item
+            for item in self.list_registries()
+            if item.scope == data.scope and item.source is not None
+        ]
+        entries: list[RegistryUpdateAuditEntry] = []
+        for registry in candidates:
+            result = self.update_registry(
+                UpdateRegistryInput(
+                    id=registry.id,
+                    scope=data.scope,
+                    allow_insecure_http=data.allow_insecure_http,
+                )
+            )
+            entries.append(
+                RegistryUpdateAuditEntry(
+                    registry=result.registry,
+                    scope=result.scope,
+                    from_version=result.from_version,
+                    to_version=result.to_version,
+                    update_available=result.update_available,
+                    signature_verified=result.signature_verified,
+                )
+            )
+        audit_id = self._now().astimezone(UTC).strftime("audit-%Y%m%dt%H%M%S%fz")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        path = root / "notifications" / "registry-updates" / audit_id / "AUDIT.md"
+        record = RegistryUpdateAuditRecord(
+            id=audit_id,
+            scope=data.scope,
+            checked_at=self._timestamp(),
+            entries=entries,
+            path=str(path) if data.record else None,
+        )
+        if not data.record:
+            return record
+        return self._record_registry_update_audit(data, record)
+
+    @_locked_mutation("scoped")
+    def _record_registry_update_audit(
+        self, data: AuditRegistryUpdatesInput, record: RegistryUpdateAuditRecord
+    ) -> RegistryUpdateAuditRecord:
+        assert record.path is not None
+        path = Path(record.path)
+        if path.exists():
+            raise FileExistsError(f"Registry update audit already exists: {path}")
+        atomic_write(path, render_registry_update_audit(record))
+        return read_registry_update_audit(path)
 
     @_locked_mutation("scoped")
     def add_registry_trust_key(self, data: AddRegistryTrustKeyInput) -> RegistryTrustKeyRecord:
@@ -816,6 +1180,459 @@ class AgoraWorkspace:
         )
         atomic_write(path, render_trust_key(revoked))
         return load_trust_key(path, data.scope)
+
+    @_locked_mutation("scoped")
+    def add_transparency_trust_key(
+        self, data: AddTransparencyTrustKeyInput
+    ) -> TransparencyTrustKeyRecord:
+        assert_slug(data.id, "Transparency trust key id")
+        assert_slug(data.log, "Transparency log id")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        destination = root / "trust" / "transparency" / f"{data.id}.md"
+        if destination.exists():
+            raise FileExistsError(
+                f"Transparency trust key already exists: {destination}. Rotate with a new key id."
+            )
+        record = transparency_key_from_pem(
+            id_=data.id,
+            log=data.log,
+            public_key_path=Path(data.public_key).expanduser().resolve(),
+            scope=data.scope,
+            path=destination,
+            created_at=self._timestamp(),
+        )
+        atomic_write(destination, render_transparency_key(record))
+        return load_transparency_key(destination, data.scope)
+
+    def list_transparency_trust_keys(
+        self, log: str | None = None
+    ) -> list[TransparencyTrustKeyRecord]:
+        if log is not None:
+            assert_slug(log, "Transparency log id")
+        records: list[TransparencyTrustKeyRecord] = []
+        project = self._optional_project_root()
+        if project is not None:
+            records.extend(
+                self._transparency_keys_at(project / ".agora" / "trust" / "transparency", "project")
+            )
+        records.extend(self._transparency_keys_at(agora_home() / "trust" / "transparency", "user"))
+        return [item for item in records if log is None or item.log == log]
+
+    @_locked_mutation("scoped")
+    def revoke_transparency_trust_key(
+        self, data: RevokeTransparencyTrustKeyInput
+    ) -> TransparencyTrustKeyRecord:
+        assert_slug(data.id, "Transparency trust key id")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        path = root / "trust" / "transparency" / f"{data.id}.md"
+        if not path.is_file():
+            raise FileNotFoundError(f"Transparency trust key not found: {path}")
+        record = load_transparency_key(path, data.scope)
+        if data.replaced_by is not None:
+            assert_slug(data.replaced_by, "Replacement transparency trust key id")
+            replacement_path = path.with_name(f"{data.replaced_by}.md")
+            if not replacement_path.is_file():
+                raise FileNotFoundError(
+                    f"Replacement transparency trust key not found: {replacement_path}"
+                )
+            replacement = load_transparency_key(replacement_path, data.scope)
+            if replacement.log != record.log or replacement.status != "active":
+                raise ValueError(
+                    "Replacement transparency trust key must be active for the same log"
+                )
+        revoked = revoke_transparency_key(
+            record,
+            revoked_at=self._timestamp(),
+            reason=data.reason,
+            replaced_by=data.replaced_by,
+        )
+        atomic_write(path, render_transparency_key(revoked))
+        return load_transparency_key(path, data.scope)
+
+    @_locked_mutation("scoped")
+    def verify_transparency_inclusion(
+        self, data: VerifyTransparencyProofInput
+    ) -> TransparencyVerificationResult:
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported transparency proof scope: {data.scope}")
+        source = Path(data.source).expanduser().resolve()
+        proof = load_transparency_proof(source)
+        key = next(
+            (key for key in self.list_transparency_trust_keys() if key.id == proof.key_id),
+            None,
+        )
+        if key is None:
+            raise ValueError(
+                f"Trusted transparency key not found: {proof.key_id} for log {proof.log}"
+            )
+        if key.status != "active":
+            raise ValueError(f"Transparency trust key is revoked: {proof.key_id}")
+        verify_transparency_proof(proof, key)
+        path: Path | None = None
+        if data.record:
+            root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+            path = root / "transparency" / proof.log / proof.registry / proof.version / "PROOF.md"
+            if path.exists():
+                raise FileExistsError(f"Transparency proof already recorded: {path}")
+            persisted = replace(proof, path=str(path))
+            atomic_write(path, render_transparency_proof(persisted))
+            verify_transparency_proof(load_transparency_proof(path), key)
+        return TransparencyVerificationResult(
+            log=proof.log,
+            registry=proof.registry,
+            version=proof.version,
+            tree_size=proof.tree_size,
+            leaf_index=proof.leaf_index,
+            root_sha256=proof.root_sha256,
+            key_id=proof.key_id,
+            signature_verified=True,
+            inclusion_verified=True,
+            recorded=data.record,
+            path=str(path) if path is not None else None,
+        )
+
+    def _required_recorded_transparency_proof(
+        self, release: RegistryReleaseRecord, scope: str
+    ) -> str:
+        root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        candidates = sorted(
+            (root / "transparency").glob(f"*/{release.registry}/{release.version}/PROOF.md")
+        )
+        if not candidates:
+            raise FileNotFoundError(
+                "Required recorded transparency proof not found for "
+                f"{release.registry}@{release.version}"
+            )
+        errors: list[str] = []
+        for path in candidates:
+            try:
+                proof = load_transparency_proof(path)
+                require_proof_matches_release(proof, release)
+                key = next(
+                    (key for key in self.list_transparency_trust_keys() if key.id == proof.key_id),
+                    None,
+                )
+                if key is None:
+                    raise ValueError(f"Transparency trust key not found: {proof.key_id}")
+                if key.status != "active":
+                    raise ValueError(f"Transparency trust key is revoked: {proof.key_id}")
+                verify_transparency_proof(proof, key)
+                return path.relative_to(root).as_posix()
+            except Exception as error:
+                errors.append(str(error))
+        raise ValueError(
+            f"No valid recorded transparency proof for {release.registry}@{release.version}: "
+            + "; ".join(errors)
+        )
+
+    @_locked_mutation("scoped")
+    def add_organization_trust_root(
+        self, data: AddOrganizationTrustRootInput
+    ) -> OrganizationTrustRootRecord:
+        assert_slug(data.id, "Organization trust id")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        destination = root / "trust" / "organizations" / data.id / "ROOT.md"
+        if destination.exists():
+            raise FileExistsError(f"Organization trust root already exists: {destination}")
+        record = organization_trust_root_from_pem(
+            id_=data.id,
+            public_key_path=Path(data.public_key).expanduser().resolve(),
+            scope=data.scope,
+            path=destination,
+            created_at=self._timestamp(),
+        )
+        atomic_write(destination, render_organization_trust_root(record))
+        return load_organization_trust_root(destination, data.scope)
+
+    def get_organization_trust_root(self, id_: str, scope: str) -> OrganizationTrustRootRecord:
+        assert_slug(id_, "Organization trust id")
+        root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        path = root / "trust" / "organizations" / id_ / "ROOT.md"
+        if not path.is_file():
+            raise FileNotFoundError(f"Organization trust root not found: {path}")
+        return load_organization_trust_root(path, scope)
+
+    @_locked_mutation("scoped")
+    def rotate_organization_trust_root(
+        self, data: RotateOrganizationTrustRootInput
+    ) -> OrganizationTrustRootRotationResult:
+        root_record = self.get_organization_trust_root(data.id, data.scope)
+        contents, resolved_source = read_organization_trust_source(
+            data.source, allow_insecure_http=data.allow_insecure_http
+        )
+        scope_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        organization_root = scope_root / "trust" / "organizations" / data.id
+        rotation_paths = sorted((organization_root / "rotations").glob("*.md"))
+        previous = (
+            load_organization_trust_root_rotation(
+                rotation_paths[-1].read_bytes(), scope=data.scope, path=str(rotation_paths[-1])
+            )
+            if rotation_paths
+            else None
+        )
+        rotation = load_organization_trust_root_rotation(contents, scope=data.scope)
+        expected_rotation = 1 if previous is None else previous.rotation + 1
+        expected_previous = None if previous is None else previous.sha256
+        if rotation.organization != data.id:
+            raise ValueError(
+                f"Organization trust root rotation belongs to {rotation.organization}, "
+                f"expected {data.id}"
+            )
+        if rotation.rotation != expected_rotation:
+            raise ValueError(
+                f"Organization trust root rotation must be {expected_rotation}, "
+                f"got {rotation.rotation}"
+            )
+        if rotation.previous_rotation_sha256 != expected_previous:
+            raise ValueError("Organization trust root rotation does not continue its history")
+        if (
+            rotation.from_public_key != root_record.public_key
+            or rotation.from_fingerprint != root_record.fingerprint
+        ):
+            raise ValueError("Organization trust root rotation does not start at the active root")
+        if (
+            rotation.bundle_sequence != root_record.last_sequence
+            or rotation.bundle_sha256 != root_record.last_sha256
+        ):
+            raise ValueError(
+                "Organization trust root rotation does not bind the current feed state"
+            )
+
+        history_path = organization_root / "rotations" / f"{rotation.rotation:020d}.md"
+        result = OrganizationTrustRootRotationResult(
+            organization=data.id,
+            scope=data.scope,
+            rotation=rotation.rotation,
+            from_fingerprint=rotation.from_fingerprint,
+            to_fingerprint=rotation.to_fingerprint,
+            bundle_sequence=rotation.bundle_sequence,
+            sha256=rotation.sha256,
+            signature_verified=True,
+            applied=data.apply,
+            source=resolved_source,
+            history_path=str(history_path) if data.apply else None,
+        )
+        if not data.apply:
+            return result
+        if history_path.exists():
+            raise FileExistsError(
+                f"Organization trust root rotation already exists: {history_path}"
+            )
+
+        trust_root = scope_root / "trust"
+        with tempfile.TemporaryDirectory(prefix=".trust-stage-", dir=scope_root) as temporary:
+            staged = Path(temporary) / "trust"
+            copy_template_tree(trust_root, staged, {}, False)
+            staged_organization = staged / "organizations" / data.id
+            staged_history = staged_organization / "rotations" / history_path.name
+            atomic_write(staged_history, contents.decode("utf-8"))
+            updated_root = replace(
+                root_record,
+                public_key=rotation.to_public_key,
+                fingerprint=rotation.to_fingerprint,
+                created_at=rotation.rotated_at,
+            )
+            atomic_write(
+                staged_organization / "ROOT.md", render_organization_trust_root(updated_root)
+            )
+            backup = scope_root / ".trust-backup"
+            if backup.exists():
+                raise FileExistsError(f"Organization trust backup already exists: {backup}")
+            trust_root.replace(backup)
+            try:
+                staged.replace(trust_root)
+            except Exception:
+                backup.replace(trust_root)
+                raise
+            shutil.rmtree(backup)
+        return result
+
+    @_locked_mutation("scoped")
+    def sync_organization_trust(
+        self, data: SyncOrganizationTrustInput
+    ) -> OrganizationTrustSyncResult:
+        root_record = self.get_organization_trust_root(data.id, data.scope)
+        source = data.source or root_record.source
+        if source is None:
+            raise ValueError("First organization trust sync requires --source")
+        contents, resolved_source = read_organization_trust_source(
+            source, allow_insecure_http=data.allow_insecure_http
+        )
+        sequence, previous_sha256, incoming, checksum, _ = load_organization_trust_bundle(
+            contents, root=root_record
+        )
+        expected_sequence = root_record.last_sequence + 1
+        if sequence != expected_sequence:
+            raise ValueError(
+                f"Organization trust bundle sequence must be {expected_sequence}, got {sequence}"
+            )
+        if previous_sha256 != root_record.last_sha256:
+            raise ValueError("Organization trust bundle does not continue the applied history")
+
+        scope_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        keys_root = scope_root / "trust" / "keys"
+        existing = {item.id: item for item in self._trust_keys_at(keys_root, data.scope)}
+        projected = dict(existing)
+        steps: list[OrganizationTrustSyncStep] = []
+        for item in incoming:
+            path = keys_root / f"{item.id}.md"
+            candidate = replace(item, path=str(path))
+            current = existing.get(item.id)
+            action = self._organization_trust_action(current, candidate)
+            steps.append(
+                OrganizationTrustSyncStep(
+                    id=item.id,
+                    registry=item.registry,
+                    action=action,
+                )
+            )
+            if action != "unchanged":
+                projected[item.id] = candidate
+        for item in projected.values():
+            if item.replaced_by is None:
+                continue
+            replacement = projected.get(item.replaced_by)
+            if replacement is None:
+                raise ValueError(
+                    f"Organization trust replacement key does not exist: {item.replaced_by}"
+                )
+            if replacement.registry != item.registry or replacement.status != "active":
+                raise ValueError(
+                    "Organization trust replacement key must be active for the same registry"
+                )
+
+        history_path = (
+            scope_root / "trust" / "organizations" / data.id / "history" / f"{sequence:020d}.md"
+        )
+        result = OrganizationTrustSyncResult(
+            organization=data.id,
+            scope=data.scope,
+            sequence=sequence,
+            sha256=checksum,
+            signature_verified=True,
+            applied=data.apply,
+            source=resolved_source,
+            steps=steps,
+            history_path=str(history_path) if data.apply else None,
+        )
+        if not data.apply:
+            return result
+        if history_path.exists():
+            raise FileExistsError(f"Organization trust history already exists: {history_path}")
+        self._apply_organization_trust_sync(
+            scope_root=scope_root,
+            root_record=root_record,
+            resolved_source=resolved_source,
+            sequence=sequence,
+            checksum=checksum,
+            contents=contents,
+            incoming=incoming,
+            steps=steps,
+        )
+        return result
+
+    @staticmethod
+    def _organization_trust_action(
+        current: RegistryTrustKeyRecord | None, incoming: RegistryTrustKeyRecord
+    ) -> str:
+        if current is None:
+            return "add"
+        immutable_current = (
+            current.registry,
+            current.algorithm,
+            current.public_key,
+            current.fingerprint,
+            current.created_at,
+        )
+        immutable_incoming = (
+            incoming.registry,
+            incoming.algorithm,
+            incoming.public_key,
+            incoming.fingerprint,
+            incoming.created_at,
+        )
+        if immutable_current != immutable_incoming:
+            raise ValueError(f"Organization trust bundle attempts to redefine key {incoming.id}")
+        if current.status == "revoked" and incoming.status == "active":
+            raise PermissionError(
+                f"Organization trust bundle attempts to reactivate revoked key {incoming.id}"
+            )
+        if current.status == "active" and incoming.status == "revoked":
+            return "revoke"
+        revocation_current = (
+            current.revoked_at,
+            current.revoked_reason,
+            current.replaced_by,
+        )
+        revocation_incoming = (
+            incoming.revoked_at,
+            incoming.revoked_reason,
+            incoming.replaced_by,
+        )
+        if revocation_current != revocation_incoming:
+            raise ValueError(
+                f"Organization trust bundle attempts to rewrite key {incoming.id} history"
+            )
+        return "unchanged"
+
+    @staticmethod
+    def _apply_organization_trust_sync(
+        *,
+        scope_root: Path,
+        root_record: OrganizationTrustRootRecord,
+        resolved_source: str,
+        sequence: int,
+        checksum: str,
+        contents: bytes,
+        incoming: list[RegistryTrustKeyRecord],
+        steps: list[OrganizationTrustSyncStep],
+    ) -> None:
+        trust_root = scope_root / "trust"
+        scope_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".trust-stage-", dir=scope_root) as temporary:
+            staged = Path(temporary) / "trust"
+            if trust_root.exists():
+                copy_template_tree(trust_root, staged, {}, False)
+            else:
+                staged.mkdir(parents=True)
+            staged_keys = staged / "keys"
+            for item, step in zip(incoming, steps, strict=True):
+                if step.action == "unchanged":
+                    continue
+                staged_path = staged_keys / f"{item.id}.md"
+                atomic_write(staged_path, render_trust_key(replace(item, path=str(staged_path))))
+            organization_root = staged / "organizations" / root_record.id
+            history_path = organization_root / "history" / f"{sequence:020d}.md"
+            if history_path.exists():
+                raise FileExistsError(f"Organization trust history already exists: {history_path}")
+            try:
+                history_contents = contents.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError("Organization trust bundle must be UTF-8") from error
+            atomic_write(history_path, history_contents)
+            updated_root = advance_organization_trust_root(
+                root_record,
+                source=resolved_source,
+                sequence=sequence,
+                checksum=checksum,
+            )
+            atomic_write(
+                organization_root / "ROOT.md", render_organization_trust_root(updated_root)
+            )
+            backup = scope_root / ".trust-backup"
+            if backup.exists():
+                raise FileExistsError(f"Organization trust backup already exists: {backup}")
+            replaced = trust_root.exists()
+            if replaced:
+                trust_root.replace(backup)
+            try:
+                staged.replace(trust_root)
+            except Exception:
+                if replaced:
+                    backup.replace(trust_root)
+                raise
+            if replaced:
+                shutil.rmtree(backup)
 
     def list_registries(self) -> list[RegistryRecord]:
         records = [bundled_registry()]
@@ -974,6 +1791,7 @@ class AgoraWorkspace:
                     from_version=existing.version if existing is not None else None,
                     to_version=pack.version,
                     registry=pack.registry,
+                    registry_scope=pack.registry_scope,
                     sha256=pack_tree_sha256(Path(pack.path)),
                 )
             )
@@ -1007,6 +1825,194 @@ class AgoraWorkspace:
         return PackUpdateResult(
             **{**result.__dict__, "applied": True, "history_paths": history_paths}
         )
+
+    def audit_pack_updates(self, data: AuditPackUpdatesInput) -> PackUpdateAuditRecord:
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported pack update audit scope: {data.scope}")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        installed = self._installed_pack_contracts(data.scope)
+        entries: list[PackUpdateAuditEntry] = []
+        for (kind, pack_id), _ in sorted(installed.items()):
+            source_path = root / f"{kind}s" / pack_id / "SOURCE.md"
+            if not source_path.is_file():
+                continue
+            source = read_pack_source(source_path)
+            result = self.update_catalog_pack(
+                UpdateCatalogPackInput(
+                    kind=kind,  # type: ignore[arg-type]
+                    pack_id=pack_id,
+                    scope=data.scope,
+                )
+            )
+            entries.append(
+                PackUpdateAuditEntry(
+                    kind=kind,  # type: ignore[arg-type]
+                    id=pack_id,
+                    scope=data.scope,
+                    registry=source.registry,
+                    registry_scope=source.registry_scope,
+                    from_version=result.from_version,
+                    to_version=result.to_version,
+                    update_available=result.update_available,
+                    modified=result.modified,
+                    current_sha256=pack_tree_sha256(root / f"{kind}s" / pack_id),
+                    plan_sha256=pack_update_plan_sha256(result.packs),
+                )
+            )
+        audit_id = self._now().astimezone(UTC).strftime("audit-%Y%m%dt%H%M%S%fz")
+        path = root / "notifications" / "pack-updates" / audit_id / "AUDIT.md"
+        record = PackUpdateAuditRecord(
+            id=audit_id,
+            scope=data.scope,
+            checked_at=self._timestamp(),
+            entries=entries,
+            path=str(path) if data.record else None,
+        )
+        if not data.record:
+            return record
+        return self._record_pack_update_audit(data, record)
+
+    @_locked_mutation("scoped")
+    def _record_pack_update_audit(
+        self, data: AuditPackUpdatesInput, record: PackUpdateAuditRecord
+    ) -> PackUpdateAuditRecord:
+        assert record.path is not None
+        path = Path(record.path)
+        if path.exists():
+            raise FileExistsError(f"Pack update audit already exists: {path}")
+        atomic_write(path, render_pack_update_audit(record))
+        return read_pack_update_audit(path)
+
+    @_locked_mutation("pack-update")
+    def apply_pack_update_audit(
+        self, data: ApplyPackUpdateAuditInput
+    ) -> PackUpdateAuditApplicationRecord:
+        assert_slug(data.id, "Pack update audit id")
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported pack update audit scope: {data.scope}")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        audit_path = root / "notifications" / "pack-updates" / data.id / "AUDIT.md"
+        if not audit_path.is_file():
+            raise FileNotFoundError(f"Pack update audit not found: {audit_path}")
+        application_path = audit_path.with_name("APPLICATION.md")
+        if application_path.exists():
+            raise FileExistsError(f"Pack update audit was already applied: {application_path}")
+        audit = read_pack_update_audit(audit_path)
+        if audit.scope != data.scope or audit.id != data.id:
+            raise ValueError("Pack update audit identity does not match the requested application")
+        audit_sha256 = hashlib.sha256(audit_path.read_bytes()).hexdigest()
+
+        installed = self._installed_pack_contracts(data.scope)
+        managed = {
+            key for key in installed if (root / f"{key[0]}s" / key[1] / "SOURCE.md").is_file()
+        }
+        audited = {(item.kind, item.id) for item in audit.entries}
+        if managed != audited:
+            raise ValueError("Installed catalog pack set changed after the audit")
+
+        merged_plan: list[CatalogPackRecord] = []
+        planned: dict[tuple[str, str], CatalogPackRecord] = {}
+        merged_steps: list[PackUpdateStep] = []
+        step_keys: set[tuple[str, str]] = set()
+        for entry in audit.entries:
+            current, _ = self._installed_pack_for_update(entry.kind, entry.id, data.scope)
+            assert current.source is not None
+            if current.source.registry_scope != entry.registry_scope:
+                raise ValueError(f"Pack update audit is stale for {entry.kind}/{entry.id}")
+            result = self.update_catalog_pack(
+                UpdateCatalogPackInput(
+                    kind=entry.kind,
+                    pack_id=entry.id,
+                    scope=data.scope,
+                    registry_id=entry.registry,
+                )
+            )
+            current_sha256 = pack_tree_sha256(root / f"{entry.kind}s" / entry.id)
+            actual = (
+                result.from_version,
+                result.to_version,
+                result.update_available,
+                result.modified,
+                current_sha256,
+                pack_update_plan_sha256(result.packs),
+            )
+            expected = (
+                entry.from_version,
+                entry.to_version,
+                entry.update_available,
+                entry.modified,
+                entry.current_sha256,
+                entry.plan_sha256,
+            )
+            if actual != expected:
+                raise ValueError(f"Pack update audit is stale for {entry.kind}/{entry.id}")
+            if entry.modified and not data.force:
+                raise ValueError(
+                    f"Pack update audit contains local modifications for {entry.kind}/{entry.id}; "
+                    "pass --force after reviewing their replacement"
+                )
+            if not entry.update_available:
+                continue
+
+            matches = [
+                item
+                for item in self.search_catalog(entry.kind, registry_id=entry.registry)
+                if item.id == entry.id
+                and item.version == entry.to_version
+                and item.registry_scope == entry.registry_scope
+            ]
+            if not matches:
+                raise FileNotFoundError(
+                    f"Audited catalog target not found: {entry.kind}/{entry.id}@{entry.to_version}"
+                )
+            selected = matches[0]
+            for pack in self._resolve_catalog_install(selected, data.scope, True):
+                key = (pack.kind, pack.id)
+                existing = planned.get(key)
+                if existing is not None:
+                    if existing.version != pack.version or pack_tree_sha256(
+                        Path(existing.path)
+                    ) != pack_tree_sha256(Path(pack.path)):
+                        raise ValueError(f"Audited pack plans conflict for {pack.kind}/{pack.id}")
+                    continue
+                planned[key] = pack
+                merged_plan.append(pack)
+            for step in result.packs:
+                key = (step.kind, step.id)
+                if key not in step_keys:
+                    merged_steps.append(step)
+                    step_keys.add(key)
+
+        if not merged_plan:
+            raise ValueError("Pack update audit contains no applicable updates")
+        prospective = dict(installed)
+        for pack in merged_plan:
+            prospective[(pack.kind, pack.id)] = self._catalog_pack_contract(pack)
+        issues = self._pack_composition_issues(prospective)
+        if issues:
+            raise ValueError(issues[0][1])
+
+        applied_at = self._timestamp()
+        update_id = self._now().astimezone(UTC).strftime("update-%Y%m%dt%H%M%S%fz")
+        _, history_paths = self._apply_catalog_plan(
+            merged_plan,
+            data.scope,
+            update_id=update_id,
+            applied_at=applied_at,
+        )
+        self._write_pack_lock(data.scope)
+        record = PackUpdateAuditApplicationRecord(
+            id=data.id,
+            scope=data.scope,
+            audit_sha256=audit_sha256,
+            applied_at=applied_at,
+            force=data.force,
+            packs=merged_steps,
+            history_paths=[str(Path(path).relative_to(root)) for path in history_paths],
+            path=str(application_path),
+        )
+        atomic_write(application_path, render_pack_update_audit_application(record))
+        return read_pack_update_audit_application(application_path)
 
     @_locked_mutation("pack-update")
     def remove_pack(self, data: RemovePackInput) -> PackRemovalResult:
@@ -1629,6 +2635,14 @@ class AgoraWorkspace:
             raise ValueError(f"Unsupported actor kind: {data.kind}")
         if data.integration is not None:
             self._assert_integration(data.integration)
+        if data.require_authentication and data.public_key is None:
+            raise ValueError("An actor requiring authentication must declare --public-key")
+        authentication_public_key: str | None = None
+        authentication_fingerprint: str | None = None
+        if data.public_key is not None:
+            authentication_public_key, authentication_fingerprint = actor_identity_from_pem(
+                Path(data.public_key).expanduser().resolve()
+            )
         root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
         if data.represented_swarm is not None:
             assert_slug(data.represented_swarm, "Represented swarm id")
@@ -1638,6 +2652,20 @@ class AgoraWorkspace:
                 raise ValueError("A represented swarm actor must use project scope")
             self._load_swarm(self.project_root(), data.represented_swarm)
         path = root / "actors" / f"{data.id}.md"
+        if path.exists() and data.force:
+            existing = self._find_actor(self.project_root(), f"{data.scope}:{data.id}")
+            if (
+                existing.authentication_fingerprint is not None
+                or authentication_fingerprint is not None
+            ):
+                raise ValueError(
+                    "Actor authentication identity cannot be replaced with --force; "
+                    "use `agora actor key rotate`"
+                )
+        if authentication_fingerprint is not None:
+            pending_key_path = path.with_suffix("") / "keys" / f"{authentication_fingerprint}.md"
+            if pending_key_path.exists() and not data.force:
+                raise FileExistsError(f"Actor key already exists: {pending_key_path}")
         capabilities = sorted(set(data.capabilities))
         description = data.description or (
             "Describe this actor's operating context and constraints."
@@ -1659,6 +2687,11 @@ class AgoraWorkspace:
             attributes["model"] = data.model
         if data.represented_swarm is not None:
             attributes["represented-swarm"] = data.represented_swarm
+        attributes["authentication-required"] = data.require_authentication
+        if authentication_public_key is not None:
+            attributes["authentication-algorithm"] = "ed25519"
+            attributes["authentication-public-key"] = authentication_public_key
+            attributes["authentication-fingerprint"] = authentication_fingerprint
         write_new(
             path,
             render_markdown(
@@ -1669,7 +2702,7 @@ class AgoraWorkspace:
             ),
             data.force,
         )
-        return ActorRecord(
+        record = ActorRecord(
             id=data.id,
             name=data.name,
             kind=data.kind,
@@ -1680,16 +2713,333 @@ class AgoraWorkspace:
             provider=data.provider,
             model=data.model,
             represented_swarm=data.represented_swarm,
+            authentication_required=data.require_authentication,
+            authentication_algorithm="ed25519" if authentication_public_key else None,
+            authentication_public_key=authentication_public_key,
+            authentication_fingerprint=authentication_fingerprint,
         )
+        if authentication_fingerprint is not None:
+            key_path = self._actor_key_root(record) / f"{authentication_fingerprint}.md"
+            key = actor_key_from_actor(record, key_path, attributes["created-at"])
+            write_new(key_path, render_actor_key(key), data.force)
+        return record
+
+    @_locked_mutation("actor-runtime")
+    def rotate_actor_key(self, data: RotateActorKeyInput) -> ActorKeyRecord:
+        if not data.reason.strip():
+            raise ValueError("Actor key rotation reason cannot be empty")
+        root = self.project_root()
+        actor = self._find_actor(root, data.actor_id)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key to rotate")
+        if actor.authentication_required:
+            action = (
+                "actor.key.recover"
+                if actor.authentication_revoked_at is not None
+                else "actor.key.rotate"
+            )
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                f"prepare {action} before replacing its key"
+            )
+        current = self._ensure_current_actor_key(actor)
+        created_at = self._timestamp()
+        replacement = actor_key_from_pem(
+            actor.reference,
+            Path(data.public_key).expanduser().resolve(),
+            self._actor_key_root(actor),
+            created_at,
+        )
+        self._validate_actor_key_replacement(current, replacement)
+        return self._apply_actor_key_rotation(root, actor, current, replacement, data.reason)
+
+    @_locked_mutation("project")
+    def prepare_actor_key_rotation(
+        self, data: PrepareActorKeyRotationInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if not data.rotation.reason.strip():
+            raise ValueError("Actor key rotation reason cannot be empty")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(
+            root, swarm, data.rotation.actor_id, "actor.key.rotate"
+        )
+        assert_actor_identity_available(actor)
+        current = self._ensure_current_actor_key(actor)
+        replacement = actor_key_from_pem(
+            actor.reference,
+            Path(data.rotation.public_key).expanduser().resolve(),
+            self._actor_key_root(actor),
+            self._timestamp(),
+        )
+        self._validate_actor_key_replacement(current, replacement)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="actor.key.rotate",
+            actor=actor,
+            swarm=swarm,
+            work=None,
+            parameters={
+                "from": current.fingerprint,
+                "public-key": replacement.public_key,
+                "fingerprint": replacement.fingerprint,
+                "reason": data.rotation.reason.strip(),
+            },
+        )
+
+    @_locked_mutation("project")
+    def prepare_actor_key_revocation(
+        self, data: PrepareActorKeyRevocationInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if not data.reason.strip():
+            raise ValueError("Actor key revocation reason cannot be empty")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        authorizer, target, current = self._validate_actor_key_administrator(
+            root,
+            swarm,
+            target_actor_id=data.target_actor_id,
+            authorized_by=data.authorized_by,
+            action="actor.key.revoke",
+            target_must_be_revoked=False,
+        )
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="actor.key.revoke",
+            actor=authorizer,
+            swarm=swarm,
+            work=None,
+            parameters={
+                "target": target.reference,
+                "fingerprint": current.fingerprint,
+                "reason": data.reason.strip(),
+            },
+        )
+
+    @_locked_mutation("project")
+    def prepare_actor_key_recovery(
+        self, data: PrepareActorKeyRecoveryInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if not data.reason.strip():
+            raise ValueError("Actor key recovery reason cannot be empty")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        authorizer, target, current = self._validate_actor_key_administrator(
+            root,
+            swarm,
+            target_actor_id=data.target_actor_id,
+            authorized_by=data.authorized_by,
+            action="actor.key.recover",
+            target_must_be_revoked=True,
+        )
+        replacement = actor_key_from_pem(
+            target.reference,
+            Path(data.public_key).expanduser().resolve(),
+            self._actor_key_root(target),
+            self._timestamp(),
+        )
+        self._validate_actor_key_replacement(current, replacement)
+        if replacement.fingerprint == authorizer.authentication_fingerprint:
+            raise ValueError("Recovery key must differ from the governance authorizer key")
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="actor.key.recover",
+            actor=authorizer,
+            swarm=swarm,
+            work=None,
+            parameters={
+                "target": target.reference,
+                "from": current.fingerprint,
+                "public-key": replacement.public_key,
+                "fingerprint": replacement.fingerprint,
+                "reason": data.reason.strip(),
+            },
+        )
+
+    def _validate_actor_key_administrator(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        *,
+        target_actor_id: str,
+        authorized_by: str,
+        action: str,
+        target_must_be_revoked: bool,
+    ) -> tuple[ActorRecord, ActorRecord, ActorKeyRecord]:
+        authorizer = self._require_actor_for_action(root, swarm, authorized_by, action)
+        if not authorizer.authentication_required:
+            raise PermissionError(
+                f"Actor key administrator {authorizer.reference} must require authentication"
+            )
+        assert_actor_identity_available(authorizer)
+        self._assert_current_actor_key(authorizer)
+        target = self._find_actor(root, target_actor_id)
+        if target.reference not in swarm.assignments.values():
+            raise ValueError(f"Actor {target.reference} is not assigned to swarm {swarm.id}")
+        if target.reference == authorizer.reference:
+            raise PermissionError("An actor cannot administer its own key revocation or recovery")
+        if target.authentication_fingerprint is None:
+            raise ValueError(f"Actor {target.reference} has no authentication key")
+        if target.authentication_fingerprint == authorizer.authentication_fingerprint:
+            raise PermissionError(
+                "Actor key administrator must use a distinct cryptographic identity"
+            )
+        is_revoked = target.authentication_revoked_at is not None
+        if is_revoked != target_must_be_revoked:
+            expected = "revoked" if target_must_be_revoked else "active"
+            raise ValueError(f"Actor authentication key must be {expected}: {target.reference}")
+        return authorizer, target, self._ensure_current_actor_key(target)
+
+    @staticmethod
+    def _validate_actor_key_replacement(
+        current: ActorKeyRecord, replacement: ActorKeyRecord
+    ) -> None:
+        if replacement.fingerprint == current.fingerprint:
+            raise ValueError("Replacement actor key must differ from the current key")
+        if Path(replacement.path).exists():
+            raise ValueError(f"Actor key fingerprint was already used: {replacement.fingerprint}")
+
+    def _apply_actor_key_rotation(
+        self,
+        root: Path,
+        actor: ActorRecord,
+        current: ActorKeyRecord,
+        replacement: ActorKeyRecord,
+        reason: str,
+    ) -> ActorKeyRecord:
+        created_at = replacement.created_at
+        if current.status == "active":
+            previous = end_actor_key(
+                current,
+                status="rotated",
+                ended_at=created_at,
+                reason=reason,
+                replaced_by=replacement.fingerprint,
+            )
+        else:
+            previous = link_actor_key_replacement(current, replacement.fingerprint)
+
+        write_new(Path(replacement.path), render_actor_key(replacement))
+        atomic_write(Path(previous.path), render_actor_key(previous))
+        actor_path = Path(actor.path)
+        document = read_markdown(actor_path)
+        document.attributes.update(
+            {
+                "authentication-algorithm": "ed25519",
+                "authentication-public-key": replacement.public_key,
+                "authentication-fingerprint": replacement.fingerprint,
+                "authentication-updated-at": created_at,
+            }
+        )
+        document.attributes.pop("authentication-revoked-at", None)
+        document.attributes.pop("authentication-revoked-reason", None)
+        atomic_write(actor_path, render_markdown(document))
+        self._append_actor_event(
+            root,
+            actor,
+            "actor.key-rotated",
+            f"from={current.fingerprint} to={replacement.fingerprint}",
+        )
+        return replacement
+
+    @_locked_mutation("actor-runtime")
+    def revoke_actor_key(self, data: RevokeActorKeyInput) -> ActorKeyRecord:
+        if not data.reason.strip():
+            raise ValueError("Actor key revocation reason cannot be empty")
+        root = self.project_root()
+        actor = self._find_actor(root, data.actor_id)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key to revoke")
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare actor.key.revoke through a distinct governance actor"
+            )
+        if actor.authentication_revoked_at is not None:
+            raise ValueError(f"Actor authentication key is already revoked: {actor.reference}")
+        current = self._ensure_current_actor_key(actor)
+        return self._apply_actor_key_revocation(root, actor, current, data.reason)
+
+    def _apply_actor_key_revocation(
+        self,
+        root: Path,
+        actor: ActorRecord,
+        current: ActorKeyRecord,
+        reason: str,
+    ) -> ActorKeyRecord:
+        revoked_at = self._timestamp()
+        revoked = end_actor_key(
+            current,
+            status="revoked",
+            ended_at=revoked_at,
+            reason=reason,
+        )
+        atomic_write(Path(revoked.path), render_actor_key(revoked))
+        actor_path = Path(actor.path)
+        document = read_markdown(actor_path)
+        document.attributes["authentication-revoked-at"] = revoked_at
+        document.attributes["authentication-revoked-reason"] = reason.strip()
+        atomic_write(actor_path, render_markdown(document))
+        self._append_actor_event(
+            root,
+            actor,
+            "actor.key-revoked",
+            f"fingerprint={revoked.fingerprint}",
+        )
+        return revoked
+
+    def list_actor_keys(self, actor_id: str) -> list[ActorKeyRecord]:
+        actor = self._find_actor(self.project_root(), actor_id)
+        records = [load_actor_key(path) for path in self._actor_key_root(actor).glob("*.md")]
+        return sorted(records, key=lambda record: (record.created_at, record.fingerprint))
 
     @_locked_mutation("actor-runtime")
     def set_actor_runtime(self, data: SetActorRuntimeInput) -> ActorRecord:
         root = self.project_root()
+        actor = self._validate_actor_runtime(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare actor.runtime.update before changing its runtime"
+            )
+        return self._apply_actor_runtime(root, actor, data)
+
+    @_locked_mutation("project")
+    def prepare_actor_runtime(self, data: PrepareActorRuntimeInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._validate_actor_runtime(root, data.runtime)
+        actor = self._require_actor_for_action(root, swarm, actor.reference, "actor.runtime.update")
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="actor.runtime.update",
+            actor=actor,
+            swarm=swarm,
+            work=None,
+            parameters=self._actor_runtime_parameters(data.runtime),
+        )
+
+    def _validate_actor_runtime(self, root: Path, data: SetActorRuntimeInput) -> ActorRecord:
         actor = self._find_actor(root, data.actor_id)
         if not data.clear and not any((data.integration, data.provider, data.model)):
             raise ValueError("Provide an integration, provider, model, or --clear")
         if data.integration is not None:
             self._assert_integration(data.integration)
+        return actor
+
+    def _apply_actor_runtime(
+        self, root: Path, actor: ActorRecord, data: SetActorRuntimeInput
+    ) -> ActorRecord:
         path = Path(actor.path)
         document = read_markdown(path)
         if data.clear:
@@ -1716,6 +3066,15 @@ class AgoraWorkspace:
             f"- {self._timestamp()} | actor.runtime-updated | actor={actor.reference}",
         )
         return self._find_actor(root, actor.reference)
+
+    @staticmethod
+    def _actor_runtime_parameters(data: SetActorRuntimeInput) -> dict[str, str]:
+        return {
+            "integration": data.integration or "",
+            "provider": data.provider or "",
+            "model": data.model or "",
+            "clear": "true" if data.clear else "false",
+        }
 
     def list_actors(self, scope: str = "all") -> list[ActorRecord]:
         if scope not in {"all", "user", "project"}:
@@ -1771,15 +3130,58 @@ class AgoraWorkspace:
 
     @_locked_mutation("project")
     def assign_actor(self, data: AssignActorInput) -> SwarmRecord:
-        assert_slug(data.role_id, "Role id")
         root = self.project_root()
+        swarm, actor = self._validate_actor_assignment(root, data)
+        return self._apply_actor_assignment(root, swarm, actor, data.role_id)
+
+    @_locked_mutation("project")
+    def prepare_actor_assignment(self, data: PrepareActorAssignmentInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor = self._validate_actor_assignment(root, data.assignment)
+        authorizer = self._require_actor_for_action(root, swarm, data.authorized_by, "swarm.assign")
+        assert_actor_identity_available(authorizer)
+        self._assert_current_actor_key(authorizer)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="swarm.assign",
+            actor=authorizer,
+            swarm=swarm,
+            work=None,
+            parameters={
+                "role": data.assignment.role_id,
+                "target": actor.reference,
+            },
+        )
+
+    def _validate_actor_assignment(
+        self, root: Path, data: AssignActorInput
+    ) -> tuple[SwarmRecord, ActorRecord]:
+        assert_slug(data.role_id, "Role id")
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"forming", "ready"}:
             raise ValueError(f"Cannot change assignments while swarm {swarm.id} is {swarm.status}")
+        if data.role_id not in swarm.required_roles:
+            raise ValueError(f"Role {data.role_id} is not required by swarm {swarm.id}")
+        if data.role_id in swarm.assignments:
+            raise ValueError(
+                f"Role {data.role_id} is already assigned in swarm {swarm.id}; use a handoff"
+            )
         actor = self._find_actor(root, data.actor_id)
         self._assert_actor_role_compatibility(root, swarm.method, data.role_id, actor)
         self._assert_swarm_actor_delegation(root, swarm, data.role_id, actor)
-        swarm.assignments[data.role_id] = actor.reference
+        return swarm, actor
+
+    def _apply_actor_assignment(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        role_id: str,
+        action_id: str | None = None,
+    ) -> SwarmRecord:
+        swarm.assignments[role_id] = actor.reference
         swarm.status = (
             "ready"
             if all(role_id in swarm.assignments for role_id in swarm.required_roles)
@@ -1790,16 +3192,62 @@ class AgoraWorkspace:
             root,
             swarm.id,
             "swarm.actor-assigned",
-            f"role={data.role_id} actor={actor.reference}",
+            f"role={role_id} actor={actor.reference}"
+            + (f" action={action_id}" if action_id is not None else ""),
         )
         return swarm
 
     @_locked_mutation("project")
     def handoff_actor(self, data: HandoffActorInput) -> HandoffRecord:
+        root = self.project_root()
+        context = self._validate_handoff(root, data)
+        authorizer = context[3]
+        if authorizer.authentication_required:
+            raise PermissionError(
+                f"Actor {authorizer.reference} requires a signed lifecycle action; "
+                "prepare the handoff before applying it"
+            )
+        return self._apply_handoff(root, *context)
+
+    @_locked_mutation("project")
+    def prepare_handoff(self, data: HandoffActorInput) -> LifecycleActionRecord:
+        if data.id is None:
+            raise ValueError("Prepared handoff requires an explicit id")
+        root = self.project_root()
+        swarm, outgoing, incoming, authorizer, work, _, _, _, _ = self._validate_handoff(root, data)
+        assert_actor_identity_available(authorizer)
+        self._assert_current_actor_key(authorizer)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="handoff.create",
+            actor=authorizer,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "role": data.role_id,
+                "from": outgoing.reference,
+                "to": incoming.reference,
+                "reason": data.reason.strip(),
+            },
+        )
+
+    def _validate_handoff(
+        self, root: Path, data: HandoffActorInput
+    ) -> tuple[
+        SwarmRecord,
+        ActorRecord,
+        ActorRecord,
+        ActorRecord,
+        WorkRecord | None,
+        str,
+        str,
+        str,
+        Path,
+    ]:
         assert_slug(data.role_id, "Role id")
         if not data.reason.strip():
             raise ValueError("Handoff reason cannot be empty")
-        root = self.project_root()
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"ready", "running", "blocked"}:
             raise ValueError(
@@ -1819,6 +3267,21 @@ class AgoraWorkspace:
             raise ValueError("Handoff destination must differ from the current actor")
         self._assert_actor_role_compatibility(root, swarm.method, data.role_id, incoming)
         self._assert_swarm_actor_delegation(root, swarm, data.role_id, incoming)
+        active_approval_delegations = [
+            delegation.id
+            for work_path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
+            for delegation in self._load_approval_delegations(
+                self._load_work(swarm, work_path.parent.name)
+            )
+            if delegation.role_id == data.role_id
+            and delegation.from_actor == outgoing.reference
+            and delegation.status == "active"
+        ]
+        if active_approval_delegations:
+            raise ValueError(
+                f"Revoke or consume active Approval Delegations before handing off "
+                f"{data.role_id}: {', '.join(active_approval_delegations)}"
+            )
 
         authorizer = self._find_actor(root, data.authorized_by)
         authorizer_roles = self._actor_roles(swarm, authorizer.reference)
@@ -1843,23 +3306,48 @@ class AgoraWorkspace:
         handoff_path = Path(swarm.path) / "handoffs" / handoff_id / "HANDOFF.md"
         if handoff_path.exists():
             raise FileExistsError(f"Handoff already exists: {handoff_id}")
+        return (
+            swarm,
+            outgoing,
+            incoming,
+            authorizer,
+            work,
+            data.role_id,
+            data.reason.strip(),
+            handoff_id,
+            handoff_path,
+        )
+
+    def _apply_handoff(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        outgoing: ActorRecord,
+        incoming: ActorRecord,
+        authorizer: ActorRecord,
+        work: WorkRecord | None,
+        role_id: str,
+        reason: str,
+        handoff_id: str,
+        handoff_path: Path,
+    ) -> HandoffRecord:
         record = HandoffRecord(
             id=handoff_id,
             swarm_id=swarm.id,
-            role_id=data.role_id,
+            role_id=role_id,
             from_actor=outgoing.reference,
             to_actor=incoming.reference,
             authorized_by=authorizer.reference,
-            reason=data.reason.strip(),
+            reason=reason,
             work_id=work.id if work else None,
             created_at=self._timestamp(),
             path=str(handoff_path),
         )
         write_new(handoff_path, self._render_handoff(record))
-        swarm.assignments[data.role_id] = incoming.reference
+        swarm.assignments[role_id] = incoming.reference
         atomic_write(Path(swarm.path) / "SWARM.md", self._render_swarm(swarm))
         detail = (
-            f"handoff={handoff_id} role={data.role_id} from={outgoing.reference} "
+            f"handoff={handoff_id} role={role_id} from={outgoing.reference} "
             f"to={incoming.reference} by={authorizer.reference}"
         )
         self._append_swarm_event(root, swarm.id, "swarm.role-handed-off", detail)
@@ -1888,12 +3376,53 @@ class AgoraWorkspace:
 
     @_locked_mutation("project")
     def create_work(self, data: CreateWorkInput) -> WorkRecord:
-        assert_slug(data.id, "Work id")
         root = self.project_root()
+        context = self._validate_create_work(root, data)
+        actor = context[1]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare work.create before applying it"
+            )
+        return self._apply_create_work(data, context)
+
+    @_locked_mutation("project")
+    def prepare_create_work(self, data: PrepareCreateWorkInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, _, criteria, _ = self._validate_create_work(root, data.work)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="work.create",
+            actor=actor,
+            swarm=swarm,
+            work=None,
+            work_id=data.work.id,
+            parameters={
+                "title": data.work.title,
+                "description": data.work.description,
+                "acceptance-criteria": json.dumps(
+                    list(criteria.items()), ensure_ascii=True, separators=(",", ":")
+                ),
+                "required-artifacts": json.dumps(
+                    list(dict.fromkeys(data.work.required_artifacts)),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+    def _validate_create_work(
+        self, root: Path, data: CreateWorkInput, action: str = "work.create"
+    ) -> tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path]:
+        assert_slug(data.id, "Work id")
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"ready", "running"}:
             raise ValueError(f"Swarm {swarm.id} must be ready before work can be created")
-        actor = self._require_actor_for_action(root, swarm, data.actor_id, "work.create")
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
         criteria = dict(data.acceptance_criteria)
         if len(criteria) != len(data.acceptance_criteria):
@@ -1902,6 +3431,18 @@ class AgoraWorkspace:
             assert_slug(criterion_id, "Criterion id")
 
         path = Path(swarm.path) / "work" / data.id
+        if path.exists():
+            raise FileExistsError(f"Work already exists: {swarm.id}/{data.id}")
+        return swarm, actor, contract, criteria, path
+
+    def _apply_create_work(
+        self,
+        data: CreateWorkInput,
+        context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+        parent_work_ref: str | None = None,
+        budget_limits: dict[str, int] | None = None,
+    ) -> WorkRecord:
+        swarm, actor, contract, criteria, path = context
         work = WorkRecord(
             id=data.id,
             swarm_id=swarm.id,
@@ -1915,6 +3456,8 @@ class AgoraWorkspace:
             evidence_results=[],
             approval_roles=[],
             path=str(path),
+            budget_limits=budget_limits,
+            parent_work_ref=parent_work_ref,
         )
         write_new(path / "WORK.md", self._render_work(work))
         write_new(
@@ -1959,14 +3502,322 @@ class AgoraWorkspace:
         return work
 
     @_locked_mutation("project")
+    def decompose_work(self, data: DecomposeWorkInput) -> WorkRecord:
+        root = self.project_root()
+        parent, child, context = self._validate_decompose_work(root, data)
+        actor = context[1]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare work.decompose before applying it"
+            )
+        return self._apply_decompose_work(parent, child, context)
+
+    @_locked_mutation("project")
+    def prepare_decompose_work(self, data: PrepareDecomposeWorkInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        parent, child, context = self._validate_decompose_work(root, data.decomposition)
+        swarm, actor, _, criteria, _ = context
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="work.decompose",
+            actor=actor,
+            swarm=swarm,
+            work=parent,
+            parameters={
+                "child-work": child.id,
+                "title": child.title,
+                "description": child.description,
+                "acceptance-criteria": json.dumps(
+                    list(criteria.items()), ensure_ascii=True, separators=(",", ":")
+                ),
+                "required-artifacts": json.dumps(
+                    list(dict.fromkeys(child.required_artifacts)),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+    def _validate_decompose_work(
+        self, root: Path, data: DecomposeWorkInput
+    ) -> tuple[
+        WorkRecord,
+        CreateWorkInput,
+        tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ]:
+        if data.parent_work_id == data.child_work_id:
+            raise ValueError("Child work id must differ from its parent work id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        parent = self._load_work(swarm, data.parent_work_id)
+        self._assert_work_mutable(root, swarm, parent)
+        child = CreateWorkInput(
+            swarm_id=data.swarm_id,
+            id=data.child_work_id,
+            title=data.title,
+            actor_id=data.actor_id,
+            acceptance_criteria=data.acceptance_criteria,
+            required_artifacts=data.required_artifacts,
+            description=data.description,
+        )
+        context = self._validate_create_work(root, child, action="work.decompose")
+        return parent, child, context
+
+    def _apply_decompose_work(
+        self,
+        parent: WorkRecord,
+        child: CreateWorkInput,
+        context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ) -> WorkRecord:
+        swarm, actor, _, _, _ = context
+        parent_reference = f"{swarm.id}/{parent.id}"
+        child_reference = f"{swarm.id}/{child.id}"
+        result = self._apply_create_work(
+            child,
+            context,
+            parent_work_ref=parent_reference,
+            budget_limits={} if parent.budget_limits is not None else None,
+        )
+        parent.child_work_refs = list(dict.fromkeys([*parent.child_work_refs, child_reference]))
+        atomic_write(Path(parent.path) / "WORK.md", self._render_work(parent))
+        self._append_work_event(
+            parent,
+            "work.decomposed",
+            f"child={child_reference} actor={actor.reference}",
+        )
+        self._append_work_event(
+            result,
+            "work.decomposition-linked",
+            f"parent={parent_reference} actor={actor.reference}",
+        )
+        return result
+
+    @_locked_mutation("project")
+    def waive_gate(self, data: WaiveGateInput) -> GateWaiverRecord:
+        root = self.project_root()
+        waiver, swarm, actor, work = self._validate_gate_waiver(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare gate.waive before applying it"
+            )
+        return self._apply_gate_waiver(waiver, swarm, actor, work)
+
+    @_locked_mutation("project")
+    def prepare_gate_waiver(self, data: PrepareGateWaiverInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        waiver, swarm, actor, work = self._validate_gate_waiver(root, data.waiver)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="gate.waive",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "waiver": waiver.id,
+                "gate": waiver.gate_id,
+                "criteria": json.dumps(waiver.criteria, separators=(",", ":")),
+                "artifacts": json.dumps(waiver.artifacts, separators=(",", ":")),
+                "successful-evidence": str(waiver.successful_evidence).lower(),
+                "approvals": json.dumps(waiver.approval_roles, separators=(",", ":")),
+                "reason": waiver.reason,
+                "evidence": json.dumps(waiver.evidence_refs, separators=(",", ":")),
+            },
+        )
+
+    def _validate_gate_waiver(
+        self, root: Path, data: WaiveGateInput
+    ) -> tuple[WaiveGateInput, SwarmRecord, ActorRecord, WorkRecord]:
+        assert_slug(data.id, "Gate Waiver id")
+        assert_slug(data.gate_id, "Gate id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, "gate.waive")
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        gate = contract.gates.get(data.gate_id)
+        if gate is None:
+            raise ValueError(f"Method Pack {swarm.method} has no gate {data.gate_id}")
+
+        criteria = list(dict.fromkeys(data.criteria))
+        artifacts = list(dict.fromkeys(data.artifacts))
+        approvals = list(dict.fromkeys(data.approval_roles))
+        evidence_refs = list(
+            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+        )
+        for criterion in criteria:
+            assert_slug(criterion, "Waived criterion id")
+        for role in approvals:
+            assert_slug(role, "Waived approval role")
+        if not data.reason.strip():
+            raise ValueError("Gate Waiver reason cannot be empty")
+        if not evidence_refs:
+            raise ValueError("Gate Waiver requires at least one risk evidence reference")
+        if not (criteria or artifacts or data.successful_evidence or approvals):
+            raise ValueError("Gate Waiver must name at least one gate obligation")
+
+        coverage = self._gate_waiver_coverage(work, data.gate_id)
+        outstanding_criteria = {
+            item
+            for item in work.acceptance_criteria
+            if gate.require_all_criteria
+            and item not in work.satisfied_criteria
+            and item not in coverage[0]
+        }
+        outstanding_artifacts = {
+            item
+            for item in work.required_artifacts
+            if gate.require_required_artifacts
+            and item not in work.artifact_kinds
+            and item not in coverage[1]
+        }
+        evidence_outstanding = (
+            gate.require_successful_evidence
+            and "success" not in work.evidence_results
+            and not coverage[2]
+        )
+        outstanding_approvals = {
+            role
+            for role in gate.required_approval_roles
+            if role not in work.approval_roles and role not in coverage[3]
+        }
+        invalid_criteria = sorted(set(criteria) - outstanding_criteria)
+        invalid_artifacts = sorted(set(artifacts) - outstanding_artifacts)
+        invalid_approvals = sorted(set(approvals) - outstanding_approvals)
+        if invalid_criteria:
+            raise ValueError(
+                "Gate Waiver criteria are not outstanding gate obligations: "
+                + ", ".join(invalid_criteria)
+            )
+        if invalid_artifacts:
+            raise ValueError(
+                "Gate Waiver artifacts are not outstanding gate obligations: "
+                + ", ".join(invalid_artifacts)
+            )
+        if data.successful_evidence and not evidence_outstanding:
+            raise ValueError("Successful evidence is not an outstanding gate obligation")
+        if invalid_approvals:
+            raise ValueError(
+                "Gate Waiver approvals are not outstanding gate obligations: "
+                + ", ".join(invalid_approvals)
+            )
+        path = Path(work.path) / "waivers" / data.id
+        if path.exists():
+            raise FileExistsError(f"Gate Waiver already exists: {data.id}")
+        return (
+            WaiveGateInput(
+                id=data.id,
+                swarm_id=swarm.id,
+                work_id=work.id,
+                gate_id=data.gate_id,
+                actor_id=actor.reference,
+                reason=data.reason.strip(),
+                evidence_refs=evidence_refs,
+                criteria=criteria,
+                artifacts=artifacts,
+                successful_evidence=data.successful_evidence,
+                approval_roles=approvals,
+            ),
+            swarm,
+            actor,
+            work,
+        )
+
+    def _apply_gate_waiver(
+        self,
+        data: WaiveGateInput,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        action_id: str | None = None,
+    ) -> GateWaiverRecord:
+        waiver_root = Path(work.path) / "waivers" / data.id
+        record = GateWaiverRecord(
+            id=data.id,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            gate_id=data.gate_id,
+            waived_criteria=data.criteria,
+            waived_artifacts=data.artifacts,
+            waive_successful_evidence=data.successful_evidence,
+            waived_approval_roles=data.approval_roles,
+            reason=data.reason,
+            evidence_refs=data.evidence_refs,
+            authorized_by=actor.reference,
+            created_at=self._timestamp(),
+            path=str(waiver_root / "WAIVER.md"),
+            action_id=action_id,
+        )
+        write_new(waiver_root / "WAIVER.md", self._render_gate_waiver(record))
+        self._append_work_event(
+            work,
+            "gate.waived",
+            f"waiver={record.id} gate={record.gate_id} actor={actor.reference}",
+        )
+        return record
+
+    def list_gate_waivers(
+        self, swarm_id: str, work_id: str, gate_id: str | None = None
+    ) -> list[GateWaiverRecord]:
+        swarm = self._load_swarm(self.project_root(), swarm_id)
+        work = self._load_work(swarm, work_id)
+        records = self._load_gate_waivers(work)
+        return [record for record in records if gate_id is None or record.gate_id == gate_id]
+
+    @_locked_mutation("project")
     def satisfy_criterion(self, data: WorkActorInput, criterion_id: str) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_satisfy_criterion(root, data, criterion_id)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare criterion.satisfy before applying it"
+            )
+        return self._apply_satisfy_criterion(swarm, actor, work, criterion_id)
+
+    @_locked_mutation("project")
+    def prepare_satisfy_criterion(self, data: PrepareCriterionInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_satisfy_criterion(root, data, data.criterion_id)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="criterion.satisfy",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"criterion": data.criterion_id},
+        )
+
+    def _validate_satisfy_criterion(
+        self, root: Path, data: WorkActorInput, criterion_id: str
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "criterion.satisfy")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
         if criterion_id not in work.acceptance_criteria:
             raise FileNotFoundError(f"Acceptance criterion not found: {criterion_id}")
+        return swarm, actor, work
+
+    def _apply_satisfy_criterion(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        criterion_id: str,
+    ) -> WorkRecord:
         work.satisfied_criteria = list(dict.fromkeys([*work.satisfied_criteria, criterion_id]))
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
         self._append_work_event(
@@ -1979,10 +3830,47 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def add_artifact(self, data: AddArtifactInput) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_add_artifact(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare artifact.add before applying it"
+            )
+        return self._apply_add_artifact(swarm, actor, work, data)
+
+    @_locked_mutation("project")
+    def prepare_add_artifact(self, data: PrepareArtifactInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_add_artifact(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="artifact.add",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"kind": data.kind, "uri": data.uri},
+        )
+
+    def _validate_add_artifact(
+        self, root: Path, data: AddArtifactInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "artifact.add")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        return swarm, actor, work
+
+    def _apply_add_artifact(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        data: AddArtifactInput,
+    ) -> WorkRecord:
         self._record_artifact(work, data.kind, data.uri, actor.reference)
         return self._load_work(swarm, data.work_id)
 
@@ -2005,10 +3893,53 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def add_evidence(self, data: AddEvidenceInput) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_add_evidence(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare evidence.add before applying it"
+            )
+        return self._apply_add_evidence(swarm, actor, work, data)
+
+    @_locked_mutation("project")
+    def prepare_add_evidence(self, data: PrepareEvidenceInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_add_evidence(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="evidence.add",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "type": data.type,
+                "result": data.result,
+                "artifacts": json.dumps(
+                    data.artifact_refs, ensure_ascii=True, separators=(",", ":")
+                ),
+            },
+        )
+
+    def _validate_add_evidence(
+        self, root: Path, data: AddEvidenceInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "evidence.add")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        return swarm, actor, work
+
+    def _apply_add_evidence(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        data: AddEvidenceInput,
+    ) -> WorkRecord:
         self._record_evidence(
             work,
             data.type,
@@ -2020,7 +3951,7 @@ class AgoraWorkspace:
 
     def _record_evidence(
         self,
-        work: WorkRecord,
+        work: WorkRecord | None,
         type_: str,
         result: str,
         artifact_refs: list[str],
@@ -2043,38 +3974,1316 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
-    def add_approval(self, data: AddApprovalInput) -> WorkRecord:
-        assert_slug(data.role_id, "Approval role id")
+    def delegate_approval(self, data: DelegateApprovalInput) -> ApprovalDelegationRecord:
         root = self.project_root()
-        swarm = self._load_swarm(root, data.swarm_id)
-        actor = self._require_actor_for_action(root, swarm, data.actor_id, "approval.add")
-        roles = self._actor_roles(swarm, actor.reference)
-        if data.role_id not in roles:
+        delegation, swarm, actor, target, work = self._validate_delegate_approval(root, data)
+        if actor.authentication_required:
             raise PermissionError(
-                f"Actor {actor.reference} is not assigned to approval role {data.role_id}"
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare approval.delegate before applying it"
             )
+        return self._apply_delegate_approval(delegation, swarm, actor, target, work)
+
+    @_locked_mutation("project")
+    def prepare_approval_delegation(
+        self, data: PrepareApprovalDelegationInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        delegation, swarm, actor, target, work = self._validate_delegate_approval(
+            root, data.delegation
+        )
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="approval.delegate",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "delegation": delegation.id,
+                "role": delegation.role_id,
+                "target": target.reference,
+                "reason": delegation.reason,
+            },
+        )
+
+    def _validate_delegate_approval(
+        self, root: Path, data: DelegateApprovalInput
+    ) -> tuple[DelegateApprovalInput, SwarmRecord, ActorRecord, ActorRecord, WorkRecord]:
+        assert_slug(data.id, "Approval Delegation id")
+        assert_slug(data.role_id, "Approval role id")
+        if not data.reason.strip():
+            raise ValueError("Approval Delegation reason cannot be empty")
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, "approval.delegate")
+        if data.role_id not in self._actor_roles(swarm, actor.reference):
+            raise PermissionError(
+                f"Actor {actor.reference} is not assigned to delegated role {data.role_id}"
+            )
+        if not self._role_allows_action(root, swarm.method, data.role_id, "approval.add"):
+            raise PermissionError(f"Role {data.role_id} cannot issue work approvals")
+        target = self._find_actor(root, data.to_actor_id)
+        if target.reference == actor.reference:
+            raise ValueError("Approval Delegation target must differ from its grantor")
+        self._assert_represented_swarm_operational(root, target)
+        self._assert_actor_role_compatibility(root, swarm.method, data.role_id, target)
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        if data.role_id in work.approval_roles:
+            raise ValueError(f"Work already has approval for role {data.role_id}")
+        path = Path(work.path) / "approval-delegations" / data.id
+        if path.exists():
+            raise FileExistsError(f"Approval Delegation already exists: {data.id}")
+        active_for_role = [
+            item.id
+            for item in self._load_approval_delegations(work)
+            if item.role_id == data.role_id and item.status == "active"
+        ]
+        if active_for_role:
+            raise ValueError(
+                f"Work already has an active Approval Delegation for {data.role_id}: "
+                + ", ".join(active_for_role)
+            )
+        normalized = DelegateApprovalInput(
+            id=data.id,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            role_id=data.role_id,
+            actor_id=actor.reference,
+            to_actor_id=target.reference,
+            reason=data.reason.strip(),
+        )
+        return normalized, swarm, actor, target, work
+
+    def _apply_delegate_approval(
+        self,
+        data: DelegateApprovalInput,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        target: ActorRecord,
+        work: WorkRecord,
+        action_id: str | None = None,
+    ) -> ApprovalDelegationRecord:
+        path = Path(work.path) / "approval-delegations" / data.id / "DELEGATION.md"
+        record = ApprovalDelegationRecord(
+            id=data.id,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            role_id=data.role_id,
+            from_actor=actor.reference,
+            to_actor=target.reference,
+            reason=data.reason,
+            status="active",
+            created_at=self._timestamp(),
+            path=str(path),
+            action_id=action_id,
+        )
+        write_new(path, self._render_approval_delegation(record))
+        self._append_work_event(
+            work,
+            "approval.delegated",
+            f"delegation={record.id} role={record.role_id} "
+            f"from={record.from_actor} to={record.to_actor}",
+        )
+        return record
+
+    @_locked_mutation("project")
+    def revoke_approval_delegation(
+        self, data: RevokeApprovalDelegationInput
+    ) -> ApprovalDelegationRecord:
+        root = self.project_root()
+        delegation, swarm, actor, work = self._validate_revoke_approval_delegation(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare approval.delegation.revoke before applying it"
+            )
+        return self._apply_revoke_approval_delegation(delegation, actor, work, data.reason.strip())
+
+    @_locked_mutation("project")
+    def prepare_revoke_approval_delegation(
+        self, data: RevokeApprovalDelegationInput
+    ) -> LifecycleActionRecord:
+        if data.action_id is None:
+            raise ValueError("Approval Delegation revocation requires a Lifecycle Action id")
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        delegation, swarm, actor, work = self._validate_revoke_approval_delegation(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="approval.delegation.revoke",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"delegation": delegation.id, "reason": data.reason.strip()},
+        )
+
+    def _validate_revoke_approval_delegation(
+        self, root: Path, data: RevokeApprovalDelegationInput
+    ) -> tuple[ApprovalDelegationRecord, SwarmRecord, ActorRecord, WorkRecord]:
+        assert_slug(data.delegation_id, "Approval Delegation id")
+        if not data.reason.strip():
+            raise ValueError("Approval Delegation revocation reason cannot be empty")
+        swarm = self._load_swarm(root, data.swarm_id)
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        delegation = self._load_approval_delegation(work, data.delegation_id)
+        actor = self._require_actor_for_action(
+            root, swarm, data.actor_id, "approval.delegation.revoke"
+        )
+        if actor.reference != delegation.from_actor:
+            raise PermissionError("Only the Approval Delegation grantor may revoke it")
+        if delegation.status != "active":
+            raise ValueError(
+                f"Approval Delegation must be active before revocation: {delegation.id}"
+            )
+        return delegation, swarm, actor, work
+
+    def _apply_revoke_approval_delegation(
+        self,
+        delegation: ApprovalDelegationRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        reason: str,
+        action_id: str | None = None,
+    ) -> ApprovalDelegationRecord:
+        revoked = ApprovalDelegationRecord(
+            **{
+                **delegation.__dict__,
+                "status": "revoked",
+                "revoked_by": actor.reference,
+                "revoked_at": self._timestamp(),
+                "revoked_reason": reason,
+                "revocation_action_id": action_id,
+            }
+        )
+        atomic_write(Path(delegation.path), self._render_approval_delegation(revoked))
+        self._append_work_event(
+            work,
+            "approval-delegation.revoked",
+            f"delegation={delegation.id} actor={actor.reference}",
+        )
+        return revoked
+
+    def list_approval_delegations(
+        self, swarm_id: str, work_id: str, status: str | None = None
+    ) -> list[ApprovalDelegationRecord]:
+        swarm = self._load_swarm(self.project_root(), swarm_id)
+        work = self._load_work(swarm, work_id)
+        records = self._load_approval_delegations(work)
+        return [record for record in records if status is None or record.status == status]
+
+    @_locked_mutation("project")
+    def add_approval(self, data: AddApprovalInput) -> WorkRecord:
+        root = self.project_root()
+        swarm, actor, work, delegation = self._validate_approval(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare the approval before applying it"
+            )
+        return self._apply_approval(
+            swarm, actor, work, data.role_id, data.note, delegation=delegation
+        )
+
+    @_locked_mutation("project")
+    def prepare_approval(self, data: PrepareApprovalInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work, _ = self._validate_approval(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="approval.add",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "role": data.role_id,
+                "note": data.note,
+                "delegation": data.delegation_id or "",
+            },
+        )
+
+    def _validate_approval(
+        self, root: Path, data: AddApprovalInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, ApprovalDelegationRecord | None]:
+        assert_slug(data.role_id, "Approval role id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        if data.delegation_id is None:
+            active_for_role = [
+                item.id
+                for item in self._load_approval_delegations(work)
+                if item.role_id == data.role_id and item.status == "active"
+            ]
+            if active_for_role:
+                raise ValueError(
+                    "Revoke the active Approval Delegation before direct approval: "
+                    + ", ".join(active_for_role)
+                )
+            actor = self._require_actor_for_action(root, swarm, data.actor_id, "approval.add")
+            roles = self._actor_roles(swarm, actor.reference)
+            if data.role_id not in roles:
+                raise PermissionError(
+                    f"Actor {actor.reference} is not assigned to approval role {data.role_id}"
+                )
+            return swarm, actor, work, None
+
+        assert_slug(data.delegation_id, "Approval Delegation id")
+        actor = self._find_actor(root, data.actor_id)
+        self._assert_represented_swarm_operational(root, actor)
+        delegation = self._load_approval_delegation(work, data.delegation_id)
+        if delegation.status != "active":
+            raise ValueError(f"Approval Delegation is not active: {delegation.id}")
+        if delegation.to_actor != actor.reference:
+            raise PermissionError(
+                f"Approval Delegation {delegation.id} belongs to {delegation.to_actor}"
+            )
+        if delegation.role_id != data.role_id:
+            raise ValueError(
+                f"Approval Delegation {delegation.id} is for role {delegation.role_id}"
+            )
+        if data.role_id in work.approval_roles:
+            raise ValueError(f"Work already has approval for role {data.role_id}")
+        if not self._role_allows_action(root, swarm.method, data.role_id, "approval.add"):
+            raise PermissionError(f"Delegated role {data.role_id} can no longer issue approvals")
+        self._assert_actor_role_compatibility(root, swarm.method, data.role_id, actor)
+        return swarm, actor, work, delegation
+
+    def _apply_approval(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        role_id: str,
+        note_value: str,
+        delegation: ApprovalDelegationRecord | None = None,
+        action_id: str | None = None,
+    ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
+        original = path.read_text(encoding="utf-8")
         approval_roles = strings_attribute(document.attributes, "approval-roles")
-        document.attributes["approval-roles"] = list(dict.fromkeys([*approval_roles, data.role_id]))
-        note = data.note.replace("|", "\\|") or "Approved"
+        document.attributes["approval-roles"] = list(dict.fromkeys([*approval_roles, role_id]))
+        note = note_value.replace("|", "\\|") or "Approved"
+        authority = (
+            f"{actor.reference} via approval-delegation:{delegation.id}"
+            if delegation is not None
+            else actor.reference
+        )
         document.body = (
-            f"{document.body.rstrip()}\n| {data.role_id} | {actor.reference} | {note} | "
-            f"{self._timestamp()} |"
+            f"{document.body.rstrip()}\n| {role_id} | {authority} | {note} | {self._timestamp()} |"
         )
         atomic_write(path, render_markdown(document))
+        if delegation is not None:
+            used = ApprovalDelegationRecord(
+                **{
+                    **delegation.__dict__,
+                    "status": "used",
+                    "used_by": actor.reference,
+                    "used_at": self._timestamp(),
+                    "used_action_id": action_id,
+                }
+            )
+            try:
+                atomic_write(Path(delegation.path), self._render_approval_delegation(used))
+            except Exception:
+                atomic_write(path, original)
+                raise
         self._append_work_event(
             work,
             "approval.added",
-            f"role={data.role_id} actor={actor.reference}",
+            f"role={role_id} actor={actor.reference} "
+            f"delegation={delegation.id if delegation is not None else 'none'}",
         )
-        return self._load_work(swarm, data.work_id)
+        return self._load_work(swarm, work.id)
 
     @_locked_mutation("project")
     def transition_work(self, data: TransitionWorkInput) -> WorkRecord:
         root = self.project_root()
+        swarm, actor, work = self._validate_work_transition(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare the transition before applying it"
+            )
+        return self._apply_work_transition(root, swarm, actor, work, data.target_state)
+
+    @_locked_mutation("project")
+    def prepare_work_transition(self, data: PrepareWorkTransitionInput) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work = self._validate_work_transition(root, data)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="work.transition",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"to": data.target_state},
+        )
+
+    def _prepare_lifecycle_action(
+        self,
+        root: Path,
+        *,
+        id_: str,
+        action: str,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord | None,
+        parameters: dict[str, str],
+        work_id: str | None = None,
+    ) -> LifecycleActionRecord:
+        action_root = root / ".agora" / "actions" / id_
+        if action_root.exists():
+            raise FileExistsError(f"Lifecycle Action already exists: {id_}")
+        record = LifecycleActionRecord(
+            id=id_,
+            action=action,
+            actor=actor.reference,
+            swarm_id=swarm.id,
+            work_id=work.id if work is not None else work_id,
+            parameters=parameters,
+            precondition_sha256=self._lifecycle_precondition_sha256(
+                root, action, actor, swarm, work, parameters
+            ),
+            status="prepared",
+            path=str(action_root),
+            created_at=self._timestamp(),
+        )
+        write_new(action_root / "ACTION.md", self._render_lifecycle_action(record))
+        append_entry(
+            root / ".agora" / "events.md",
+            (
+                f"- {self._timestamp()} | lifecycle-action.prepared | action={record.id} "
+                f"kind={record.action} actor={record.actor} swarm={record.swarm_id} "
+                f"work={record.work_id}"
+            ),
+        )
+        return record
+
+    def prepare_lifecycle_authorization(
+        self, data: PrepareLifecycleAuthorizationInput
+    ) -> LifecycleAuthorizationRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        record = self._load_lifecycle_action(root / ".agora" / "actions" / data.action_id)
+        if record.status != "prepared":
+            raise ValueError(f"Lifecycle Action must be prepared for authorization: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        self._assert_lifecycle_precondition(root, record)
+        payload = lifecycle_authorization_payload(record)
+        output = Path(data.output).expanduser().resolve()
+        write_new(output, payload.decode("ascii"), data.force)
+        return LifecycleAuthorizationRecord(
+            action_id=record.id,
+            actor=actor.reference,
+            algorithm="ed25519",
+            fingerprint=actor.authentication_fingerprint,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            path=str(output),
+        )
+
+    @_locked_mutation("lifecycle-action")
+    def apply_lifecycle_action(self, data: ApplyLifecycleActionInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        record = self._load_lifecycle_action(root / ".agora" / "actions" / data.action_id)
+        if record.status != "prepared":
+            raise ValueError(f"Lifecycle Action must be prepared before apply: {record.id}")
+        self._assert_lifecycle_precondition(root, record)
+        handoff_context: (
+            tuple[
+                SwarmRecord,
+                ActorRecord,
+                ActorRecord,
+                ActorRecord,
+                WorkRecord | None,
+                str,
+                str,
+                str,
+                Path,
+            ]
+            | None
+        ) = None
+        work_status_context: (
+            tuple[
+                ChangeWorkStatusInput,
+                str,
+                SwarmRecord,
+                ActorRecord,
+                WorkRecord,
+                str,
+            ]
+            | None
+        ) = None
+        delegation_status_context: (
+            tuple[
+                ChangeDelegationStatusInput,
+                str,
+                str | None,
+                tuple[
+                    DelegationRecord,
+                    SwarmRecord,
+                    ActorRecord,
+                    SwarmRecord,
+                    WorkRecord,
+                    str,
+                ],
+            ]
+            | None
+        ) = None
+        delegation_create_context: (
+            tuple[
+                CreateDelegationInput,
+                tuple[
+                    SwarmRecord,
+                    WorkRecord,
+                    ActorRecord,
+                    ActorRecord,
+                    SwarmRecord,
+                    dict[str, str],
+                    str,
+                    Path,
+                ],
+            ]
+            | None
+        ) = None
+        delegation_accept_context: (
+            tuple[
+                PrepareDelegationActionInput,
+                tuple[DelegationRecord, SwarmRecord, WorkRecord, SwarmRecord, ActorRecord],
+            ]
+            | None
+        ) = None
+        delegation_collect_context: (
+            tuple[
+                PrepareDelegationActionInput,
+                tuple[
+                    DelegationRecord,
+                    SwarmRecord,
+                    ActorRecord,
+                    SwarmRecord,
+                    WorkRecord,
+                    WorkRecord,
+                    str,
+                ],
+            ]
+            | None
+        ) = None
+        work_create_context: (
+            tuple[
+                CreateWorkInput,
+                tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+            ]
+            | None
+        ) = None
+        work_decompose_context: (
+            tuple[
+                WorkRecord,
+                CreateWorkInput,
+                tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+            ]
+            | None
+        ) = None
+        gate_waiver_context: tuple[WaiveGateInput, SwarmRecord, ActorRecord, WorkRecord] | None = (
+            None
+        )
+        criterion_context: (
+            tuple[PrepareCriterionInput, SwarmRecord, ActorRecord, WorkRecord] | None
+        ) = None
+        artifact_context: (
+            tuple[PrepareArtifactInput, SwarmRecord, ActorRecord, WorkRecord] | None
+        ) = None
+        evidence_context: (
+            tuple[PrepareEvidenceInput, SwarmRecord, ActorRecord, WorkRecord] | None
+        ) = None
+        approval_context: (
+            tuple[
+                AddApprovalInput,
+                SwarmRecord,
+                ActorRecord,
+                WorkRecord,
+                ApprovalDelegationRecord | None,
+            ]
+            | None
+        ) = None
+        approval_delegation_context: (
+            tuple[
+                DelegateApprovalInput,
+                SwarmRecord,
+                ActorRecord,
+                ActorRecord,
+                WorkRecord,
+            ]
+            | None
+        ) = None
+        approval_delegation_revocation_context: (
+            tuple[ApprovalDelegationRecord, SwarmRecord, ActorRecord, WorkRecord, str] | None
+        ) = None
+        actor_key_rotation_context: (
+            tuple[ActorRecord, ActorKeyRecord, ActorKeyRecord, str] | None
+        ) = None
+        actor_key_revocation_context: tuple[ActorRecord, ActorKeyRecord, str] | None = None
+        actor_key_recovery_context: (
+            tuple[ActorRecord, ActorKeyRecord, ActorKeyRecord, str] | None
+        ) = None
+        actor_runtime_context: tuple[SetActorRuntimeInput, ActorRecord] | None = None
+        actor_assignment_context: tuple[SwarmRecord, ActorRecord, str] | None = None
+        session_preparation_context: (
+            tuple[
+                StartSessionInput,
+                tuple[
+                    ProjectConfiguration,
+                    SwarmRecord,
+                    ActorRecord,
+                    list[str],
+                    WorkRecord | None,
+                    Integration,
+                    str,
+                    str,
+                    list[str],
+                    bool,
+                    str,
+                    Path,
+                    str,
+                ],
+            ]
+            | None
+        ) = None
+        if record.action == "swarm.assign":
+            assignment = AssignActorInput(
+                swarm_id=record.swarm_id,
+                role_id=record.parameters["role"],
+                actor_id=record.parameters["target"],
+            )
+            swarm, target = self._validate_actor_assignment(root, assignment)
+            actor = self._require_actor_for_action(root, swarm, record.actor, "swarm.assign")
+            work = None
+            actor_assignment_context = (swarm, target, assignment.role_id)
+        elif record.action in {"actor.key.recover", "actor.key.revoke"}:
+            swarm = self._load_swarm(root, record.swarm_id)
+            actor, target, current = self._validate_actor_key_administrator(
+                root,
+                swarm,
+                target_actor_id=record.parameters["target"],
+                authorized_by=record.actor,
+                action=record.action,
+                target_must_be_revoked=record.action == "actor.key.recover",
+            )
+            expected_fingerprint = record.parameters.get(
+                "from", record.parameters.get("fingerprint")
+            )
+            if current.fingerprint != expected_fingerprint:
+                raise ValueError(f"Lifecycle Action target actor key is not canonical: {record.id}")
+            work = None
+            if record.action == "actor.key.revoke":
+                actor_key_revocation_context = (
+                    target,
+                    current,
+                    record.parameters["reason"],
+                )
+            else:
+                replacement = actor_key_from_public_key(
+                    target.reference,
+                    record.parameters["public-key"],
+                    self._actor_key_root(target),
+                    self._timestamp(),
+                )
+                if replacement.fingerprint != record.parameters["fingerprint"]:
+                    raise ValueError(f"Lifecycle Action recovery key is not canonical: {record.id}")
+                self._validate_actor_key_replacement(current, replacement)
+                if replacement.fingerprint == actor.authentication_fingerprint:
+                    raise ValueError("Recovery key must differ from the governance authorizer key")
+                actor_key_recovery_context = (
+                    target,
+                    current,
+                    replacement,
+                    record.parameters["reason"],
+                )
+        elif record.action == "actor.key.rotate":
+            swarm = self._load_swarm(root, record.swarm_id)
+            actor = self._require_actor_for_action(root, swarm, record.actor, "actor.key.rotate")
+            assert_actor_identity_available(actor)
+            current = self._ensure_current_actor_key(actor)
+            if current.fingerprint != record.parameters["from"]:
+                raise ValueError(
+                    f"Lifecycle Action current actor key is not canonical: {record.id}"
+                )
+            replacement = actor_key_from_public_key(
+                actor.reference,
+                record.parameters["public-key"],
+                self._actor_key_root(actor),
+                self._timestamp(),
+            )
+            if replacement.fingerprint != record.parameters["fingerprint"]:
+                raise ValueError(
+                    f"Lifecycle Action replacement actor key is not canonical: {record.id}"
+                )
+            self._validate_actor_key_replacement(current, replacement)
+            work = None
+            actor_key_rotation_context = (
+                actor,
+                current,
+                replacement,
+                record.parameters["reason"],
+            )
+        elif record.action == "actor.runtime.update":
+            runtime = SetActorRuntimeInput(
+                actor_id=record.actor,
+                integration=(
+                    self._integration(record.parameters["integration"])
+                    if record.parameters["integration"]
+                    else None
+                ),
+                provider=record.parameters["provider"] or None,
+                model=record.parameters["model"] or None,
+                clear=record.parameters["clear"] == "true",
+            )
+            swarm = self._load_swarm(root, record.swarm_id)
+            actor = self._validate_actor_runtime(root, runtime)
+            actor = self._require_actor_for_action(
+                root, swarm, actor.reference, "actor.runtime.update"
+            )
+            work = None
+            actor_runtime_context = (runtime, actor)
+        elif record.action == "session.prepare":
+            session = StartSessionInput(
+                id=record.parameters["session"],
+                actor_id=record.actor,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                runner=record.parameters["runner"] or None,
+            )
+            context = self._validate_session_preparation(root, session)
+            _, swarm, actor, _, work, _, _, _, _, _, session_id, _, _ = context
+            if session_id != record.parameters["session"]:
+                raise ValueError(f"Lifecycle Action session context is not canonical: {record.id}")
+            session_preparation_context = (session, context)
+        elif record.action == "work.create":
+            creation = self._work_creation_input_from_action(record)
+            context = self._validate_create_work(root, creation)
+            swarm, actor, _, _, _ = context
+            work = None
+            if record.swarm_id != swarm.id or record.work_id != creation.id:
+                raise ValueError(f"Lifecycle Action work context is not canonical: {record.id}")
+            work_create_context = (creation, context)
+        elif record.action == "work.decompose":
+            decomposition = self._work_decomposition_input_from_action(record)
+            parent, child, context = self._validate_decompose_work(root, decomposition)
+            swarm, actor, _, _, _ = context
+            work = parent
+            if record.swarm_id != swarm.id or record.work_id != parent.id:
+                raise ValueError(
+                    f"Lifecycle Action decomposition context is not canonical: {record.id}"
+                )
+            work_decompose_context = (parent, child, context)
+        elif record.action == "gate.waive":
+            waiver = self._gate_waiver_input_from_action(record)
+            waiver, swarm, actor, work = self._validate_gate_waiver(root, waiver)
+            gate_waiver_context = (waiver, swarm, actor, work)
+        elif record.action == "criterion.satisfy":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no criterion work: {record.id}")
+            criterion = PrepareCriterionInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                criterion_id=record.parameters["criterion"],
+            )
+            swarm, actor, work = self._validate_satisfy_criterion(
+                root, criterion, criterion.criterion_id
+            )
+            criterion_context = (criterion, swarm, actor, work)
+        elif record.action == "artifact.add":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no artifact work: {record.id}")
+            artifact = PrepareArtifactInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                kind=record.parameters["kind"],
+                uri=record.parameters["uri"],
+            )
+            swarm, actor, work = self._validate_add_artifact(root, artifact)
+            artifact_context = (artifact, swarm, actor, work)
+        elif record.action == "evidence.add":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no evidence work: {record.id}")
+            evidence = PrepareEvidenceInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                type=record.parameters["type"],
+                result=record.parameters["result"],
+                artifact_refs=self._string_list_parameter(record, "artifacts"),
+            )
+            swarm, actor, work = self._validate_add_evidence(root, evidence)
+            evidence_context = (evidence, swarm, actor, work)
+        elif record.action == "approval.delegate":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no Approval Delegation work: {record.id}")
+            delegation_input = DelegateApprovalInput(
+                id=record.parameters["delegation"],
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                role_id=record.parameters["role"],
+                actor_id=record.actor,
+                to_actor_id=record.parameters["target"],
+                reason=record.parameters["reason"],
+            )
+            delegation_input, swarm, actor, target, work = self._validate_delegate_approval(
+                root, delegation_input
+            )
+            approval_delegation_context = (
+                delegation_input,
+                swarm,
+                actor,
+                target,
+                work,
+            )
+        elif record.action == "approval.delegation.revoke":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no Approval Delegation work: {record.id}")
+            revocation = RevokeApprovalDelegationInput(
+                delegation_id=record.parameters["delegation"],
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                reason=record.parameters["reason"],
+                action_id=record.id,
+            )
+            delegation, swarm, actor, work = self._validate_revoke_approval_delegation(
+                root, revocation
+            )
+            approval_delegation_revocation_context = (
+                delegation,
+                swarm,
+                actor,
+                work,
+                revocation.reason,
+            )
+        elif record.action == "work.transition":
+            if set(record.parameters) != {"to"}:
+                raise ValueError(f"Lifecycle Action has invalid transition parameters: {record.id}")
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no transition work: {record.id}")
+            transition = TransitionWorkInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                target_state=record.parameters["to"],
+            )
+            swarm, actor, work = self._validate_work_transition(root, transition)
+        elif record.action == "approval.add":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no approval work: {record.id}")
+            approval = AddApprovalInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                role_id=record.parameters["role"],
+                note=record.parameters["note"],
+                delegation_id=record.parameters.get("delegation") or None,
+            )
+            swarm, actor, work, delegation = self._validate_approval(root, approval)
+            approval_context = (approval, swarm, actor, work, delegation)
+        elif record.action == "handoff.create":
+            if set(record.parameters) != {"role", "from", "to", "reason"}:
+                raise ValueError(f"Lifecycle Action has invalid handoff parameters: {record.id}")
+            handoff = HandoffActorInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                role_id=record.parameters["role"],
+                from_actor_id=record.parameters["from"],
+                to_actor_id=record.parameters["to"],
+                authorized_by=record.actor,
+                reason=record.parameters["reason"],
+                work_id=record.work_id,
+            )
+            handoff_context = self._validate_handoff(root, handoff)
+            swarm, _, _, actor, work, _, _, _, _ = handoff_context
+        elif record.action in {"work.block", "work.cancel", "work.resume"}:
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no status-change work: {record.id}")
+            target_status = {
+                "work.block": "blocked",
+                "work.cancel": "cancelled",
+                "work.resume": "active",
+            }[record.action]
+            change = ChangeWorkStatusInput(
+                id=record.id,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                reason=record.parameters["reason"],
+            )
+            swarm, actor, work, previous = self._validate_work_status_change(
+                root, change, target_status, record.action
+            )
+            work_status_context = (
+                change,
+                target_status,
+                swarm,
+                actor,
+                work,
+                previous,
+            )
+        elif record.action in {
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.reject",
+            "delegation.resume",
+        }:
+            delegation = self._load_delegation(root, record.parameters["delegation"])
+            if (
+                record.swarm_id != delegation.parent_swarm_id
+                or record.work_id != delegation.parent_work_id
+            ):
+                raise ValueError(
+                    f"Lifecycle Action delegation context is not canonical: {record.id}"
+                )
+            if record.action == "delegation.block":
+                target_status = "blocked"
+                authority = "parent"
+                allowed_statuses = {"proposed", "accepted"}
+                blocked_from = delegation.status
+            elif record.action == "delegation.resume":
+                if delegation.status != "blocked" or delegation.blocked_from not in {
+                    "proposed",
+                    "accepted",
+                }:
+                    raise ValueError(f"Delegation {delegation.id} has no resumable blocked state")
+                target_status = delegation.blocked_from
+                authority = "parent"
+                allowed_statuses = {"blocked"}
+                blocked_from = None
+            elif record.action == "delegation.reject":
+                target_status = "rejected"
+                authority = "child"
+                allowed_statuses = {"proposed"}
+                blocked_from = None
+            else:
+                target_status = "cancelled"
+                authority = "parent"
+                allowed_statuses = {"proposed", "accepted", "blocked"}
+                blocked_from = None
+            change = ChangeDelegationStatusInput(
+                id=record.id,
+                delegation_id=delegation.id,
+                actor_id=record.actor,
+                reason=record.parameters["reason"],
+            )
+            context = self._validate_delegation_status_change(
+                root,
+                change,
+                target_status=target_status,
+                action=record.action,
+                authority=authority,
+                allowed_statuses=allowed_statuses,
+            )
+            _, swarm, actor, _, work, _ = context
+            delegation_status_context = (change, target_status, blocked_from, context)
+        elif record.action == "delegation.create":
+            creation = self._delegation_creation_input_from_action(record)
+            context = self._validate_create_delegation(root, creation)
+            swarm, work, _, actor, _, _, _, _ = context
+            if record.swarm_id != swarm.id or record.work_id != work.id:
+                raise ValueError(
+                    f"Lifecycle Action delegation context is not canonical: {record.id}"
+                )
+            delegation_create_context = (creation, context)
+        elif record.action == "delegation.accept":
+            acceptance = PrepareDelegationActionInput(
+                id=record.id,
+                delegation_id=record.parameters["delegation"],
+                actor_id=record.actor,
+            )
+            context = self._validate_accept_delegation(root, acceptance, record.id)
+            delegation, swarm, work, _, actor = context
+            if (
+                record.swarm_id != delegation.parent_swarm_id
+                or record.work_id != delegation.parent_work_id
+            ):
+                raise ValueError(
+                    f"Lifecycle Action delegation context is not canonical: {record.id}"
+                )
+            delegation_accept_context = (acceptance, context)
+        elif record.action == "delegation.collect":
+            collection = PrepareDelegationActionInput(
+                id=record.id,
+                delegation_id=record.parameters["delegation"],
+                actor_id=record.actor,
+            )
+            context = self._validate_collect_delegation(root, collection, record.id)
+            delegation, swarm, actor, _, _, work, _ = context
+            if (
+                record.swarm_id != delegation.parent_swarm_id
+                or record.work_id != delegation.parent_work_id
+            ):
+                raise ValueError(
+                    f"Lifecycle Action delegation context is not canonical: {record.id}"
+                )
+            delegation_collect_context = (collection, context)
+        else:
+            raise ValueError(f"Unsupported Lifecycle Action kind: {record.action}")
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+
+        fingerprint: str | None = None
+        public_key: str | None = None
+        payload_sha256: str | None = None
+        signature: str | None = None
+        if actor.authentication_required and data.signature is None:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle authorization"
+            )
+        if data.signature is not None:
+            fingerprint, payload_sha256, public_key, signature = verify_lifecycle_authorization(
+                actor, record, Path(data.signature).expanduser().resolve()
+            )
+
+        if record.action == "swarm.assign":
+            assert actor_assignment_context is not None
+            swarm, target, role_id = actor_assignment_context
+            self._apply_actor_assignment(root, swarm, target, role_id, record.id)
+        elif record.action == "actor.key.revoke":
+            assert actor_key_revocation_context is not None
+            target, current, reason = actor_key_revocation_context
+            self._apply_actor_key_revocation(root, target, current, reason)
+        elif record.action == "actor.key.recover":
+            assert actor_key_recovery_context is not None
+            target, current, replacement, reason = actor_key_recovery_context
+            self._apply_actor_key_rotation(root, target, current, replacement, reason)
+        elif record.action == "actor.key.rotate":
+            assert actor_key_rotation_context is not None
+            actor, current, replacement, reason = actor_key_rotation_context
+            self._apply_actor_key_rotation(root, actor, current, replacement, reason)
+        elif record.action == "actor.runtime.update":
+            assert actor_runtime_context is not None
+            runtime, actor = actor_runtime_context
+            self._apply_actor_runtime(root, actor, runtime)
+        elif record.action == "session.prepare":
+            assert session_preparation_context is not None
+            session, context = session_preparation_context
+            self._apply_session_preparation(root, session, context, record.id)
+        elif record.action == "work.create":
+            assert work_create_context is not None
+            creation, context = work_create_context
+            self._apply_create_work(creation, context)
+        elif record.action == "work.decompose":
+            assert work_decompose_context is not None
+            parent, child, context = work_decompose_context
+            self._apply_decompose_work(parent, child, context)
+        elif record.action == "gate.waive":
+            assert gate_waiver_context is not None
+            waiver, swarm, actor, work = gate_waiver_context
+            self._apply_gate_waiver(waiver, swarm, actor, work, record.id)
+        elif record.action == "criterion.satisfy":
+            assert criterion_context is not None
+            criterion, swarm, actor, work = criterion_context
+            self._apply_satisfy_criterion(swarm, actor, work, criterion.criterion_id)
+        elif record.action == "artifact.add":
+            assert artifact_context is not None
+            artifact, swarm, actor, work = artifact_context
+            self._apply_add_artifact(swarm, actor, work, artifact)
+        elif record.action == "evidence.add":
+            assert evidence_context is not None
+            evidence, swarm, actor, work = evidence_context
+            self._apply_add_evidence(swarm, actor, work, evidence)
+        elif record.action == "approval.delegate":
+            assert approval_delegation_context is not None
+            delegation_input, swarm, actor, target, work = approval_delegation_context
+            self._apply_delegate_approval(delegation_input, swarm, actor, target, work, record.id)
+        elif record.action == "approval.delegation.revoke":
+            assert approval_delegation_revocation_context is not None
+            delegation, _, actor, work, reason = approval_delegation_revocation_context
+            self._apply_revoke_approval_delegation(delegation, actor, work, reason, record.id)
+        elif record.action == "work.transition":
+            self._apply_work_transition(root, swarm, actor, work, record.parameters["to"])
+        elif record.action == "approval.add":
+            assert approval_context is not None
+            approval, swarm, actor, work, delegation = approval_context
+            self._apply_approval(
+                swarm,
+                actor,
+                work,
+                approval.role_id,
+                approval.note,
+                delegation=delegation,
+                action_id=record.id,
+            )
+        elif record.action == "handoff.create":
+            assert handoff_context is not None
+            self._apply_handoff(root, *handoff_context)
+        elif record.action in {"work.block", "work.cancel", "work.resume"}:
+            assert work_status_context is not None
+            change, target_status, swarm, actor, work, previous = work_status_context
+            self._apply_work_status_change(
+                root,
+                change,
+                target_status,
+                record.action,
+                swarm,
+                actor,
+                work,
+                previous,
+            )
+        elif record.action in {
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.reject",
+            "delegation.resume",
+        }:
+            assert delegation_status_context is not None
+            change, target_status, blocked_from, context = delegation_status_context
+            self._apply_delegation_status_change(
+                root,
+                change,
+                target_status=target_status,
+                action=record.action,
+                blocked_from=blocked_from,
+                context=context,
+            )
+        elif record.action == "delegation.create":
+            assert delegation_create_context is not None
+            creation, context = delegation_create_context
+            self._apply_create_delegation(root, creation, context)
+        elif record.action == "delegation.accept":
+            assert delegation_accept_context is not None
+            acceptance, context = delegation_accept_context
+            self._apply_accept_delegation(root, acceptance, record.id, context)
+        else:
+            assert delegation_collect_context is not None
+            collection, context = delegation_collect_context
+            self._apply_collect_delegation(root, record.id, context)
+        applied = LifecycleActionRecord(
+            **{
+                **record.__dict__,
+                "status": "applied",
+                "applied_at": self._timestamp(),
+                "authentication_verified": fingerprint is not None,
+                "authentication_fingerprint": fingerprint,
+                "authentication_public_key": public_key,
+                "authorization_sha256": payload_sha256,
+                "authorization_signature": signature,
+            }
+        )
+        atomic_write(Path(record.path) / "ACTION.md", self._render_lifecycle_action(applied))
+        append_entry(
+            root / ".agora" / "events.md",
+            f"- {self._timestamp()} | lifecycle-action.applied | action={record.id}",
+        )
+        return applied
+
+    @staticmethod
+    def _string_list_parameter(record: LifecycleActionRecord, key: str) -> list[str]:
+        try:
+            value = json.loads(record.parameters[key])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid JSON parameter {key}: {record.id}"
+            ) from error
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"Lifecycle Action parameter {key} must be a string list: {record.id}")
+        return value
+
+    @classmethod
+    def _budget_limits_parameter(
+        cls, record: LifecycleActionRecord, key: str = "budget-limits"
+    ) -> dict[str, int] | None:
+        if key not in record.parameters:
+            return None
+        try:
+            value = json.loads(record.parameters[key])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid JSON parameter {key}: {record.id}"
+            ) from error
+        if value is not None and (
+            not isinstance(value, dict)
+            or any(
+                not isinstance(name, str) or not isinstance(limit, int) or isinstance(limit, bool)
+                for name, limit in value.items()
+            )
+        ):
+            raise ValueError(
+                f"Lifecycle Action parameter {key} must be an integer map or null: {record.id}"
+            )
+        return cls._normalize_budget_limits(value)
+
+    @classmethod
+    def _artifact_promotions_parameter(cls, record: LifecycleActionRecord) -> dict[str, str]:
+        if "artifact-promotions" not in record.parameters:
+            return {}
+        try:
+            value = json.loads(record.parameters["artifact-promotions"])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid artifact promotions: {record.id}"
+            ) from error
+        if not isinstance(value, dict) or any(
+            not isinstance(source, str) or not isinstance(target, str)
+            for source, target in value.items()
+        ):
+            raise ValueError(
+                f"Lifecycle Action artifact promotions must be a string map: {record.id}"
+            )
+        return cls._normalize_artifact_promotions(value)
+
+    @classmethod
+    def _work_creation_input_from_action(cls, record: LifecycleActionRecord) -> CreateWorkInput:
+        if record.work_id is None:
+            raise ValueError(f"Lifecycle Action has no created work id: {record.id}")
+        try:
+            raw_criteria = json.loads(record.parameters["acceptance-criteria"])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid work acceptance criteria: {record.id}"
+            ) from error
+        if not isinstance(raw_criteria, list) or any(
+            not isinstance(item, list)
+            or len(item) != 2
+            or any(not isinstance(value, str) for value in item)
+            for item in raw_criteria
+        ):
+            raise ValueError(f"Lifecycle Action has invalid work acceptance criteria: {record.id}")
+        return CreateWorkInput(
+            swarm_id=record.swarm_id,
+            id=record.work_id,
+            title=record.parameters["title"],
+            actor_id=record.actor,
+            acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
+            required_artifacts=cls._string_list_parameter(record, "required-artifacts"),
+            description=record.parameters["description"],
+        )
+
+    @classmethod
+    def _work_decomposition_input_from_action(
+        cls, record: LifecycleActionRecord
+    ) -> DecomposeWorkInput:
+        if record.work_id is None:
+            raise ValueError(f"Lifecycle Action has no parent work id: {record.id}")
+        try:
+            raw_criteria = json.loads(record.parameters["acceptance-criteria"])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid decomposition acceptance criteria: {record.id}"
+            ) from error
+        if not isinstance(raw_criteria, list) or any(
+            not isinstance(item, list)
+            or len(item) != 2
+            or any(not isinstance(value, str) for value in item)
+            for item in raw_criteria
+        ):
+            raise ValueError(
+                f"Lifecycle Action has invalid decomposition acceptance criteria: {record.id}"
+            )
+        return DecomposeWorkInput(
+            swarm_id=record.swarm_id,
+            parent_work_id=record.work_id,
+            child_work_id=record.parameters["child-work"],
+            title=record.parameters["title"],
+            actor_id=record.actor,
+            acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
+            required_artifacts=cls._string_list_parameter(record, "required-artifacts"),
+            description=record.parameters["description"],
+        )
+
+    @classmethod
+    def _gate_waiver_input_from_action(cls, record: LifecycleActionRecord) -> WaiveGateInput:
+        if record.work_id is None:
+            raise ValueError(f"Lifecycle Action has no waiver work: {record.id}")
+        return WaiveGateInput(
+            id=record.parameters["waiver"],
+            swarm_id=record.swarm_id,
+            work_id=record.work_id,
+            gate_id=record.parameters["gate"],
+            actor_id=record.actor,
+            reason=record.parameters["reason"],
+            evidence_refs=cls._string_list_parameter(record, "evidence"),
+            criteria=cls._string_list_parameter(record, "criteria"),
+            artifacts=cls._string_list_parameter(record, "artifacts"),
+            successful_evidence=record.parameters["successful-evidence"] == "true",
+            approval_roles=cls._string_list_parameter(record, "approvals"),
+        )
+
+    @staticmethod
+    def _delegation_creation_input_from_action(
+        record: LifecycleActionRecord,
+    ) -> CreateDelegationInput:
+        if record.work_id is None:
+            raise ValueError(f"Lifecycle Action has no parent work: {record.id}")
+        try:
+            raw_criteria = json.loads(record.parameters["acceptance-criteria"])
+            raw_artifacts = json.loads(record.parameters["required-artifacts"])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Lifecycle Action has invalid delegation JSON parameters: {record.id}"
+            ) from error
+        if not isinstance(raw_criteria, list) or any(
+            not isinstance(item, list)
+            or len(item) != 2
+            or any(not isinstance(value, str) for value in item)
+            for item in raw_criteria
+        ):
+            raise ValueError(
+                f"Lifecycle Action has invalid delegation acceptance criteria: {record.id}"
+            )
+        if not isinstance(raw_artifacts, list) or any(
+            not isinstance(value, str) for value in raw_artifacts
+        ):
+            raise ValueError(
+                f"Lifecycle Action has invalid delegation required artifacts: {record.id}"
+            )
+        return CreateDelegationInput(
+            id=record.parameters["delegation"],
+            parent_swarm_id=record.swarm_id,
+            parent_work_id=record.work_id,
+            child_actor_id=record.parameters["child-actor"],
+            child_work_id=record.parameters["child-work"],
+            actor_id=record.actor,
+            title=record.parameters["title"],
+            description=record.parameters["description"],
+            acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
+            required_artifacts=raw_artifacts,
+            result_kind=record.parameters["result-kind"],
+            budget_limits=AgoraWorkspace._budget_limits_parameter(record),
+            artifact_promotions=AgoraWorkspace._artifact_promotions_parameter(record),
+        )
+
+    def list_lifecycle_actions(self, status: str | None = None) -> list[LifecycleActionRecord]:
+        root = self.project_root()
+        records = [
+            self._load_lifecycle_action(path.parent)
+            for path in sorted((root / ".agora" / "actions").glob("*/ACTION.md"))
+        ]
+        return [record for record in records if status is None or record.status == status]
+
+    def _validate_work_transition(
+        self, root: Path, data: TransitionWorkInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "work.transition")
         work = self._load_work(swarm, data.work_id)
@@ -2102,17 +5311,29 @@ class AgoraWorkspace:
                 f"Actor {actor.reference} cannot perform transition {work.state} -> "
                 f"{data.target_state}; required roles: {', '.join(transition.roles)}"
             )
+        if data.target_state == contract.terminal_state:
+            self._assert_child_work_closed(root, swarm, work)
+            self._assert_no_active_approval_delegations(work)
         self._assert_wip_limit(swarm, work, data.target_state, contract.wip_limits)
         if transition.gate is not None:
             self._assert_work_gate(work, contract.gates[transition.gate], transition.gate)
+        return swarm, actor, work
 
+    def _apply_work_transition(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        target_state: str,
+    ) -> WorkRecord:
         previous = work.state
-        work.state = data.target_state
+        work.state = target_state
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
         self._append_work_event(
             work,
             "work.transitioned",
-            f"from={previous} to={data.target_state} actor={actor.reference}",
+            f"from={previous} to={target_state} actor={actor.reference}",
         )
         self._refresh_swarm_status(root, swarm)
         return work
@@ -2145,12 +5366,24 @@ class AgoraWorkspace:
         return self._change_work_status(data, "blocked", "work.block")
 
     @_locked_mutation("project")
+    def prepare_block_work(self, data: ChangeWorkStatusInput) -> LifecycleActionRecord:
+        return self._prepare_work_status_change(data, "blocked", "work.block")
+
+    @_locked_mutation("project")
     def resume_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
         return self._change_work_status(data, "active", "work.resume")
 
     @_locked_mutation("project")
+    def prepare_resume_work(self, data: ChangeWorkStatusInput) -> LifecycleActionRecord:
+        return self._prepare_work_status_change(data, "active", "work.resume")
+
+    @_locked_mutation("project")
     def cancel_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
         return self._change_work_status(data, "cancelled", "work.cancel")
+
+    @_locked_mutation("project")
+    def prepare_cancel_work(self, data: ChangeWorkStatusInput) -> LifecycleActionRecord:
+        return self._prepare_work_status_change(data, "cancelled", "work.cancel")
 
     def list_work_status_changes(self, swarm_id: str, work_id: str) -> list[StatusChangeRecord]:
         work = self.show_work(swarm_id, work_id)
@@ -2166,9 +5399,50 @@ class AgoraWorkspace:
         target_status: str,
         action: str,
     ) -> StatusChangeRecord:
+        root = self.project_root()
+        swarm, actor, work, previous = self._validate_work_status_change(
+            root, data, target_status, action
+        )
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                f"prepare {action} before applying it"
+            )
+        return self._apply_work_status_change(
+            root, data, target_status, action, swarm, actor, work, previous
+        )
+
+    def _prepare_work_status_change(
+        self,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+    ) -> LifecycleActionRecord:
+        if data.id is None:
+            raise ValueError(f"Prepared {action} requires an explicit id")
+        root = self.project_root()
+        swarm, actor, work, _ = self._validate_work_status_change(root, data, target_status, action)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action=action,
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"reason": data.reason.strip()},
+        )
+
+    def _validate_work_status_change(
+        self,
+        root: Path,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, str]:
         if not data.reason.strip():
             raise ValueError("Work status change reason cannot be empty")
-        root = self.project_root()
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
         work = self._load_work(swarm, data.work_id)
@@ -2187,6 +5461,8 @@ class AgoraWorkspace:
                 f"Work {work.id} cannot change operational status {previous} -> {target_status}"
             )
         if target_status == "cancelled":
+            self._assert_child_work_closed(root, swarm, work)
+            self._assert_no_active_approval_delegations(work)
             open_delegations = [
                 item.id
                 for item in self.list_delegations()
@@ -2201,6 +5477,50 @@ class AgoraWorkspace:
                 )
         change_root = Path(work.path) / "status-changes"
         self._assert_status_change_id_available(change_root, data.id)
+        return swarm, actor, work, previous
+
+    def _assert_child_work_closed(self, root: Path, swarm: SwarmRecord, parent: WorkRecord) -> None:
+        open_children: list[str] = []
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        for reference in parent.child_work_refs:
+            owner, separator, work_id = reference.partition("/")
+            if not separator or owner != swarm.id:
+                raise ValueError(
+                    f"Work {swarm.id}/{parent.id} has invalid child work reference: {reference}"
+                )
+            child = self._load_work(swarm, work_id)
+            if child.operational_status != "cancelled" and child.state != contract.terminal_state:
+                open_children.append(reference)
+        if open_children:
+            raise ValueError(
+                f"Work {swarm.id}/{parent.id} has open child work; close it first: "
+                f"{', '.join(open_children)}"
+            )
+
+    def _assert_no_active_approval_delegations(self, work: WorkRecord) -> None:
+        active = [
+            delegation.id
+            for delegation in self._load_approval_delegations(work)
+            if delegation.status == "active"
+        ]
+        if active:
+            raise ValueError(
+                f"Work {work.swarm_id}/{work.id} has active Approval Delegations; "
+                f"consume or revoke them first: {', '.join(active)}"
+            )
+
+    def _apply_work_status_change(
+        self,
+        root: Path,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        previous: str,
+    ) -> StatusChangeRecord:
+        change_root = Path(work.path) / "status-changes"
         work.operational_status = _work_operational_status(target_status)
         work.status_reason = data.reason.strip()
         work.status_by = actor.reference
@@ -2227,9 +5547,77 @@ class AgoraWorkspace:
 
     @_locked_mutation("project")
     def create_delegation(self, data: CreateDelegationInput) -> DelegationRecord:
+        root = self.project_root()
+        context = self._validate_create_delegation(root, data)
+        requester = context[3]
+        if requester.authentication_required:
+            raise PermissionError(
+                f"Actor {requester.reference} requires a signed lifecycle action; "
+                "prepare delegation.create before applying it"
+            )
+        return self._apply_create_delegation(root, data, context)
+
+    @_locked_mutation("project")
+    def prepare_create_delegation(
+        self, data: PrepareCreateDelegationInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if data.delegation.id is None:
+            raise ValueError("Prepared delegation.create requires an explicit delegation id")
+        root = self.project_root()
+        context = self._validate_create_delegation(root, data.delegation)
+        parent, parent_work, child_actor, requester, _, criteria, delegation_id, _ = context
+        budget_limits = self._validate_delegation_budget(root, parent_work, data.delegation)
+        artifact_promotions = self._normalize_artifact_promotions(
+            data.delegation.artifact_promotions
+        )
+        assert_actor_identity_available(requester)
+        self._assert_current_actor_key(requester)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="delegation.create",
+            actor=requester,
+            swarm=parent,
+            work=parent_work,
+            parameters={
+                "delegation": delegation_id,
+                "child-actor": child_actor.reference,
+                "child-work": data.delegation.child_work_id,
+                "title": data.delegation.title,
+                "description": data.delegation.description,
+                "acceptance-criteria": json.dumps(
+                    list(criteria.items()), ensure_ascii=True, separators=(",", ":")
+                ),
+                "required-artifacts": json.dumps(
+                    list(dict.fromkeys(data.delegation.required_artifacts)),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+                "result-kind": data.delegation.result_kind,
+                "budget-limits": json.dumps(
+                    budget_limits, ensure_ascii=True, separators=(",", ":")
+                ),
+                "artifact-promotions": json.dumps(
+                    artifact_promotions, ensure_ascii=True, separators=(",", ":")
+                ),
+            },
+        )
+
+    def _validate_create_delegation(
+        self, root: Path, data: CreateDelegationInput
+    ) -> tuple[
+        SwarmRecord,
+        WorkRecord,
+        ActorRecord,
+        ActorRecord,
+        SwarmRecord,
+        dict[str, str],
+        str,
+        Path,
+    ]:
         assert_slug(data.child_work_id, "Child work id")
         assert_slug(data.result_kind, "Delegation result kind")
-        root = self.project_root()
         parent = self._load_swarm(root, data.parent_swarm_id)
         if parent.status not in {"ready", "running"}:
             raise ValueError(f"Parent swarm {parent.id} must be ready before work is delegated")
@@ -2263,11 +5651,106 @@ class AgoraWorkspace:
             raise ValueError("Delegated acceptance criterion ids must be unique")
         for criterion_id in criteria:
             assert_slug(criterion_id, "Delegated criterion id")
+        self._validate_delegation_budget(root, parent_work, data)
+        artifact_promotions = self._normalize_artifact_promotions(data.artifact_promotions)
+        missing_required_promotions = sorted(
+            set(artifact_promotions) - set(data.required_artifacts)
+        )
+        if missing_required_promotions:
+            raise ValueError(
+                "Promoted child artifacts must also be required artifacts: "
+                f"{', '.join(missing_required_promotions)}"
+            )
         delegation_id = data.id or self._now().astimezone(UTC).strftime("delegation-%Y%m%dt%H%M%sz")
         assert_slug(delegation_id, "Delegation id")
         path = root / ".agora" / "delegations" / delegation_id / "DELEGATION.md"
         if path.exists():
             raise FileExistsError(f"Delegation already exists: {delegation_id}")
+        return parent, parent_work, child_actor, requester, child, criteria, delegation_id, path
+
+    def _validate_delegation_budget(
+        self,
+        root: Path,
+        parent_work: WorkRecord,
+        data: CreateDelegationInput,
+    ) -> dict[str, int] | None:
+        requested = self._normalize_budget_limits(data.budget_limits)
+        if parent_work.budget_limits is None:
+            return requested
+        effective = requested or {}
+        unknown = sorted(set(effective) - set(parent_work.budget_limits))
+        if unknown:
+            raise ValueError(
+                "Delegation budget dimensions are not available from parent work: "
+                f"{', '.join(unknown)}"
+            )
+        allocated = {dimension: 0 for dimension in parent_work.budget_limits}
+        for delegation in self.list_delegations():
+            if (
+                delegation.parent_swarm_id != data.parent_swarm_id
+                or delegation.parent_work_id != data.parent_work_id
+                or delegation.status == "rejected"
+            ):
+                continue
+            for dimension, limit in (delegation.budget_limits or {}).items():
+                if dimension in allocated:
+                    allocated[dimension] += limit
+        exceeded = [
+            f"{dimension}={allocated[dimension] + effective.get(dimension, 0)}"
+            f"/{parent_work.budget_limits[dimension]}"
+            for dimension in sorted(parent_work.budget_limits)
+            if allocated[dimension] + effective.get(dimension, 0)
+            > parent_work.budget_limits[dimension]
+        ]
+        if exceeded:
+            raise ValueError(
+                "Delegation budget exceeds parent work allocation: " + ", ".join(exceeded)
+            )
+        return effective
+
+    @staticmethod
+    def _normalize_budget_limits(
+        limits: dict[str, int] | None,
+    ) -> dict[str, int] | None:
+        if limits is None:
+            return None
+        normalized: dict[str, int] = {}
+        for dimension, limit in sorted(limits.items()):
+            assert_slug(dimension, "Delegation budget dimension")
+            if not isinstance(limit, int) or isinstance(limit, bool):
+                raise ValueError(f"Delegation budget {dimension} must be an integer")
+            if limit < 0:
+                raise ValueError(f"Delegation budget {dimension} cannot be negative")
+            normalized[dimension] = limit
+        return normalized
+
+    @staticmethod
+    def _normalize_artifact_promotions(promotions: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for source, target in sorted(promotions.items()):
+            assert_slug(source, "Promoted child artifact kind")
+            assert_slug(target, "Promoted parent artifact kind")
+            normalized[source] = target
+        return normalized
+
+    def _apply_create_delegation(
+        self,
+        root: Path,
+        data: CreateDelegationInput,
+        context: tuple[
+            SwarmRecord,
+            WorkRecord,
+            ActorRecord,
+            ActorRecord,
+            SwarmRecord,
+            dict[str, str],
+            str,
+            Path,
+        ],
+    ) -> DelegationRecord:
+        parent, parent_work, child_actor, requester, child, criteria, delegation_id, path = context
+        budget_limits = self._validate_delegation_budget(root, parent_work, data)
+        artifact_promotions = self._normalize_artifact_promotions(data.artifact_promotions)
         record = DelegationRecord(
             id=delegation_id,
             parent_swarm_id=parent.id,
@@ -2284,6 +5767,8 @@ class AgoraWorkspace:
             status="proposed",
             created_at=self._timestamp(),
             path=str(path),
+            budget_limits=budget_limits,
+            artifact_promotions=artifact_promotions,
         )
         write_new(path, self._render_delegation(record))
         detail = (
@@ -2298,6 +5783,41 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def accept_delegation(self, data: DelegationActorInput) -> DelegationRecord:
         root = self.project_root()
+        context = self._validate_accept_delegation(root, data, None)
+        actor = context[4]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare delegation.accept before applying it"
+            )
+        return self._apply_accept_delegation(root, data, None, context)
+
+    @_locked_mutation("project")
+    def prepare_accept_delegation(
+        self, data: PrepareDelegationActionInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        context = self._validate_accept_delegation(root, data, data.id)
+        delegation, parent, parent_work, _, actor = context
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="delegation.accept",
+            actor=actor,
+            swarm=parent,
+            work=parent_work,
+            parameters={"delegation": delegation.id},
+        )
+
+    def _validate_accept_delegation(
+        self,
+        root: Path,
+        data: DelegationActorInput,
+        action_id: str | None,
+    ) -> tuple[DelegationRecord, SwarmRecord, WorkRecord, SwarmRecord, ActorRecord]:
         delegation = self._load_delegation(root, data.delegation_id)
         if delegation.status != "proposed":
             raise ValueError(
@@ -2308,24 +5828,41 @@ class AgoraWorkspace:
         self._assert_work_mutable(root, parent, parent_work)
         child = self._load_swarm(root, delegation.child_swarm_id)
         actor = self._require_actor_for_action(root, child, data.actor_id, "delegation.accept")
-        child_work = self.create_work(
-            CreateWorkInput(
-                swarm_id=child.id,
-                id=delegation.child_work_id,
-                title=delegation.title,
-                actor_id=data.actor_id,
-                acceptance_criteria=list(delegation.acceptance_criteria.items()),
-                required_artifacts=delegation.required_artifacts,
-                description=delegation.description,
+        self._require_actor_for_action(root, child, data.actor_id, "work.create")
+        if (Path(child.path) / "work" / delegation.child_work_id).exists():
+            raise FileExistsError(
+                f"Child work already exists: {child.id}/{delegation.child_work_id}"
             )
+        self._assert_status_change_id_available(
+            Path(delegation.path).parent / "status-changes", action_id
         )
-        work_path = Path(child_work.path) / "WORK.md"
-        work_document = read_markdown(work_path)
-        work_document.attributes["delegation"] = delegation.id
-        work_document.attributes["parent-work"] = (
-            f"{delegation.parent_swarm_id}/{delegation.parent_work_id}"
+        return delegation, parent, parent_work, child, actor
+
+    def _apply_accept_delegation(
+        self,
+        root: Path,
+        data: DelegationActorInput,
+        action_id: str | None,
+        context: tuple[DelegationRecord, SwarmRecord, WorkRecord, SwarmRecord, ActorRecord],
+    ) -> DelegationRecord:
+        delegation, _, parent_work, child, actor = context
+        work_data = CreateWorkInput(
+            swarm_id=child.id,
+            id=delegation.child_work_id,
+            title=delegation.title,
+            actor_id=data.actor_id,
+            acceptance_criteria=list(delegation.acceptance_criteria.items()),
+            required_artifacts=delegation.required_artifacts,
+            description=delegation.description,
         )
-        atomic_write(work_path, render_markdown(work_document))
+        child_work = self._apply_create_work(
+            work_data,
+            self._validate_create_work(root, work_data),
+            budget_limits=delegation.budget_limits,
+        )
+        child_work.delegation_id = delegation.id
+        child_work.parent_work_ref = f"{delegation.parent_swarm_id}/{delegation.parent_work_id}"
+        atomic_write(Path(child_work.path) / "WORK.md", self._render_work(child_work))
         accepted = DelegationRecord(
             **{
                 **delegation.__dict__,
@@ -2348,7 +5885,7 @@ class AgoraWorkspace:
             actor=actor.reference,
             reason="Delegated work accepted by the child swarm",
             root=Path(delegation.path).parent / "status-changes",
-            id_=None,
+            id_=action_id,
         )
         detail = (
             f"delegation={delegation.id} child-work={child.id}/{child_work.id} "
@@ -2362,6 +5899,49 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def collect_delegation(self, data: DelegationActorInput) -> DelegationRecord:
         root = self.project_root()
+        context = self._validate_collect_delegation(root, data, None)
+        actor = context[2]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare delegation.collect before applying it"
+            )
+        return self._apply_collect_delegation(root, None, context)
+
+    @_locked_mutation("project")
+    def prepare_collect_delegation(
+        self, data: PrepareDelegationActionInput
+    ) -> LifecycleActionRecord:
+        assert_slug(data.id, "Lifecycle Action id")
+        root = self.project_root()
+        context = self._validate_collect_delegation(root, data, data.id)
+        delegation, parent, actor, _, _, parent_work, _ = context
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action="delegation.collect",
+            actor=actor,
+            swarm=parent,
+            work=parent_work,
+            parameters={"delegation": delegation.id},
+        )
+
+    def _validate_collect_delegation(
+        self,
+        root: Path,
+        data: DelegationActorInput,
+        action_id: str | None,
+    ) -> tuple[
+        DelegationRecord,
+        SwarmRecord,
+        ActorRecord,
+        SwarmRecord,
+        WorkRecord,
+        WorkRecord,
+        str,
+    ]:
         delegation = self._load_delegation(root, data.delegation_id)
         if delegation.status != "accepted":
             raise ValueError(
@@ -2390,18 +5970,53 @@ class AgoraWorkspace:
                 f"Delegated work {child.id}/{child_work.id} is not complete; "
                 f"state={child_work.state}"
             )
+        missing_promotions = sorted(
+            set(delegation.artifact_promotions) - set(child_work.artifact_kinds)
+        )
+        if missing_promotions:
+            raise ValueError(
+                "Delegated work is missing promoted child artifacts: "
+                f"{', '.join(missing_promotions)}"
+            )
         parent_work = self._load_work(parent, delegation.parent_work_id)
         self._assert_work_mutable(root, parent, parent_work)
         parent_contract = load_method_contract(root / ".agora" / "methods" / parent.method)
         if parent_work.state == parent_contract.terminal_state:
             raise ValueError(f"Cannot collect into completed work: {parent_work.id}")
         result_uri = f"agora://swarms/{child.id}/work/{child_work.id}"
+        self._assert_status_change_id_available(
+            Path(delegation.path).parent / "status-changes", action_id
+        )
+        return delegation, parent, actor, child, child_work, parent_work, result_uri
+
+    def _apply_collect_delegation(
+        self,
+        root: Path,
+        action_id: str | None,
+        context: tuple[
+            DelegationRecord,
+            SwarmRecord,
+            ActorRecord,
+            SwarmRecord,
+            WorkRecord,
+            WorkRecord,
+            str,
+        ],
+    ) -> DelegationRecord:
+        delegation, parent, actor, child, child_work, parent_work, result_uri = context
         self._record_artifact(
             parent_work,
             delegation.result_kind,
             result_uri,
             actor.reference,
         )
+        for source_kind, parent_kind in delegation.artifact_promotions.items():
+            self._record_artifact(
+                parent_work,
+                parent_kind,
+                f"{result_uri}/artifacts/{source_kind}",
+                actor.reference,
+            )
         self._record_evidence(
             parent_work,
             "delegated-work",
@@ -2431,7 +6046,7 @@ class AgoraWorkspace:
             actor=actor.reference,
             reason="Completed child result collected into parent work",
             root=Path(delegation.path).parent / "status-changes",
-            id_=None,
+            id_=action_id,
         )
         parent_work = self._load_work(parent, delegation.parent_work_id)
         detail = (
@@ -2456,6 +6071,16 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def prepare_block_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        return self._prepare_delegation_status_change(
+            data,
+            target_status="blocked",
+            action="delegation.block",
+            authority="parent",
+            allowed_statuses={"proposed", "accepted"},
+        )
+
+    @_locked_mutation("project")
     def resume_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         delegation = self.show_delegation(data.delegation_id)
         if delegation.status != "blocked" or delegation.blocked_from not in {
@@ -2473,6 +6098,22 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def prepare_resume_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        delegation = self.show_delegation(data.delegation_id)
+        if delegation.status != "blocked" or delegation.blocked_from not in {
+            "proposed",
+            "accepted",
+        }:
+            raise ValueError(f"Delegation {delegation.id} has no resumable blocked state")
+        return self._prepare_delegation_status_change(
+            data,
+            target_status=delegation.blocked_from,
+            action="delegation.resume",
+            authority="parent",
+            allowed_statuses={"blocked"},
+        )
+
+    @_locked_mutation("project")
     def reject_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         return self._change_delegation_status(
             data,
@@ -2483,8 +6124,28 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def prepare_reject_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        return self._prepare_delegation_status_change(
+            data,
+            target_status="rejected",
+            action="delegation.reject",
+            authority="child",
+            allowed_statuses={"proposed"},
+        )
+
+    @_locked_mutation("project")
     def cancel_delegation(self, data: ChangeDelegationStatusInput) -> StatusChangeRecord:
         return self._change_delegation_status(
+            data,
+            target_status="cancelled",
+            action="delegation.cancel",
+            authority="parent",
+            allowed_statuses={"proposed", "accepted", "blocked"},
+        )
+
+    @_locked_mutation("project")
+    def prepare_cancel_delegation(self, data: ChangeDelegationStatusInput) -> LifecycleActionRecord:
+        return self._prepare_delegation_status_change(
             data,
             target_status="cancelled",
             action="delegation.cancel",
@@ -2512,9 +6173,84 @@ class AgoraWorkspace:
         allowed_statuses: set[str],
         blocked_from: str | None = None,
     ) -> StatusChangeRecord:
+        root = self.project_root()
+        context = self._validate_delegation_status_change(
+            root,
+            data,
+            target_status=target_status,
+            action=action,
+            authority=authority,
+            allowed_statuses=allowed_statuses,
+        )
+        actor = context[2]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                f"prepare {action} before applying it"
+            )
+        return self._apply_delegation_status_change(
+            root,
+            data,
+            target_status=target_status,
+            action=action,
+            blocked_from=blocked_from,
+            context=context,
+        )
+
+    def _prepare_delegation_status_change(
+        self,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        authority: str,
+        allowed_statuses: set[str],
+    ) -> LifecycleActionRecord:
+        if data.id is None:
+            raise ValueError(f"Prepared {action} requires an explicit id")
+        root = self.project_root()
+        delegation, _, actor, parent, parent_work, _ = self._validate_delegation_status_change(
+            root,
+            data,
+            target_status=target_status,
+            action=action,
+            authority=authority,
+            allowed_statuses=allowed_statuses,
+        )
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.id,
+            action=action,
+            actor=actor,
+            swarm=parent,
+            work=parent_work,
+            parameters={
+                "delegation": delegation.id,
+                "reason": data.reason.strip(),
+            },
+        )
+
+    def _validate_delegation_status_change(
+        self,
+        root: Path,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        authority: str,
+        allowed_statuses: set[str],
+    ) -> tuple[
+        DelegationRecord,
+        SwarmRecord,
+        ActorRecord,
+        SwarmRecord,
+        WorkRecord,
+        str,
+    ]:
         if not data.reason.strip():
             raise ValueError("Delegation status change reason cannot be empty")
-        root = self.project_root()
         delegation = self._load_delegation(root, data.delegation_id)
         if delegation.status not in allowed_statuses:
             raise ValueError(
@@ -2525,13 +6261,34 @@ class AgoraWorkspace:
         )
         swarm = self._load_swarm(root, swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
+        parent = self._load_swarm(root, delegation.parent_swarm_id)
+        parent_work = self._load_work(parent, delegation.parent_work_id)
         if action in {"delegation.block", "delegation.resume"}:
-            parent = self._load_swarm(root, delegation.parent_swarm_id)
-            parent_work = self._load_work(parent, delegation.parent_work_id)
             self._assert_work_mutable(root, parent, parent_work)
         previous = delegation.status
         change_root = Path(delegation.path).parent / "status-changes"
         self._assert_status_change_id_available(change_root, data.id)
+        return delegation, swarm, actor, parent, parent_work, previous
+
+    def _apply_delegation_status_change(
+        self,
+        root: Path,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        blocked_from: str | None,
+        context: tuple[
+            DelegationRecord,
+            SwarmRecord,
+            ActorRecord,
+            SwarmRecord,
+            WorkRecord,
+            str,
+        ],
+    ) -> StatusChangeRecord:
+        delegation, _, actor, parent, parent_work, previous = context
+        change_root = Path(delegation.path).parent / "status-changes"
         changed = DelegationRecord(
             **{
                 **delegation.__dict__,
@@ -2558,8 +6315,6 @@ class AgoraWorkspace:
             f"delegation={delegation.id} from={previous} to={target_status} "
             f"actor={actor.reference} change={record.id}"
         )
-        parent = self._load_swarm(root, delegation.parent_swarm_id)
-        parent_work = self._load_work(parent, delegation.parent_work_id)
         self._append_work_event(parent_work, action, detail)
         self._append_swarm_event(root, parent.id, action, detail)
         self._append_swarm_event(root, delegation.child_swarm_id, action, detail)
@@ -2579,11 +6334,69 @@ class AgoraWorkspace:
     @_locked_mutation("project")
     def start_session(self, data: StartSessionInput) -> SessionRecord:
         root = self.project_root()
+        context = self._validate_session_preparation(root, data)
+        actor = context[2]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare session.prepare before materializing its context"
+            )
+        record = self._apply_session_preparation(root, data, context, None)
+        if not data.launch:
+            return record
+        return self._execute_session(root, record, actor, context[1], context[4])
+
+    @_locked_mutation("project")
+    def prepare_session(self, data: PrepareSessionInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        if data.session.id is None:
+            raise ValueError("Prepared session.prepare requires an explicit session id")
+        if data.session.launch:
+            raise ValueError("Prepared session.prepare cannot launch the session")
+        if data.session.force:
+            raise ValueError("Prepared session.prepare cannot replace an existing session")
+        root = self.project_root()
+        context = self._validate_session_preparation(root, data.session)
+        _, swarm, actor, _, work, _, _, _, _, _, session_id, _, _ = context
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="session.prepare",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "session": session_id,
+                "runner": data.session.runner or "",
+            },
+        )
+
+    def _validate_session_preparation(
+        self, root: Path, data: StartSessionInput
+    ) -> tuple[
+        ProjectConfiguration,
+        SwarmRecord,
+        ActorRecord,
+        list[str],
+        WorkRecord | None,
+        Integration,
+        str,
+        str,
+        list[str],
+        bool,
+        str,
+        Path,
+        str,
+    ]:
         project = self._load_project_configuration(root)
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"ready", "running"}:
             raise ValueError(f"Swarm {swarm.id} must be ready before a session can start")
         actor = self._find_actor(root, data.actor_id)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
         self._assert_represented_swarm_operational(root, actor)
         roles = self._actor_roles(swarm, actor.reference)
         if not roles:
@@ -2609,6 +6422,69 @@ class AgoraWorkspace:
             raise FileExistsError(
                 f"Session already exists: {session_id}. Pass --force to replace it."
             )
+        context_contents = self._render_session_context(
+            root,
+            project,
+            actor,
+            swarm,
+            roles,
+            work,
+            integration,
+            provider,
+            model,
+        )
+        return (
+            project,
+            swarm,
+            actor,
+            roles,
+            work,
+            integration,
+            provider,
+            model,
+            command,
+            runtime_available,
+            session_id,
+            session_path,
+            context_contents,
+        )
+
+    def _apply_session_preparation(
+        self,
+        root: Path,
+        data: StartSessionInput,
+        context: tuple[
+            ProjectConfiguration,
+            SwarmRecord,
+            ActorRecord,
+            list[str],
+            WorkRecord | None,
+            Integration,
+            str,
+            str,
+            list[str],
+            bool,
+            str,
+            Path,
+            str,
+        ],
+        preparation_action_id: str | None,
+    ) -> SessionRecord:
+        (
+            _,
+            swarm,
+            actor,
+            roles,
+            work,
+            integration,
+            provider,
+            model,
+            command,
+            runtime_available,
+            session_id,
+            session_path,
+            context_contents,
+        ) = context
         context_path = session_path / "CONTEXT.md"
         record = SessionRecord(
             id=session_id,
@@ -2625,22 +6501,10 @@ class AgoraWorkspace:
             launch_command=command,
             runtime_available=runtime_available,
             created_at=self._timestamp(),
+            context_sha256=hashlib.sha256(context_contents.encode()).hexdigest(),
+            preparation_action_id=preparation_action_id,
         )
-        write_new(
-            context_path,
-            self._render_session_context(
-                root,
-                project,
-                actor,
-                swarm,
-                roles,
-                work,
-                integration,
-                provider,
-                model,
-            ),
-            data.force,
-        )
+        write_new(context_path, context_contents, data.force)
         write_new(session_path / "SESSION.md", self._render_session(record), data.force)
         append_entry(
             root / ".agora" / "events.md",
@@ -2649,35 +6513,151 @@ class AgoraWorkspace:
                 f"actor={actor.reference} swarm={swarm.id}"
             ),
         )
-        if not data.launch:
-            return record
+        return record
 
+    def prepare_session_authorization(
+        self, data: PrepareSessionAuthorizationInput
+    ) -> SessionAuthorizationRecord:
+        assert_slug(data.session_id, "Session id")
+        root = self.project_root()
+        record = self._load_session(root / ".agora" / "sessions" / data.session_id)
+        if record.status != "prepared":
+            raise ValueError(f"Session must be prepared for authorization: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        self._assert_session_context(record)
+        payload = session_authorization_payload(record)
+        output = Path(data.output).expanduser().resolve()
+        write_new(output, payload.decode("ascii"), data.force)
+        return SessionAuthorizationRecord(
+            session_id=record.id,
+            actor=actor.reference,
+            algorithm="ed25519",
+            fingerprint=actor.authentication_fingerprint,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            path=str(output),
+        )
+
+    @_locked_mutation("project")
+    def launch_session(self, data: LaunchSessionInput) -> SessionRecord:
+        assert_slug(data.session_id, "Session id")
+        root = self.project_root()
+        record = self._load_session(root / ".agora" / "sessions" / data.session_id)
+        if record.status != "prepared":
+            raise ValueError(f"Session must be prepared before launch: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        swarm = self._load_swarm(root, record.swarm_id)
+        if swarm.status not in {"ready", "running"}:
+            raise ValueError(f"Swarm {swarm.id} must be ready before a session can launch")
+        self._assert_represented_swarm_operational(root, actor)
+        roles = self._actor_roles(swarm, actor.reference)
+        if not roles:
+            raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+        if roles != record.roles:
+            raise ValueError(f"Prepared session roles no longer match assignments: {record.id}")
+        work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
+        if work is not None:
+            self._assert_work_mutable(root, swarm, work)
+        project = self._load_project_configuration(root)
+        expected_runtime = (
+            actor.integration or project.integration,
+            actor.provider or project.provider,
+            actor.model or project.model,
+        )
+        if (record.integration, record.provider, record.model) != expected_runtime:
+            raise ValueError(f"Prepared session runtime no longer matches its actor: {record.id}")
+        self._assert_session_context(record)
+        if not record.launch_command:
+            raise ValueError(f"Session has no launch command: {record.id}")
+        if shutil.which(record.launch_command[0]) is None:
+            raise FileNotFoundError(f"Runtime executable not found: {record.launch_command[0]}")
+
+        fingerprint: str | None = None
+        authentication_public_key: str | None = None
+        authorization_sha256: str | None = None
+        authorization_signature: str | None = None
+        if actor.authentication_required and data.signature is None:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed session authorization"
+            )
+        if data.signature is not None:
+            (
+                fingerprint,
+                authorization_sha256,
+                authentication_public_key,
+                authorization_signature,
+            ) = verify_session_authorization(
+                actor, record, Path(data.signature).expanduser().resolve()
+            )
+        authorized = SessionRecord(
+            **{
+                **record.__dict__,
+                "runtime_available": True,
+                "authentication_verified": fingerprint is not None,
+                "authentication_fingerprint": fingerprint,
+                "authentication_public_key": authentication_public_key,
+                "authorization_sha256": authorization_sha256,
+                "authorization_signature": authorization_signature,
+            }
+        )
+        return self._execute_session(root, authorized, actor, swarm, work)
+
+    def _execute_session(
+        self,
+        root: Path,
+        record: SessionRecord,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord | None,
+    ) -> SessionRecord:
+        session_path = Path(record.path)
         running = SessionRecord(**{**record.__dict__, "status": "running"})
         atomic_write(session_path / "SESSION.md", self._render_session(running))
         environment = {
             **os.environ,
             "AGORA_PROJECT": str(root),
             "AGORA_SESSION": str(session_path / "SESSION.md"),
-            "AGORA_CONTEXT": str(context_path),
+            "AGORA_CONTEXT": record.context_path,
             "AGORA_ACTOR": actor.reference,
             "AGORA_SWARM": swarm.id,
         }
         if work is not None:
             environment["AGORA_WORK"] = work.id
-        exit_code = self._launcher(command, root, environment)
+        exit_code = self._launcher(record.launch_command, root, environment)
         status = "completed" if exit_code == 0 else "failed"
         finished = SessionRecord(**{**record.__dict__, "status": status, "exit_code": exit_code})
         atomic_write(session_path / "SESSION.md", self._render_session(finished))
         append_entry(
             root / ".agora" / "events.md",
             (
-                f"- {self._timestamp()} | session.{status} | session={session_id} "
+                f"- {self._timestamp()} | session.{status} | session={record.id} "
                 f"exit-code={exit_code}"
             ),
         )
         if exit_code != 0:
-            raise RuntimeError(f"Session runner exited with code {exit_code}: {' '.join(command)}")
+            raise RuntimeError(
+                f"Session runner exited with code {exit_code}: {' '.join(record.launch_command)}"
+            )
         return finished
+
+    @staticmethod
+    def _assert_session_context(record: SessionRecord) -> None:
+        context_path = Path(record.context_path)
+        expected_path = Path(record.path) / "CONTEXT.md"
+        if context_path != expected_path:
+            raise ValueError(f"Session context path is not canonical: {record.id}")
+        if not context_path.is_file():
+            raise FileNotFoundError(f"Session context is missing: {context_path}")
+        if record.context_sha256 is None:
+            raise ValueError(f"Session has no context digest: {record.id}")
+        digest = hashlib.sha256(context_path.read_bytes()).hexdigest()
+        if digest != record.context_sha256:
+            raise ValueError(f"Session context digest mismatch: {record.id}")
 
     def list_sessions(self, status: str | None = None) -> list[SessionRecord]:
         root = self.project_root()
@@ -2696,6 +6676,13 @@ class AgoraWorkspace:
         if swarm.status not in {"ready", "running"}:
             raise ValueError(f"Swarm {swarm.id} must be ready before a tool can be invoked")
         actor = self._find_actor(root, data.actor_id)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        if data.launch and actor.authentication_required:
+            raise ValueError(
+                f"Actor {actor.reference} requires signed launch: prepare the run without "
+                "--launch, export its authorization, then use tool launch"
+            )
         self._assert_represented_swarm_operational(root, actor)
         roles = self._actor_roles(swarm, actor.reference)
         if not roles:
@@ -2729,6 +6716,15 @@ class AgoraWorkspace:
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
         if work is not None:
             self._assert_work_mutable(root, swarm, work)
+        self._assert_environment_permission(
+            root,
+            swarm,
+            roles,
+            operation.capability,
+            data.environment_id,
+            operation.environment_required,
+            work,
+        )
         if operation.approval_role is not None:
             if work is None:
                 raise ValueError(
@@ -2768,6 +6764,7 @@ class AgoraWorkspace:
             actor=actor.reference,
             swarm_id=swarm.id,
             work_id=work.id if work else None,
+            environment_id=data.environment_id,
             capability=operation.capability,
             risk=operation.risk,
             inputs=data.inputs,
@@ -2777,6 +6774,8 @@ class AgoraWorkspace:
             path=str(run_path),
             created_at=self._timestamp(),
             result_kind=operation.result_kind,
+            timeout_seconds=contract.timeout_seconds,
+            max_output_bytes=contract.max_output_bytes,
         )
         write_new(run_path / "RUN.md", self._render_tool_run(record, contract), data.force)
         self._append_tool_event(root, record, "prepared")
@@ -2789,6 +6788,161 @@ class AgoraWorkspace:
         if not data.launch:
             return record
 
+        return self._execute_tool_run(root, record, contract, actor, swarm, work, data.force)
+
+    def prepare_tool_authorization(
+        self, data: PrepareToolAuthorizationInput
+    ) -> ToolAuthorizationRecord:
+        assert_slug(data.run_id, "Tool run id")
+        root = self.project_root()
+        record = self._load_tool_run(root / ".agora" / "tool-runs" / data.run_id)
+        if record.status != "prepared":
+            raise ValueError(f"Tool run must be prepared for authorization: {record.id}")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        validate_actor_identity(actor)
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        payload = tool_authorization_payload(record)
+        output = Path(data.output).expanduser().resolve()
+        write_new(output, payload.decode("ascii"), data.force)
+        return ToolAuthorizationRecord(
+            run_id=record.id,
+            actor=actor.reference,
+            algorithm="ed25519",
+            fingerprint=actor.authentication_fingerprint,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            path=str(output),
+        )
+
+    @_locked_mutation("project")
+    def launch_tool_run(self, data: LaunchToolRunInput) -> ToolRunRecord:
+        assert_slug(data.run_id, "Tool run id")
+        root = self.project_root()
+        record = self._load_tool_run(root / ".agora" / "tool-runs" / data.run_id)
+        if record.status != "prepared":
+            raise ValueError(f"Tool run must be prepared before launch: {record.id}")
+        swarm = self._load_swarm(root, record.swarm_id)
+        if swarm.status not in {"ready", "running"}:
+            raise ValueError(f"Swarm {swarm.id} must be ready before a tool can be launched")
+        actor = self._find_actor(root, record.actor)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        self._assert_represented_swarm_operational(root, actor)
+        roles = self._actor_roles(swarm, actor.reference)
+        if not roles:
+            raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+
+        contract = load_tool_contract(root / ".agora" / "tools" / record.tool_id)
+        operation = contract.operations.get(record.operation_id)
+        if operation is None:
+            raise FileNotFoundError(
+                f"Tool operation not found: {record.tool_id}/{record.operation_id}"
+            )
+        if operation.capability not in self._actor_tool_capabilities(root, swarm, roles):
+            raise PermissionError(
+                f"Actor {actor.reference} is not allowed tool capability {operation.capability}"
+            )
+        expected_inputs = set(operation.inputs)
+        provided_inputs = set(record.inputs)
+        missing_inputs = sorted(expected_inputs - provided_inputs)
+        unknown_inputs = sorted(provided_inputs - expected_inputs)
+        empty_inputs = sorted(key for key, value in record.inputs.items() if not value)
+        if missing_inputs or unknown_inputs or empty_inputs:
+            raise ValueError(
+                f"Prepared Tool Run has invalid inputs: "
+                f"missing=[{', '.join(missing_inputs)}], "
+                f"unknown=[{', '.join(unknown_inputs)}], "
+                f"empty=[{', '.join(empty_inputs)}]"
+            )
+        validate_operation_inputs(operation, record.inputs)
+        command = [
+            contract.executable,
+            *(
+                self._substitute_tool_inputs(argument, record.inputs)
+                for argument in operation.arguments
+            ),
+        ]
+        if record.command != command:
+            raise ValueError(f"Prepared tool command no longer matches its contract: {record.id}")
+        if (
+            record.capability != operation.capability
+            or record.risk != operation.risk
+            or record.result_kind != operation.result_kind
+            or record.timeout_seconds != contract.timeout_seconds
+            or record.max_output_bytes != contract.max_output_bytes
+        ):
+            raise ValueError(f"Prepared tool policy no longer matches its contract: {record.id}")
+
+        work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
+        if work is not None:
+            self._assert_work_mutable(root, swarm, work)
+        self._assert_environment_permission(
+            root,
+            swarm,
+            roles,
+            operation.capability,
+            record.environment_id,
+            operation.environment_required,
+            work,
+        )
+        if operation.approval_role is not None:
+            if work is None or operation.approval_role not in work.approval_roles:
+                raise PermissionError(
+                    f"Tool operation {contract.id}/{operation.id} requires approval from "
+                    f"{operation.approval_role}"
+                )
+
+        executable_path = shutil.which(contract.executable)
+        if executable_path is None:
+            raise FileNotFoundError(f"Tool executable not found: {contract.executable}")
+        if contract.minimum_runtime_version is not None:
+            probe = self._runtime_probe(contract, executable_path)
+            if probe.compatible is not True:
+                raise RuntimeError(
+                    f"Tool runtime compatibility check failed for {contract.id}: {probe.detail}"
+                )
+
+        fingerprint: str | None = None
+        authentication_public_key: str | None = None
+        authorization_sha256: str | None = None
+        authorization_signature: str | None = None
+        if actor.authentication_required and data.signature is None:
+            raise PermissionError(f"Actor {actor.reference} requires a signed tool authorization")
+        if data.signature is not None:
+            (
+                fingerprint,
+                authorization_sha256,
+                authentication_public_key,
+                authorization_signature,
+            ) = verify_tool_authorization(
+                actor, record, Path(data.signature).expanduser().resolve()
+            )
+        authorized = ToolRunRecord(
+            **{
+                **record.__dict__,
+                "runtime_available": True,
+                "authentication_verified": fingerprint is not None,
+                "authentication_fingerprint": fingerprint,
+                "authentication_public_key": authentication_public_key,
+                "authorization_sha256": authorization_sha256,
+                "authorization_signature": authorization_signature,
+            }
+        )
+        return self._execute_tool_run(root, authorized, contract, actor, swarm, work)
+
+    def _execute_tool_run(
+        self,
+        root: Path,
+        record: ToolRunRecord,
+        contract: ToolContract,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord | None,
+        force: bool = False,
+    ) -> ToolRunRecord:
+        run_path = Path(record.path)
         running = ToolRunRecord(**{**record.__dict__, "status": "running"})
         atomic_write(run_path / "RUN.md", self._render_tool_run(running, contract))
         environment = {
@@ -2800,7 +6954,21 @@ class AgoraWorkspace:
         }
         if work is not None:
             environment["AGORA_WORK"] = work.id
-        result = self._tool_runner(command, root, environment)
+        if record.environment_id is not None:
+            environment["AGORA_ENVIRONMENT"] = record.environment_id
+        if self._tool_runner is None:
+            result = _run_tool_process(
+                record.command,
+                root,
+                environment,
+                timeout_seconds=record.timeout_seconds,
+                max_output_bytes=record.max_output_bytes,
+            )
+        else:
+            result = _bound_tool_output(
+                self._tool_runner(record.command, root, environment),
+                record.max_output_bytes,
+            )
         status = "completed" if result.returncode == 0 else "failed"
         finished = ToolRunRecord(
             **{**record.__dict__, "status": status, "exit_code": result.returncode}
@@ -2809,18 +6977,18 @@ class AgoraWorkspace:
         write_new(
             run_path / "RESULT.md",
             self._render_tool_result(finished, result.stdout, result.stderr),
-            data.force,
+            force,
         )
         self._append_tool_event(root, finished, status)
         if work is not None:
             self._append_work_event(
                 work,
                 f"tool.{status}",
-                f"run={run_id} exit-code={result.returncode}",
+                f"run={record.id} exit-code={result.returncode}",
             )
         if result.returncode != 0:
             raise RuntimeError(
-                f"Tool operation exited with code {result.returncode}: {' '.join(command)}"
+                f"Tool operation exited with code {result.returncode}: {' '.join(record.command)}"
             )
         return finished
 
@@ -2838,6 +7006,7 @@ class AgoraWorkspace:
         actors = self.list_actors()
         methods = self.list_methods()
         tools = self.list_tools()
+        environments = self.list_environments()
         swarms = self.list_swarms()
         work = self.list_work()
         delegations = self.list_delegations()
@@ -2882,6 +7051,7 @@ class AgoraWorkspace:
                 "actors": len(actors),
                 "methods": len(methods),
                 "tools": len(tools),
+                "environments": len(environments),
                 "swarms": len(swarms),
                 "work": len(work),
                 "delegations": len(delegations),
@@ -2945,18 +7115,31 @@ class AgoraWorkspace:
             "methods": 0,
             "tools": 0,
             "tool-adapters": 0,
+            "environments": 0,
             "actors": 0,
+            "actor-keys": 0,
             "swarms": 0,
             "work": 0,
+            "approval-delegations": 0,
+            "gate-waivers": 0,
             "handoffs": 0,
             "delegations": 0,
             "status-changes": 0,
             "sessions": 0,
+            "lifecycle-actions": 0,
             "tool-runs": 0,
             "event-files": 0,
             "upgrades": 0,
             "registries": 0,
+            "registry-update-audits": 0,
+            "pack-update-audits": 0,
+            "pack-update-audit-applications": 0,
             "trust-keys": 0,
+            "transparency-trust-keys": 0,
+            "transparency-proofs": 0,
+            "organization-trust-roots": 0,
+            "organization-trust-bundles": 0,
+            "organization-trust-root-rotations": 0,
             "pack-sources": 0,
             "pack-histories": 0,
             "pack-locks": 0,
@@ -3040,6 +7223,91 @@ class AgoraWorkspace:
                     path,
                     f"Registry id {registry.id} does not match directory {directory.name}",
                 )
+            if isinstance(registry, RegistryRecord) and registry.source is not None:
+                source_record = read_registry_source(directory / "SOURCE.md")
+                if source_record.transparency_required:
+                    proof_path = root / ".agora" / str(source_record.transparency_proof)
+                    try:
+                        proof = load_transparency_proof(proof_path)
+                        require_proof_matches_release(
+                            proof,
+                            RegistryReleaseRecord(
+                                registry=source_record.registry,
+                                version=source_record.version,
+                                archive=str(source_record.release_archive),
+                                sha256=source_record.sha256,
+                            ),
+                        )
+                    except Exception as error:
+                        issue("registry.transparency-proof-invalid", proof_path, str(error))
+        for directory in _child_directories(root / ".agora" / "notifications" / "registry-updates"):
+            path = directory / "AUDIT.md"
+            audit = inspect(
+                "registry-update-audits",
+                "registry-update-audit.invalid",
+                path,
+                lambda path=path: read_registry_update_audit(path),
+            )
+            if isinstance(audit, RegistryUpdateAuditRecord) and audit.id != directory.name:
+                issue(
+                    "registry-update-audit.id-mismatch",
+                    path,
+                    f"Registry update audit id {audit.id} does not match directory "
+                    f"{directory.name}",
+                )
+        for directory in _child_directories(root / ".agora" / "notifications" / "pack-updates"):
+            path = directory / "AUDIT.md"
+            audit = inspect(
+                "pack-update-audits",
+                "pack-update-audit.invalid",
+                path,
+                lambda path=path: read_pack_update_audit(path),
+            )
+            if isinstance(audit, PackUpdateAuditRecord) and audit.id != directory.name:
+                issue(
+                    "pack-update-audit.id-mismatch",
+                    path,
+                    f"Pack update audit id {audit.id} does not match directory {directory.name}",
+                )
+            application_path = directory / "APPLICATION.md"
+            if not application_path.is_file():
+                continue
+            application = inspect(
+                "pack-update-audit-applications",
+                "pack-update-audit-application.invalid",
+                application_path,
+                lambda application_path=application_path: read_pack_update_audit_application(
+                    application_path
+                ),
+            )
+            if not isinstance(application, PackUpdateAuditApplicationRecord):
+                continue
+            if application.id != directory.name or application.scope != "project":
+                issue(
+                    "pack-update-audit-application.identity-mismatch",
+                    application_path,
+                    "Pack update audit application identity does not match its location",
+                )
+            if application.audit_sha256 != hashlib.sha256(path.read_bytes()).hexdigest():
+                issue(
+                    "pack-update-audit-application.audit-mismatch",
+                    application_path,
+                    "Applied pack update audit changed after application",
+                )
+            for history in application.history_paths:
+                history_path = Path(history)
+                if history_path.is_absolute() or ".." in history_path.parts:
+                    issue(
+                        "pack-update-audit-application.history-path-invalid",
+                        application_path,
+                        f"Pack update history path is not portable: {history}",
+                    )
+                elif not (root / ".agora" / history_path).is_file():
+                    issue(
+                        "pack-update-audit-application.history-missing",
+                        application_path,
+                        f"Applied pack update history is missing: {history}",
+                    )
         trust_keys: dict[str, RegistryTrustKeyRecord] = {}
         for path in sorted((root / ".agora" / "trust" / "keys").glob("*.md")):
             record = inspect(
@@ -3073,6 +7341,267 @@ class AgoraWorkspace:
                     Path(record.path),
                     "Replacement registry trust key must be active for the same registry",
                 )
+        transparency_keys: dict[str, TransparencyTrustKeyRecord] = {}
+        for path in sorted((root / ".agora" / "trust" / "transparency").glob("*.md")):
+            record = inspect(
+                "transparency-trust-keys",
+                "transparency-trust-key.invalid",
+                path,
+                lambda path=path: load_transparency_key(path, "project"),
+            )
+            if not isinstance(record, TransparencyTrustKeyRecord):
+                continue
+            transparency_keys[record.id] = record
+            if record.id != path.stem:
+                issue(
+                    "transparency-trust-key.id-mismatch",
+                    path,
+                    f"Transparency trust key id {record.id} does not match file {path.name}",
+                )
+        for record in transparency_keys.values():
+            if record.replaced_by is None:
+                continue
+            replacement = transparency_keys.get(record.replaced_by)
+            if replacement is None:
+                issue(
+                    "transparency-trust-key.replacement-missing",
+                    Path(record.path),
+                    f"Replacement transparency trust key does not exist: {record.replaced_by}",
+                )
+            elif replacement.log != record.log or replacement.status != "active":
+                issue(
+                    "transparency-trust-key.replacement-invalid",
+                    Path(record.path),
+                    "Replacement transparency trust key must be active for the same log",
+                )
+        user_transparency_keys: dict[str, TransparencyTrustKeyRecord] = {}
+        for path in sorted((agora_home() / "trust" / "transparency").glob("*.md")):
+            try:
+                record = load_transparency_key(path, "user")
+            except Exception:
+                continue
+            user_transparency_keys[record.id] = record
+        proof_root = root / ".agora" / "transparency"
+        for path in sorted(proof_root.rglob("PROOF.md")):
+            proof = inspect(
+                "transparency-proofs",
+                "transparency-proof.invalid",
+                path,
+                lambda path=path: load_transparency_proof(path),
+            )
+            if not isinstance(proof, TransparencyInclusionProofRecord):
+                continue
+            relative = path.relative_to(proof_root)
+            expected = (proof.log, proof.registry, proof.version, "PROOF.md")
+            if relative.parts != expected:
+                issue(
+                    "transparency-proof.location-mismatch",
+                    path,
+                    "Transparency proof identity does not match its durable location",
+                )
+            key = transparency_keys.get(proof.key_id) or user_transparency_keys.get(proof.key_id)
+            if key is None:
+                issue(
+                    "transparency-proof.key-missing",
+                    path,
+                    f"Transparency trust key does not exist: {proof.key_id}",
+                )
+                continue
+            try:
+                verify_transparency_proof(proof, key)
+            except Exception as error:
+                issue("transparency-proof.verification-failed", path, str(error))
+        for directory in _child_directories(root / ".agora" / "trust" / "organizations"):
+            root_path = directory / "ROOT.md"
+            organization_root = inspect(
+                "organization-trust-roots",
+                "organization-trust-root.invalid",
+                root_path,
+                lambda root_path=root_path: load_organization_trust_root(root_path, "project"),
+            )
+            if not isinstance(organization_root, OrganizationTrustRootRecord):
+                continue
+            if organization_root.id != directory.name:
+                issue(
+                    "organization-trust-root.id-mismatch",
+                    root_path,
+                    f"Organization trust id {organization_root.id} does not match directory "
+                    f"{directory.name}",
+                )
+            rotations: list[OrganizationTrustRootRotationRecord] = []
+            expected_rotation = 1
+            previous_rotation_sha256: str | None = None
+            previous_to_fingerprint: str | None = None
+            previous_bundle_sequence = 0
+            for rotation_path in sorted((directory / "rotations").glob("*.md")):
+                rotation = inspect(
+                    "organization-trust-root-rotations",
+                    "organization-trust-root-rotation.invalid",
+                    rotation_path,
+                    lambda rotation_path=rotation_path: load_organization_trust_root_rotation(
+                        rotation_path.read_bytes(), scope="project", path=str(rotation_path)
+                    ),
+                )
+                if not isinstance(rotation, OrganizationTrustRootRotationRecord):
+                    continue
+                rotations.append(rotation)
+                if rotation_path.stem != f"{rotation.rotation:020d}":
+                    issue(
+                        "organization-trust-root-rotation.filename-mismatch",
+                        rotation_path,
+                        f"Root rotation {rotation.rotation} does not match {rotation_path.name}",
+                    )
+                if (
+                    rotation.organization != organization_root.id
+                    or rotation.rotation != expected_rotation
+                    or rotation.previous_rotation_sha256 != previous_rotation_sha256
+                    or (
+                        previous_to_fingerprint is not None
+                        and rotation.from_fingerprint != previous_to_fingerprint
+                    )
+                    or rotation.bundle_sequence < previous_bundle_sequence
+                ):
+                    issue(
+                        "organization-trust-root-rotation.history-gap",
+                        rotation_path,
+                        "Organization trust root rotation history is not continuous",
+                    )
+                expected_rotation = rotation.rotation + 1
+                previous_rotation_sha256 = rotation.sha256
+                previous_to_fingerprint = rotation.to_fingerprint
+                previous_bundle_sequence = rotation.bundle_sequence
+
+            bundle_root = organization_root
+            if rotations:
+                first = rotations[0]
+                if (
+                    first.from_public_key != organization_root.initial_public_key
+                    or first.from_fingerprint != organization_root.initial_fingerprint
+                ):
+                    issue(
+                        "organization-trust-root-rotation.anchor-mismatch",
+                        Path(first.path),
+                        "First root rotation does not start at the pinned initial root",
+                    )
+                bundle_root = replace(
+                    organization_root,
+                    public_key=first.from_public_key,
+                    fingerprint=first.from_fingerprint,
+                )
+                last = rotations[-1]
+                if (
+                    last.to_public_key != organization_root.public_key
+                    or last.to_fingerprint != organization_root.fingerprint
+                ):
+                    issue(
+                        "organization-trust-root-rotation.active-root-mismatch",
+                        root_path,
+                        "Active organization root does not match the final rotation",
+                    )
+            elif (
+                organization_root.public_key != organization_root.initial_public_key
+                or organization_root.fingerprint != organization_root.initial_fingerprint
+            ):
+                issue(
+                    "organization-trust-root.anchor-mismatch",
+                    root_path,
+                    "Active organization root differs from its anchor without rotation history",
+                )
+
+            expected_sequence = 1
+            previous_sha256: str | None = None
+            bundle_checksums: dict[int, str] = {}
+            managed_keys: dict[str, RegistryTrustKeyRecord] = {}
+            for history_path in sorted((directory / "history").glob("*.md")):
+                for rotation in rotations:
+                    if rotation.bundle_sequence < expected_sequence:
+                        bundle_root = replace(
+                            bundle_root,
+                            public_key=rotation.to_public_key,
+                            fingerprint=rotation.to_fingerprint,
+                        )
+                try:
+                    sequence, previous, bundle_keys, checksum, _ = load_organization_trust_bundle(
+                        history_path.read_bytes(), root=bundle_root
+                    )
+                except Exception as error:
+                    issue("organization-trust-bundle.invalid", history_path, str(error))
+                    continue
+                checked["organization-trust-bundles"] += 1
+                if history_path.stem != f"{sequence:020d}":
+                    issue(
+                        "organization-trust-bundle.filename-mismatch",
+                        history_path,
+                        f"Bundle sequence {sequence} does not match {history_path.name}",
+                    )
+                if sequence != expected_sequence or previous != previous_sha256:
+                    issue(
+                        "organization-trust-bundle.history-gap",
+                        history_path,
+                        "Organization trust bundle history is not continuous",
+                    )
+                expected_sequence = sequence + 1
+                previous_sha256 = checksum
+                bundle_checksums[sequence] = checksum
+                managed_keys.update((item.id, item) for item in bundle_keys)
+            for rotation in rotations:
+                expected_bundle_sha256 = (
+                    None
+                    if rotation.bundle_sequence == 0
+                    else bundle_checksums.get(rotation.bundle_sequence)
+                )
+                if rotation.bundle_sha256 != expected_bundle_sha256:
+                    issue(
+                        "organization-trust-root-rotation.bundle-mismatch",
+                        Path(rotation.path),
+                        "Root rotation does not match its persisted bundle boundary",
+                    )
+            if (
+                organization_root.last_sequence != expected_sequence - 1
+                or organization_root.last_sha256 != previous_sha256
+            ):
+                issue(
+                    "organization-trust-root.history-mismatch",
+                    root_path,
+                    "Organization trust root does not match its persisted bundle history",
+                )
+            for id_, managed in managed_keys.items():
+                current = trust_keys.get(id_)
+                if current is None:
+                    issue(
+                        "organization-trust-key.missing",
+                        root_path,
+                        f"Organization-managed registry trust key is missing: {id_}",
+                    )
+                    continue
+                current_state = (
+                    current.registry,
+                    current.algorithm,
+                    current.public_key,
+                    current.fingerprint,
+                    current.status,
+                    current.created_at,
+                    current.revoked_at,
+                    current.revoked_reason,
+                    current.replaced_by,
+                )
+                managed_state = (
+                    managed.registry,
+                    managed.algorithm,
+                    managed.public_key,
+                    managed.fingerprint,
+                    managed.status,
+                    managed.created_at,
+                    managed.revoked_at,
+                    managed.revoked_reason,
+                    managed.replaced_by,
+                )
+                if current_state != managed_state:
+                    issue(
+                        "organization-trust-key.history-mismatch",
+                        Path(current.path),
+                        f"Registry trust key {id_} differs from its latest organization bundle",
+                    )
         for path, schema in (
             (root / ".agora" / "constitution.md", "agora/constitution/v1"),
             (root / ".agora" / "PROTOCOL.md", "agora/protocol/v1"),
@@ -3084,6 +7613,14 @@ class AgoraWorkspace:
                 path,
                 lambda path=path, schema=schema: _assert_schema(read_markdown(path), schema, path),
             )
+        coordination_path = root / ".agora" / "coordination.md"
+        if coordination_path.exists():
+            inspect(
+                "documents",
+                "coordination.invalid",
+                coordination_path,
+                lambda: load_coordination_policy(coordination_path),
+            )
         standards_path = root / ".agora" / "STANDARDS.md"
         inspect(
             "documents",
@@ -3091,6 +7628,26 @@ class AgoraWorkspace:
             standards_path,
             lambda: _assert_project_standards(read_markdown(standards_path), standards_path),
         )
+
+        environments: dict[str, EnvironmentPolicyRecord] = {}
+        for path in sorted((root / ".agora" / "environments").glob("*.md")):
+            if path.name == "README.md":
+                continue
+            environment = inspect(
+                "environments",
+                "environment.invalid",
+                path,
+                lambda path=path: self._load_environment(path),
+            )
+            if not isinstance(environment, EnvironmentPolicyRecord):
+                continue
+            environments[environment.id] = environment
+            if environment.id != path.stem:
+                issue(
+                    "environment.id-mismatch",
+                    path,
+                    f"Environment id {environment.id} does not match filename {path.name}",
+                )
 
         command_root = root / ".agora" / "commands"
         commands: dict[str, Path] = {}
@@ -3173,6 +7730,30 @@ class AgoraWorkspace:
                 project_path,
                 f"Default Method Pack is not valid or installed: {project.default_method}",
             )
+        for method_id, contract in methods.items():
+            for role_id in contract.required_roles:
+                role_path = method_root / method_id / "roles" / f"{role_id}.md"
+                role = read_markdown(role_path)
+                allowed_environments = role.attributes.get("allowed-environments", ["*"])
+                unknown = sorted(set(allowed_environments) - {"*"} - set(environments))
+                if unknown:
+                    issue(
+                        "role.environment-missing",
+                        role_path,
+                        f"Role {role_id} allows missing environments: {', '.join(unknown)}",
+                    )
+        known_role_ids = {
+            role_id for contract in methods.values() for role_id in contract.required_roles
+        }
+        for environment in environments.values():
+            unknown_roles = sorted(set(environment.required_approval_roles) - known_role_ids)
+            if unknown_roles:
+                issue(
+                    "environment.approval-role-missing",
+                    Path(environment.path),
+                    "Environment requires roles absent from installed Method Packs: "
+                    f"{', '.join(unknown_roles)}",
+                )
 
         tools: dict[str, ToolContract] = {}
         tool_root = root / ".agora" / "tools"
@@ -3278,6 +7859,71 @@ class AgoraWorkspace:
                 )
 
         actor_cache: dict[str, ActorRecord] = {}
+        validated_actor_key_histories: set[str] = set()
+
+        def inspect_actor_key_history(actor: ActorRecord) -> None:
+            if actor.reference in validated_actor_key_histories:
+                return
+            validated_actor_key_histories.add(actor.reference)
+            records: dict[str, ActorKeyRecord] = {}
+            for key_path in sorted(self._actor_key_root(actor).glob("*.md")):
+                key = inspect(
+                    "actor-keys",
+                    "actor-key.invalid",
+                    key_path,
+                    lambda key_path=key_path: load_actor_key(key_path),
+                )
+                if not isinstance(key, ActorKeyRecord):
+                    continue
+                if key.fingerprint != key_path.stem:
+                    issue(
+                        "actor-key.fingerprint-mismatch",
+                        key_path,
+                        "Actor key fingerprint does not match its filename",
+                    )
+                if key.actor != actor.reference:
+                    issue(
+                        "actor-key.actor-mismatch",
+                        key_path,
+                        f"Actor key belongs to {key.actor}, expected {actor.reference}",
+                    )
+                if key.fingerprint in records:
+                    issue(
+                        "actor-key.duplicate",
+                        key_path,
+                        f"Duplicate actor key fingerprint: {key.fingerprint}",
+                    )
+                records[key.fingerprint] = key
+            if not records:
+                return
+            current = (
+                records.get(actor.authentication_fingerprint)
+                if actor.authentication_fingerprint is not None
+                else None
+            )
+            expected_status = "revoked" if actor.authentication_revoked_at is not None else "active"
+            if current is None or current.status != expected_status:
+                issue(
+                    "actor-key.current-mismatch",
+                    Path(actor.path),
+                    "Actor current authentication state differs from its key history",
+                )
+            active = [record for record in records.values() if record.status == "active"]
+            expected_active = 0 if actor.authentication_revoked_at is not None else 1
+            if len(active) != expected_active:
+                issue(
+                    "actor-key.active-count",
+                    self._actor_key_root(actor),
+                    f"Actor key history must contain {expected_active} active key(s)",
+                )
+            for record in records.values():
+                if record.replaced_by is not None and record.replaced_by not in records:
+                    issue(
+                        "actor-key.replacement-missing",
+                        Path(record.path),
+                        f"Replacement actor key does not exist: {record.replaced_by}",
+                    )
+
         actor_root = root / ".agora" / "actors"
         for path in sorted(actor_root.glob("*.md")):
             if path.name == "README.md":
@@ -3290,6 +7936,7 @@ class AgoraWorkspace:
             )
             if isinstance(actor, ActorRecord):
                 actor_cache[actor.reference] = actor
+                inspect_actor_key_history(actor)
                 if actor.id != path.stem:
                     issue(
                         "actor.id-mismatch",
@@ -3308,6 +7955,7 @@ class AgoraWorkspace:
             )
             if isinstance(actor, ActorRecord):
                 actor_cache[actor.reference] = actor
+                inspect_actor_key_history(actor)
                 if actor.id != Path(actor.path).stem:
                     issue(
                         "actor.id-mismatch",
@@ -3458,6 +8106,8 @@ class AgoraWorkspace:
                 )
 
         work_records: dict[tuple[str, str], WorkRecord] = {}
+        approval_delegation_records: dict[tuple[str, str, str], ApprovalDelegationRecord] = {}
+        gate_waiver_records: dict[tuple[str, str, str], GateWaiverRecord] = {}
         for swarm in swarms.values():
             contract = methods.get(swarm.method)
             state_counts: dict[str, int] = {}
@@ -3472,6 +8122,10 @@ class AgoraWorkspace:
                 if not isinstance(work, WorkRecord):
                     continue
                 work_records[(swarm.id, work.id)] = work
+                try:
+                    self._normalize_budget_limits(work.budget_limits)
+                except ValueError as error:
+                    issue("work.budget-invalid", path, str(error))
                 if work.id != path.parent.name:
                     issue(
                         "work.id-mismatch",
@@ -3535,6 +8189,183 @@ class AgoraWorkspace:
                     )
                 if work.operational_status != "cancelled":
                     state_counts[work.state] = state_counts.get(work.state, 0) + 1
+                for waiver_directory in _child_directories(Path(work.path) / "waivers"):
+                    waiver_path = waiver_directory / "WAIVER.md"
+                    waiver = inspect(
+                        "gate-waivers",
+                        "gate-waiver.invalid",
+                        waiver_path,
+                        lambda waiver_path=waiver_path: self._load_gate_waiver(waiver_path),
+                    )
+                    if not isinstance(waiver, GateWaiverRecord):
+                        continue
+                    gate_waiver_records[(swarm.id, work.id, waiver.id)] = waiver
+                    if waiver.id != waiver_directory.name:
+                        issue(
+                            "gate-waiver.id-mismatch",
+                            waiver_path,
+                            "Gate Waiver id does not match its directory",
+                        )
+                    if waiver.swarm_id != swarm.id or waiver.work_id != work.id:
+                        issue(
+                            "gate-waiver.owner-mismatch",
+                            waiver_path,
+                            "Gate Waiver does not belong to its filesystem owner",
+                        )
+                    resolve_actor(waiver.authorized_by, waiver_path)
+                    gate = contract.gates.get(waiver.gate_id) if contract is not None else None
+                    if gate is None:
+                        issue(
+                            "gate-waiver.gate-missing",
+                            waiver_path,
+                            f"Gate Waiver references unknown gate: {waiver.gate_id}",
+                        )
+                        continue
+                    invalid_criteria = sorted(
+                        set(waiver.waived_criteria) - set(work.acceptance_criteria)
+                    )
+                    invalid_artifacts = sorted(
+                        set(waiver.waived_artifacts) - set(work.required_artifacts)
+                    )
+                    invalid_approvals = sorted(
+                        set(waiver.waived_approval_roles) - set(gate.required_approval_roles)
+                    )
+                    if waiver.waived_criteria and (
+                        not gate.require_all_criteria or invalid_criteria
+                    ):
+                        issue(
+                            "gate-waiver.criteria-invalid",
+                            waiver_path,
+                            "Waived criteria are not obligations of this gate: "
+                            + ", ".join(invalid_criteria or waiver.waived_criteria),
+                        )
+                    if waiver.waived_artifacts and (
+                        not gate.require_required_artifacts or invalid_artifacts
+                    ):
+                        issue(
+                            "gate-waiver.artifacts-invalid",
+                            waiver_path,
+                            "Waived artifacts are not obligations of this gate: "
+                            + ", ".join(invalid_artifacts or waiver.waived_artifacts),
+                        )
+                    if waiver.waive_successful_evidence and not gate.require_successful_evidence:
+                        issue(
+                            "gate-waiver.evidence-invalid",
+                            waiver_path,
+                            "Successful evidence is not required by this gate",
+                        )
+                    if invalid_approvals:
+                        issue(
+                            "gate-waiver.approvals-invalid",
+                            waiver_path,
+                            "Waived approvals are not obligations of this gate: "
+                            + ", ".join(invalid_approvals),
+                        )
+                active_delegation_roles: set[str] = set()
+                for delegation_directory in _child_directories(
+                    Path(work.path) / "approval-delegations"
+                ):
+                    delegation_path = delegation_directory / "DELEGATION.md"
+                    delegation = inspect(
+                        "approval-delegations",
+                        "approval-delegation.invalid",
+                        delegation_path,
+                        lambda work=work, delegation_directory=delegation_directory: (
+                            self._load_approval_delegation(work, delegation_directory.name)
+                        ),
+                    )
+                    if not isinstance(delegation, ApprovalDelegationRecord):
+                        continue
+                    approval_delegation_records[(swarm.id, work.id, delegation.id)] = delegation
+                    if delegation.id != delegation_directory.name:
+                        issue(
+                            "approval-delegation.id-mismatch",
+                            delegation_path,
+                            "Approval Delegation id does not match its directory",
+                        )
+                    if delegation.swarm_id != swarm.id or delegation.work_id != work.id:
+                        issue(
+                            "approval-delegation.owner-mismatch",
+                            delegation_path,
+                            "Approval Delegation does not belong to its filesystem owner",
+                        )
+                    grantor = resolve_actor(delegation.from_actor, delegation_path)
+                    target = resolve_actor(delegation.to_actor, delegation_path)
+                    if contract is None or delegation.role_id not in contract.required_roles:
+                        issue(
+                            "approval-delegation.role-invalid",
+                            delegation_path,
+                            f"Approval Delegation uses unknown role: {delegation.role_id}",
+                        )
+                    elif not self._role_allows_action(
+                        root, swarm.method, delegation.role_id, "approval.add"
+                    ):
+                        issue(
+                            "approval-delegation.authority-invalid",
+                            delegation_path,
+                            f"Delegated role cannot approve work: {delegation.role_id}",
+                        )
+                    elif target is not None:
+                        try:
+                            self._assert_actor_role_compatibility(
+                                root, swarm.method, delegation.role_id, target
+                            )
+                        except Exception as error:
+                            issue(
+                                "approval-delegation.target-incompatible",
+                                delegation_path,
+                                str(error),
+                            )
+                    if delegation.status == "active":
+                        if work.operational_status == "cancelled" or (
+                            contract is not None and work.state == contract.terminal_state
+                        ):
+                            issue(
+                                "approval-delegation.active-on-closed-work",
+                                delegation_path,
+                                "Closed work retains an active Approval Delegation",
+                            )
+                        if swarm.assignments.get(delegation.role_id) != delegation.from_actor:
+                            issue(
+                                "approval-delegation.grantor-unassigned",
+                                delegation_path,
+                                "Active Approval Delegation grantor no longer holds the role",
+                            )
+                        if delegation.role_id in active_delegation_roles:
+                            issue(
+                                "approval-delegation.active-conflict",
+                                delegation_path,
+                                f"Multiple active delegations exist for {delegation.role_id}",
+                            )
+                        active_delegation_roles.add(delegation.role_id)
+                        if delegation.role_id in work.approval_roles:
+                            issue(
+                                "approval-delegation.active-after-approval",
+                                delegation_path,
+                                "Active Approval Delegation remains after role approval",
+                            )
+                    if delegation.status == "used":
+                        authority = f"{delegation.to_actor} via approval-delegation:{delegation.id}"
+                        approval_contents = (Path(work.path) / "approvals.md").read_text(
+                            encoding="utf-8"
+                        )
+                        if (
+                            delegation.role_id not in work.approval_roles
+                            or authority not in approval_contents
+                        ):
+                            issue(
+                                "approval-delegation.use-missing",
+                                delegation_path,
+                                "Used Approval Delegation has no matching approval row",
+                            )
+                    if delegation.status == "revoked" and (
+                        grantor is not None and delegation.revoked_by != grantor.reference
+                    ):
+                        issue(
+                            "approval-delegation.revoker-invalid",
+                            delegation_path,
+                            "Approval Delegation was not revoked by its grantor",
+                        )
             if contract is not None:
                 for state, limit in contract.wip_limits.items():
                     if state_counts.get(state, 0) > limit:
@@ -3597,6 +8428,44 @@ class AgoraWorkspace:
                         f"Handoff references missing work: {handoff.work_id}",
                     )
 
+        for (swarm_id, work_id), work in work_records.items():
+            path = Path(work.path) / "WORK.md"
+            if len(work.child_work_refs) != len(set(work.child_work_refs)):
+                issue(
+                    "work.children-duplicated",
+                    path,
+                    "Child work references must be unique",
+                )
+            for reference in work.child_work_refs:
+                owner, separator, child_id = reference.partition("/")
+                child_key = (owner, child_id)
+                if not separator or owner != swarm_id or child_key not in work_records:
+                    issue(
+                        "work.child-missing",
+                        path,
+                        f"Child work reference is not a local work item: {reference}",
+                    )
+                    continue
+                child = work_records[child_key]
+                if child_key == (swarm_id, work_id) or child.parent_work_ref != (
+                    f"{swarm_id}/{work_id}"
+                ):
+                    issue(
+                        "work.child-link-invalid",
+                        Path(child.path) / "WORK.md",
+                        f"Child work does not link back to {swarm_id}/{work_id}",
+                    )
+            if work.parent_work_ref is not None and work.delegation_id is None:
+                owner, separator, parent_id = work.parent_work_ref.partition("/")
+                parent = work_records.get((owner, parent_id)) if separator else None
+                reference = f"{swarm_id}/{work_id}"
+                if owner != swarm_id or parent is None or reference not in parent.child_work_refs:
+                    issue(
+                        "work.parent-link-invalid",
+                        path,
+                        f"Local parent work does not link to child {reference}",
+                    )
+
         try:
             maximum = (
                 project.max_delegation_depth if isinstance(project, ProjectConfiguration) else 3
@@ -3605,6 +8474,7 @@ class AgoraWorkspace:
         except Exception as error:
             issue("swarm.graph-invalid", swarm_root, str(error))
 
+        delegation_records: dict[str, DelegationRecord] = {}
         for directory in _child_directories(root / ".agora" / "delegations"):
             path = directory / "DELEGATION.md"
             delegation = inspect(
@@ -3615,6 +8485,12 @@ class AgoraWorkspace:
             )
             if not isinstance(delegation, DelegationRecord):
                 continue
+            delegation_records[delegation.id] = delegation
+            try:
+                self._normalize_budget_limits(delegation.budget_limits)
+                self._normalize_artifact_promotions(delegation.artifact_promotions)
+            except ValueError as error:
+                issue("delegation.contract-invalid", path, str(error))
             if delegation.id != path.parent.name:
                 issue(
                     "delegation.id-mismatch",
@@ -3685,6 +8561,12 @@ class AgoraWorkspace:
                         "delegation.child-link-invalid",
                         Path(child_work.path) / "WORK.md",
                         "Child work does not link to its delegation and parent work",
+                    )
+                if child_work.budget_limits != delegation.budget_limits:
+                    issue(
+                        "delegation.child-budget-mismatch",
+                        Path(child_work.path) / "WORK.md",
+                        "Child work budget does not match its delegation",
                     )
             represented = resolve_actor(delegation.represented_by, path)
             resolve_actor(delegation.requested_by, path)
@@ -3817,6 +8699,51 @@ class AgoraWorkspace:
                             evidence_path,
                             "Collected result evidence is missing from parent work",
                         )
+                    artifact_contents = artifact_path.read_text(encoding="utf-8")
+                    for source_kind, parent_kind in delegation.artifact_promotions.items():
+                        promotion_uri = f"{result_uri}/artifacts/{source_kind}"
+                        if (
+                            source_kind not in child_work.artifact_kinds
+                            or parent_kind not in parent_work.artifact_kinds
+                            or promotion_uri not in artifact_contents
+                        ):
+                            issue(
+                                "delegation.promoted-artifact-missing",
+                                artifact_path,
+                                f"Promoted artifact is missing: {source_kind} -> {parent_kind}",
+                            )
+
+        allocated_budgets: dict[tuple[str, str], dict[str, int]] = {}
+        for delegation in delegation_records.values():
+            if delegation.status == "rejected":
+                continue
+            parent_key = (delegation.parent_swarm_id, delegation.parent_work_id)
+            parent_work = work_records.get(parent_key)
+            if parent_work is None or parent_work.budget_limits is None:
+                continue
+            allocated = allocated_budgets.setdefault(
+                parent_key, {dimension: 0 for dimension in parent_work.budget_limits}
+            )
+            for dimension, limit in (delegation.budget_limits or {}).items():
+                if dimension not in allocated:
+                    issue(
+                        "delegation.budget-dimension-unavailable",
+                        Path(delegation.path),
+                        f"Budget dimension is unavailable from parent work: {dimension}",
+                    )
+                    continue
+                allocated[dimension] += limit
+        for parent_key, allocated in allocated_budgets.items():
+            parent = work_records[parent_key]
+            assert parent.budget_limits is not None
+            for dimension, total in allocated.items():
+                if total > parent.budget_limits[dimension]:
+                    issue(
+                        "delegation.budget-exceeded",
+                        Path(parent.path) / "WORK.md",
+                        f"Delegated {dimension} budget {total} exceeds "
+                        f"parent limit {parent.budget_limits[dimension]}",
+                    )
 
         for directory in _child_directories(root / ".agora" / "sessions"):
             path = directory / "SESSION.md"
@@ -3834,7 +8761,28 @@ class AgoraWorkspace:
                     path,
                     f"Session id {session.id} does not match directory {path.parent.name}",
                 )
-            resolve_actor(session.actor, path)
+            session_actor = resolve_actor(session.actor, path)
+            if (
+                session_actor is not None
+                and session_actor.authentication_required
+                and session.preparation_action_id is None
+            ):
+                issue(
+                    "session.preparation-authentication-missing",
+                    path,
+                    f"Actor {session.actor} requires signed session preparation",
+                )
+            if (
+                session_actor is not None
+                and session.status in {"running", "completed", "failed"}
+                and session_actor.authentication_required
+                and not session.authentication_verified
+            ):
+                issue(
+                    "session.authentication-missing",
+                    path,
+                    f"Actor {session.actor} requires authentication for launched sessions",
+                )
             swarm = swarms.get(session.swarm_id)
             if swarm is None:
                 issue(
@@ -3870,6 +8818,673 @@ class AgoraWorkspace:
                 )
             if not (path.parent / "CONTEXT.md").is_file():
                 issue("session.context-missing", path, "Session CONTEXT.md is missing")
+            elif session.context_sha256 is not None:
+                try:
+                    self._assert_session_context(session)
+                except (FileNotFoundError, ValueError) as error:
+                    issue("session.context-invalid", path, str(error))
+
+        for directory in _child_directories(root / ".agora" / "actions"):
+            path = directory / "ACTION.md"
+            action = inspect(
+                "lifecycle-actions",
+                "lifecycle-action.invalid",
+                path,
+                lambda path=path: self._load_lifecycle_action(path.parent),
+            )
+            if not isinstance(action, LifecycleActionRecord):
+                continue
+            if action.id != path.parent.name:
+                issue(
+                    "lifecycle-action.id-mismatch",
+                    path,
+                    f"Lifecycle Action id {action.id} does not match directory {path.parent.name}",
+                )
+            action_actor = resolve_actor(action.actor, path)
+            if (
+                action_actor is not None
+                and action.status == "applied"
+                and action_actor.authentication_required
+                and not action.authentication_verified
+            ):
+                issue(
+                    "lifecycle-action.authentication-missing",
+                    path,
+                    f"Actor {action.actor} requires authentication for applied actions",
+                )
+            if action.swarm_id not in swarms:
+                issue(
+                    "lifecycle-action.swarm-missing",
+                    path,
+                    f"Lifecycle Action references missing swarm: {action.swarm_id}",
+                )
+            if (
+                action.work_id is not None
+                and (action.swarm_id, action.work_id) not in work_records
+                and not (action.action == "work.create" and action.status == "prepared")
+            ):
+                issue(
+                    "lifecycle-action.work-missing",
+                    path,
+                    f"Lifecycle Action references missing work: {action.work_id}",
+                )
+            elif action.status == "prepared":
+                try:
+                    self._assert_lifecycle_precondition(root, action)
+                except (FileNotFoundError, ValueError) as error:
+                    issue(
+                        "lifecycle-action.precondition-stale",
+                        path,
+                        str(error),
+                        "warning",
+                    )
+            if action.action == "work.create" and action.work_id is not None:
+                work_key = (action.swarm_id, action.work_id)
+                if action.status == "prepared" and work_key in work_records:
+                    issue(
+                        "lifecycle-action.work-conflict",
+                        path,
+                        f"Prepared action already has a work record: {action.work_id}",
+                    )
+                elif action.status == "applied" and work_key in work_records:
+                    work = work_records[work_key]
+                    try:
+                        creation = self._work_creation_input_from_action(action)
+                    except ValueError as error:
+                        issue("lifecycle-action.work-invalid", path, str(error))
+                    else:
+                        expected = (
+                            creation.title,
+                            creation.description or "No description provided.",
+                            dict(creation.acceptance_criteria),
+                            list(dict.fromkeys(creation.required_artifacts)),
+                        )
+                        actual = (
+                            work.title,
+                            work.description,
+                            work.acceptance_criteria,
+                            work.required_artifacts,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.work-mismatch",
+                                Path(work.path) / "WORK.md",
+                                "Work record differs from its applied Lifecycle Action",
+                            )
+            if action.action == "work.decompose" and action.work_id is not None:
+                try:
+                    decomposition = self._work_decomposition_input_from_action(action)
+                except ValueError as error:
+                    issue("lifecycle-action.decomposition-invalid", path, str(error))
+                else:
+                    child_key = (action.swarm_id, decomposition.child_work_id)
+                    child = work_records.get(child_key)
+                    if action.status == "prepared" and child is not None:
+                        issue(
+                            "lifecycle-action.work-conflict",
+                            path,
+                            "Prepared action already has child work: "
+                            f"{decomposition.child_work_id}",
+                        )
+                    elif action.status == "applied" and child is None:
+                        issue(
+                            "lifecycle-action.child-work-missing",
+                            path,
+                            "Applied decomposition has no child work: "
+                            f"{decomposition.child_work_id}",
+                        )
+                    elif action.status == "applied" and child is not None:
+                        parent = work_records.get((action.swarm_id, action.work_id))
+                        expected = (
+                            decomposition.title,
+                            decomposition.description or "No description provided.",
+                            dict(decomposition.acceptance_criteria),
+                            list(dict.fromkeys(decomposition.required_artifacts)),
+                            f"{action.swarm_id}/{action.work_id}",
+                        )
+                        actual = (
+                            child.title,
+                            child.description,
+                            child.acceptance_criteria,
+                            child.required_artifacts,
+                            child.parent_work_ref,
+                        )
+                        child_reference = f"{action.swarm_id}/{decomposition.child_work_id}"
+                        if actual != expected or (
+                            parent is not None and child_reference not in parent.child_work_refs
+                        ):
+                            issue(
+                                "lifecycle-action.decomposition-mismatch",
+                                Path(child.path) / "WORK.md",
+                                "Child work differs from its applied Lifecycle Action",
+                            )
+            if action.action == "gate.waive" and action.work_id is not None:
+                try:
+                    waiver_input = self._gate_waiver_input_from_action(action)
+                except ValueError as error:
+                    issue("lifecycle-action.gate-waiver-invalid", path, str(error))
+                else:
+                    waiver_key = (action.swarm_id, action.work_id, waiver_input.id)
+                    waiver = gate_waiver_records.get(waiver_key)
+                    if action.status == "prepared" and waiver is not None:
+                        issue(
+                            "lifecycle-action.gate-waiver-conflict",
+                            path,
+                            f"Prepared action already has a Gate Waiver: {waiver_input.id}",
+                        )
+                    elif action.status == "applied" and waiver is None:
+                        issue(
+                            "lifecycle-action.gate-waiver-missing",
+                            path,
+                            f"Applied action has no Gate Waiver: {waiver_input.id}",
+                        )
+                    elif action.status == "applied" and waiver is not None:
+                        expected = (
+                            action.id,
+                            action.actor,
+                            waiver_input.gate_id,
+                            waiver_input.criteria,
+                            waiver_input.artifacts,
+                            waiver_input.successful_evidence,
+                            waiver_input.approval_roles,
+                            waiver_input.reason,
+                            waiver_input.evidence_refs,
+                        )
+                        actual = (
+                            waiver.action_id,
+                            waiver.authorized_by,
+                            waiver.gate_id,
+                            waiver.waived_criteria,
+                            waiver.waived_artifacts,
+                            waiver.waive_successful_evidence,
+                            waiver.waived_approval_roles,
+                            waiver.reason,
+                            waiver.evidence_refs,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.gate-waiver-mismatch",
+                                Path(waiver.path),
+                                "Gate Waiver differs from its applied Lifecycle Action",
+                            )
+            if action.action == "approval.delegate" and action.work_id is not None:
+                delegation_key = (
+                    action.swarm_id,
+                    action.work_id,
+                    action.parameters["delegation"],
+                )
+                approval_delegation = approval_delegation_records.get(delegation_key)
+                if action.status == "prepared" and approval_delegation is not None:
+                    issue(
+                        "lifecycle-action.approval-delegation-conflict",
+                        path,
+                        "Prepared action already has an Approval Delegation record",
+                    )
+                elif action.status == "applied" and approval_delegation is None:
+                    issue(
+                        "lifecycle-action.approval-delegation-missing",
+                        path,
+                        "Applied action has no Approval Delegation record",
+                    )
+                elif action.status == "applied" and approval_delegation is not None:
+                    expected = (
+                        action.id,
+                        action.swarm_id,
+                        action.work_id,
+                        action.parameters["role"],
+                        action.actor,
+                        action.parameters["target"],
+                        action.parameters["reason"],
+                    )
+                    actual = (
+                        approval_delegation.action_id,
+                        approval_delegation.swarm_id,
+                        approval_delegation.work_id,
+                        approval_delegation.role_id,
+                        approval_delegation.from_actor,
+                        approval_delegation.to_actor,
+                        approval_delegation.reason,
+                    )
+                    if actual != expected:
+                        issue(
+                            "lifecycle-action.approval-delegation-mismatch",
+                            Path(approval_delegation.path),
+                            "Approval Delegation differs from its applied Lifecycle Action",
+                        )
+            if action.action == "approval.delegation.revoke" and action.work_id is not None:
+                delegation_key = (
+                    action.swarm_id,
+                    action.work_id,
+                    action.parameters["delegation"],
+                )
+                approval_delegation = approval_delegation_records.get(delegation_key)
+                if approval_delegation is None:
+                    issue(
+                        "lifecycle-action.approval-delegation-missing",
+                        path,
+                        "Revocation action references a missing Approval Delegation",
+                    )
+                elif action.status == "applied" and (
+                    approval_delegation.status != "revoked"
+                    or approval_delegation.revoked_by != action.actor
+                    or approval_delegation.revoked_reason != action.parameters["reason"]
+                    or approval_delegation.revocation_action_id != action.id
+                ):
+                    issue(
+                        "lifecycle-action.approval-delegation-revocation-mismatch",
+                        Path(approval_delegation.path),
+                        "Approval Delegation revocation differs from its Lifecycle Action",
+                    )
+            if (
+                action.action == "approval.add"
+                and action.status == "applied"
+                and action.work_id is not None
+                and (action.swarm_id, action.work_id) in work_records
+            ):
+                approved_work = work_records[(action.swarm_id, action.work_id)]
+                delegation_id = action.parameters.get("delegation")
+                authority = action.actor
+                if delegation_id:
+                    approval_delegation = approval_delegation_records.get(
+                        (action.swarm_id, action.work_id, delegation_id)
+                    )
+                    if approval_delegation is None or (
+                        approval_delegation.status != "used"
+                        or approval_delegation.used_action_id != action.id
+                        or approval_delegation.used_by != action.actor
+                    ):
+                        issue(
+                            "lifecycle-action.approval-delegation-use-mismatch",
+                            path,
+                            "Applied approval did not consume its bound Approval Delegation",
+                        )
+                    authority = f"{action.actor} via approval-delegation:{delegation_id}"
+                note = action.parameters["note"].replace("|", "\\|") or "Approved"
+                approval_line = f"| {action.parameters['role']} | {authority} | {note} |"
+                if approval_line not in (Path(approved_work.path) / "approvals.md").read_text(
+                    encoding="utf-8"
+                ):
+                    issue(
+                        "lifecycle-action.approval-mismatch",
+                        Path(approved_work.path) / "approvals.md",
+                        "Approval row is missing from its applied Lifecycle Action",
+                    )
+            if action.action in {"actor.key.recover", "actor.key.rotate"}:
+                target_reference = action.parameters.get("target", action.actor)
+                target_actor = resolve_actor(target_reference, path)
+                if target_actor is None:
+                    continue
+                key_root = self._actor_key_root(target_actor)
+                replacement_path = key_root / f"{action.parameters['fingerprint']}.md"
+                previous_path = key_root / f"{action.parameters['from']}.md"
+                if action.status == "prepared" and replacement_path.exists():
+                    issue(
+                        "lifecycle-action.actor-key-conflict",
+                        path,
+                        "Prepared action replacement key already exists",
+                    )
+                elif action.status == "applied":
+                    try:
+                        replacement = load_actor_key(replacement_path)
+                        previous = load_actor_key(previous_path)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.actor-key-invalid", path, str(error))
+                    else:
+                        if (
+                            replacement.actor != target_reference
+                            or replacement.public_key != action.parameters["public-key"]
+                            or replacement.fingerprint != action.parameters["fingerprint"]
+                            or previous.replaced_by != replacement.fingerprint
+                            or (
+                                action.action == "actor.key.rotate"
+                                and previous.reason != action.parameters["reason"]
+                            )
+                        ):
+                            issue(
+                                "lifecycle-action.actor-key-mismatch",
+                                replacement_path,
+                                "Actor key history differs from its applied Lifecycle Action",
+                            )
+            if action.action == "actor.key.revoke":
+                target_actor = resolve_actor(action.parameters["target"], path)
+                if target_actor is None:
+                    continue
+                key_path = (
+                    self._actor_key_root(target_actor) / f"{action.parameters['fingerprint']}.md"
+                )
+                if action.status == "applied":
+                    try:
+                        revoked = load_actor_key(key_path)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.actor-key-invalid", path, str(error))
+                    else:
+                        if (
+                            revoked.actor != action.parameters["target"]
+                            or revoked.status != "revoked"
+                            or revoked.reason != action.parameters["reason"]
+                        ):
+                            issue(
+                                "lifecycle-action.actor-key-mismatch",
+                                key_path,
+                                "Actor key history differs from its applied Lifecycle Action",
+                            )
+            if action.action == "session.prepare":
+                session_id = action.parameters["session"]
+                session_path = root / ".agora" / "sessions" / session_id
+                if action.status == "prepared" and session_path.exists():
+                    issue(
+                        "lifecycle-action.session-conflict",
+                        path,
+                        f"Prepared action already has a Session record: {session_id}",
+                    )
+                elif action.status == "applied" and not (session_path / "SESSION.md").is_file():
+                    issue(
+                        "lifecycle-action.session-missing",
+                        path,
+                        f"Applied action has no Session record: {session_id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        session = self._load_session(session_path)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.session-invalid", session_path, str(error))
+                    else:
+                        expected = (
+                            action.id,
+                            action.actor,
+                            action.swarm_id,
+                            action.work_id,
+                            action.precondition_sha256,
+                        )
+                        actual = (
+                            session.preparation_action_id,
+                            session.actor,
+                            session.swarm_id,
+                            session.work_id,
+                            session.context_sha256,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.session-mismatch",
+                                session_path / "SESSION.md",
+                                "Session record differs from its applied Lifecycle Action",
+                            )
+            if (
+                action.status == "applied"
+                and action.action in {"artifact.add", "criterion.satisfy", "evidence.add"}
+                and action.work_id is not None
+                and (action.swarm_id, action.work_id) in work_records
+            ):
+                work = work_records[(action.swarm_id, action.work_id)]
+                if action.action == "criterion.satisfy":
+                    if action.parameters["criterion"] not in work.satisfied_criteria:
+                        issue(
+                            "lifecycle-action.criterion-mismatch",
+                            Path(work.path) / "WORK.md",
+                            "Satisfied criterion is missing from its applied Lifecycle Action",
+                        )
+                elif action.action == "artifact.add":
+                    artifact_line = (
+                        f"| {action.parameters['kind']} | {action.parameters['uri']} | "
+                        f"{action.actor} |"
+                    )
+                    artifact_path = Path(work.path) / "artifacts.md"
+                    if artifact_line not in artifact_path.read_text(encoding="utf-8"):
+                        issue(
+                            "lifecycle-action.artifact-mismatch",
+                            artifact_path,
+                            "Artifact row is missing from its applied Lifecycle Action",
+                        )
+                else:
+                    references = (
+                        ", ".join(self._string_list_parameter(action, "artifacts")) or "none"
+                    )
+                    evidence_line = (
+                        f"| {action.parameters['type']} | {action.parameters['result']} | "
+                        f"{references} | {action.actor} |"
+                    )
+                    evidence_path = Path(work.path) / "evidence.md"
+                    if evidence_line not in evidence_path.read_text(encoding="utf-8"):
+                        issue(
+                            "lifecycle-action.evidence-mismatch",
+                            evidence_path,
+                            "Evidence row is missing from its applied Lifecycle Action",
+                        )
+            if action.action == "handoff.create" and action.swarm_id in swarms:
+                swarm = swarms[action.swarm_id]
+                handoff_path = Path(swarm.path) / "handoffs" / action.id / "HANDOFF.md"
+                if action.status == "prepared" and handoff_path.exists():
+                    issue(
+                        "lifecycle-action.handoff-conflict",
+                        path,
+                        f"Prepared action already has a handoff record: {action.id}",
+                    )
+                elif action.status == "applied" and not handoff_path.is_file():
+                    issue(
+                        "lifecycle-action.handoff-missing",
+                        path,
+                        f"Applied action has no handoff record: {action.id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        handoff = self._load_handoff(swarm, action.id)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.handoff-invalid", handoff_path, str(error))
+                    else:
+                        expected = (
+                            action.parameters["role"],
+                            action.parameters["from"],
+                            action.parameters["to"],
+                            action.actor,
+                            action.parameters["reason"],
+                            action.work_id,
+                        )
+                        actual = (
+                            handoff.role_id,
+                            handoff.from_actor,
+                            handoff.to_actor,
+                            handoff.authorized_by,
+                            handoff.reason,
+                            handoff.work_id,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.handoff-mismatch",
+                                handoff_path,
+                                "Handoff record differs from its applied Lifecycle Action",
+                            )
+            if (
+                action.action in {"work.block", "work.cancel", "work.resume"}
+                and (
+                    action.swarm_id,
+                    action.work_id,
+                )
+                in work_records
+            ):
+                work = work_records[(action.swarm_id, action.work_id)]
+                status_path = Path(work.path) / "status-changes" / action.id / "STATUS.md"
+                if action.status == "prepared" and status_path.exists():
+                    issue(
+                        "lifecycle-action.status-change-conflict",
+                        path,
+                        f"Prepared action already has a Status Change: {action.id}",
+                    )
+                elif action.status == "applied" and not status_path.is_file():
+                    issue(
+                        "lifecycle-action.status-change-missing",
+                        path,
+                        f"Applied action has no Status Change: {action.id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        change = self._load_status_change(status_path.parent)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.status-change-invalid", status_path, str(error))
+                    else:
+                        target_status = {
+                            "work.block": "blocked",
+                            "work.cancel": "cancelled",
+                            "work.resume": "active",
+                        }[action.action]
+                        expected = (
+                            "work",
+                            f"{action.swarm_id}/{action.work_id}",
+                            action.action,
+                            target_status,
+                            action.actor,
+                            action.parameters["reason"],
+                        )
+                        actual = (
+                            change.subject_type,
+                            change.subject,
+                            change.action,
+                            change.target_status,
+                            change.actor,
+                            change.reason,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.status-change-mismatch",
+                                status_path,
+                                "Status Change differs from its applied Lifecycle Action",
+                            )
+            if action.action == "delegation.create":
+                delegation_id = action.parameters["delegation"]
+                delegation_path = root / ".agora" / "delegations" / delegation_id / "DELEGATION.md"
+                if action.status == "prepared" and delegation_path.exists():
+                    issue(
+                        "lifecycle-action.delegation-conflict",
+                        path,
+                        f"Prepared action already has a delegation record: {delegation_id}",
+                    )
+                elif action.status == "applied" and not delegation_path.is_file():
+                    issue(
+                        "lifecycle-action.delegation-missing",
+                        path,
+                        f"Applied action has no delegation record: {delegation_id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        delegation = self._load_delegation(root, delegation_id)
+                        creation = self._delegation_creation_input_from_action(action)
+                        child_actor = self._find_actor(root, creation.child_actor_id)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.delegation-invalid", delegation_path, str(error))
+                    else:
+                        expected = (
+                            action.swarm_id,
+                            action.work_id,
+                            child_actor.represented_swarm,
+                            creation.child_work_id,
+                            child_actor.reference,
+                            action.actor,
+                            creation.title,
+                            creation.description or "No description provided.",
+                            dict(creation.acceptance_criteria),
+                            list(dict.fromkeys(creation.required_artifacts)),
+                            creation.result_kind,
+                            creation.budget_limits,
+                            creation.artifact_promotions,
+                        )
+                        actual = (
+                            delegation.parent_swarm_id,
+                            delegation.parent_work_id,
+                            delegation.child_swarm_id,
+                            delegation.child_work_id,
+                            delegation.represented_by,
+                            delegation.requested_by,
+                            delegation.title,
+                            delegation.description,
+                            delegation.acceptance_criteria,
+                            delegation.required_artifacts,
+                            delegation.result_kind,
+                            delegation.budget_limits,
+                            delegation.artifact_promotions,
+                        )
+                        if actual != expected:
+                            issue(
+                                "lifecycle-action.delegation-mismatch",
+                                delegation_path,
+                                "Delegation record differs from its applied Lifecycle Action",
+                            )
+            if action.action in {
+                "delegation.accept",
+                "delegation.block",
+                "delegation.cancel",
+                "delegation.collect",
+                "delegation.reject",
+                "delegation.resume",
+            }:
+                delegation_id = action.parameters["delegation"]
+                delegation_path = root / ".agora" / "delegations" / delegation_id / "DELEGATION.md"
+                if not delegation_path.is_file():
+                    issue(
+                        "lifecycle-action.delegation-missing",
+                        path,
+                        f"Lifecycle Action references missing delegation: {delegation_id}",
+                    )
+                    continue
+                try:
+                    delegation = self._load_delegation(root, delegation_id)
+                except (FileNotFoundError, ValueError) as error:
+                    issue("lifecycle-action.delegation-invalid", delegation_path, str(error))
+                    continue
+                if (
+                    action.swarm_id != delegation.parent_swarm_id
+                    or action.work_id != delegation.parent_work_id
+                ):
+                    issue(
+                        "lifecycle-action.delegation-context-mismatch",
+                        path,
+                        "Lifecycle Action does not use the delegation parent context",
+                    )
+                status_path = delegation_path.parent / "status-changes" / action.id / "STATUS.md"
+                if action.status == "prepared" and status_path.exists():
+                    issue(
+                        "lifecycle-action.status-change-conflict",
+                        path,
+                        f"Prepared action already has a Status Change: {action.id}",
+                    )
+                elif action.status == "applied" and not status_path.is_file():
+                    issue(
+                        "lifecycle-action.status-change-missing",
+                        path,
+                        f"Applied action has no Status Change: {action.id}",
+                    )
+                elif action.status == "applied":
+                    try:
+                        change = self._load_status_change(status_path.parent)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("lifecycle-action.status-change-invalid", status_path, str(error))
+                    else:
+                        expected_targets = {
+                            "delegation.accept": {"accepted"},
+                            "delegation.block": {"blocked"},
+                            "delegation.cancel": {"cancelled"},
+                            "delegation.collect": {"collected"},
+                            "delegation.reject": {"rejected"},
+                            "delegation.resume": {"proposed", "accepted"},
+                        }[action.action]
+                        expected_reason = {
+                            "delegation.accept": "Delegated work accepted by the child swarm",
+                            "delegation.collect": (
+                                "Completed child result collected into parent work"
+                            ),
+                        }.get(action.action, action.parameters.get("reason"))
+                        matches = (
+                            change.subject_type == "delegation"
+                            and change.subject == delegation.id
+                            and change.action == action.action
+                            and change.target_status in expected_targets
+                            and change.actor == action.actor
+                            and change.reason == expected_reason
+                        )
+                        if not matches:
+                            issue(
+                                "lifecycle-action.status-change-mismatch",
+                                status_path,
+                                "Status Change differs from its applied Lifecycle Action",
+                            )
 
         for directory in _child_directories(root / ".agora" / "tool-runs"):
             path = directory / "RUN.md"
@@ -3895,13 +9510,46 @@ class AgoraWorkspace:
                     path,
                     f"Tool operation is not installed: {run.tool_id}/{run.operation_id}",
                 )
-            elif operation.capability != run.capability or operation.risk != run.risk:
+            elif (
+                operation.capability != run.capability
+                or operation.risk != run.risk
+                or operation.result_kind != run.result_kind
+                or contract.timeout_seconds != run.timeout_seconds
+                or contract.max_output_bytes != run.max_output_bytes
+            ):
                 issue(
                     "tool-run.contract-mismatch",
                     path,
-                    "Tool run capability or risk differs from its installed operation",
+                    "Tool run policy differs from its installed Tool Pack operation",
                 )
-            resolve_actor(run.actor, path)
+            if run.environment_id is not None and run.environment_id not in environments:
+                issue(
+                    "tool-run.environment-missing",
+                    path,
+                    f"Tool run references missing environment: {run.environment_id}",
+                )
+            if (
+                operation is not None
+                and operation.environment_required
+                and run.environment_id is None
+            ):
+                issue(
+                    "tool-run.environment-required",
+                    path,
+                    f"Tool operation {run.tool_id}/{run.operation_id} requires an environment",
+                )
+            run_actor = resolve_actor(run.actor, path)
+            if (
+                run_actor is not None
+                and run.status in {"running", "completed", "failed"}
+                and run_actor.authentication_required
+                and not run.authentication_verified
+            ):
+                issue(
+                    "tool-run.authentication-missing",
+                    path,
+                    f"Actor {run.actor} requires authentication for launched Tool Runs",
+                )
             if run.swarm_id not in swarms:
                 issue(
                     "tool-run.swarm-missing",
@@ -3914,6 +9562,30 @@ class AgoraWorkspace:
                     path,
                     f"Tool run references missing work: {run.work_id}",
                 )
+            if (
+                run.status in {"prepared", "running"}
+                and operation is not None
+                and run.swarm_id in swarms
+                and (run.environment_id is None or run.environment_id in environments)
+            ):
+                run_swarm = swarms[run.swarm_id]
+                run_work = (
+                    work_records.get((run.swarm_id, run.work_id))
+                    if run.work_id is not None
+                    else None
+                )
+                try:
+                    self._assert_environment_permission(
+                        root,
+                        run_swarm,
+                        self._actor_roles(run_swarm, run.actor),
+                        operation.capability,
+                        run.environment_id,
+                        operation.environment_required,
+                        run_work,
+                    )
+                except (FileNotFoundError, PermissionError, ValueError) as error:
+                    issue("tool-run.environment-policy", path, str(error))
             result_path = path.parent / "RESULT.md"
             if run.status in {"completed", "failed"}:
                 inspect(
@@ -4034,6 +9706,20 @@ class AgoraWorkspace:
             actor_id = getattr(data, "actor_id", None)
             actor = self._find_actor(root, str(actor_id))
             return (agora_home() if actor.reference.startswith("user:") else root,)
+        if scope == "lifecycle-action":
+            root = self.project_root()
+            action_id = getattr(data, "action_id", None)
+            action = self._load_lifecycle_action(root / ".agora" / "actions" / str(action_id))
+            if action.action in {
+                "actor.key.recover",
+                "actor.key.revoke",
+                "actor.key.rotate",
+                "actor.runtime.update",
+            }:
+                target = action.parameters.get("target", action.actor)
+                if target.startswith("user:"):
+                    return (root, agora_home())
+            return (root,)
         if scope in {"registry-update", "pack-update"}:
             requested_scope = getattr(data, "scope", None)
             if requested_scope == "user":
@@ -4070,6 +9756,20 @@ class AgoraWorkspace:
                         now=self._now(),
                     )
                 )
+            for resource in resolved:
+                coordination_path = resource / ".agora" / "coordination.md"
+                if not coordination_path.is_file():
+                    continue
+                policy = load_coordination_policy(coordination_path)
+                if policy.mode == "external-lease":
+                    stack.enter_context(
+                        ExternalLease(
+                            policy,
+                            operation,
+                            resource,
+                            runner=self._lease_runner,
+                        )
+                    )
             self._lock_resources = resolved
             self._lock_depth = 1
             try:
@@ -4117,6 +9817,12 @@ class AgoraWorkspace:
         if not root.exists():
             return []
         return [load_trust_key(path, scope) for path in sorted(root.glob("*.md"))]
+
+    @staticmethod
+    def _transparency_keys_at(root: Path, scope: str) -> list[TransparencyTrustKeyRecord]:
+        if not root.exists():
+            return []
+        return [load_transparency_key(path, scope) for path in sorted(root.glob("*.md"))]
 
     def _load_user_configuration(self) -> UserConfiguration | None:
         path = agora_home() / "config.md"
@@ -4232,7 +9938,7 @@ class AgoraWorkspace:
         kind = string_attribute(attributes, "kind")
         if kind not in ACTOR_KINDS:
             raise ValueError(f"Unsupported actor kind: {kind}")
-        return ActorRecord(
+        record = ActorRecord(
             id=string_attribute(attributes, "id"),
             name=string_attribute(attributes, "name"),
             kind=kind,
@@ -4247,6 +9953,76 @@ class AgoraWorkspace:
             provider=optional_string_attribute(attributes, "provider"),
             model=optional_string_attribute(attributes, "model"),
             represented_swarm=optional_string_attribute(attributes, "represented-swarm"),
+            authentication_required=_boolean_attribute_default(
+                attributes, "authentication-required", False
+            ),
+            authentication_algorithm=optional_string_attribute(
+                attributes, "authentication-algorithm"
+            ),
+            authentication_public_key=optional_string_attribute(
+                attributes, "authentication-public-key"
+            ),
+            authentication_fingerprint=optional_string_attribute(
+                attributes, "authentication-fingerprint"
+            ),
+            authentication_revoked_at=optional_string_attribute(
+                attributes, "authentication-revoked-at"
+            ),
+            authentication_revoked_reason=optional_string_attribute(
+                attributes, "authentication-revoked-reason"
+            ),
+        )
+        validate_actor_identity(record)
+        return record
+
+    @staticmethod
+    def _actor_key_root(actor: ActorRecord) -> Path:
+        return Path(actor.path).with_suffix("") / "keys"
+
+    def _ensure_current_actor_key(self, actor: ActorRecord) -> ActorKeyRecord:
+        if actor.authentication_fingerprint is None:
+            raise ValueError(f"Actor {actor.reference} has no authentication key")
+        key_path = self._actor_key_root(actor) / f"{actor.authentication_fingerprint}.md"
+        if not key_path.is_file():
+            actor_document = read_markdown(Path(actor.path))
+            record = actor_key_from_actor(
+                actor,
+                key_path,
+                string_attribute(actor_document.attributes, "created-at"),
+            )
+            write_new(key_path, render_actor_key(record))
+        record = self._assert_current_actor_key(actor)
+        assert record is not None
+        return record
+
+    def _assert_current_actor_key(self, actor: ActorRecord) -> ActorKeyRecord | None:
+        if actor.authentication_fingerprint is None:
+            return None
+        key_path = self._actor_key_root(actor) / f"{actor.authentication_fingerprint}.md"
+        if not key_path.is_file():
+            return None
+        record = load_actor_key(key_path)
+        expected_status = "revoked" if actor.authentication_revoked_at is not None else "active"
+        if (
+            record.actor != actor.reference
+            or record.fingerprint != actor.authentication_fingerprint
+            or record.public_key != actor.authentication_public_key
+            or record.status != expected_status
+        ):
+            raise ValueError(f"Actor key history differs from current actor identity: {actor.path}")
+        return record
+
+    def _append_actor_event(self, root: Path, actor: ActorRecord, type_: str, detail: str) -> None:
+        event_path = (
+            agora_home() / "events.md"
+            if actor.reference.startswith("user:")
+            else root / ".agora" / "events.md"
+        )
+        if not event_path.exists():
+            write_new(event_path, "# Agora events\n\n")
+        append_entry(
+            event_path,
+            f"- {self._timestamp()} | {type_} | actor={actor.reference} {detail}",
         )
 
     def _require_actor_for_action(
@@ -4510,6 +10286,7 @@ class AgoraWorkspace:
                 },
                 body=(
                     f"# Handoff {record.id}\n\n## Reason\n\n{record.reason}\n\n"
+                    "## Continuity\n\n"
                     "The role assignment changed without changing actor identities, work identity, "
                     "or prior execution records."
                 ),
@@ -4522,6 +10299,13 @@ class AgoraWorkspace:
         path = Path(swarm.path) / "handoffs" / handoff_id / "HANDOFF.md"
         document = read_markdown(path)
         _assert_schema(document, "agora/handoff/v1", path)
+        reason = _extract_section(document.body, "Reason")
+        legacy_note = (
+            "The role assignment changed without changing actor identities, work identity, "
+            "or prior execution records."
+        )
+        if reason.endswith(f"\n\n{legacy_note}"):
+            reason = reason[: -len(legacy_note)].rstrip()
         return HandoffRecord(
             id=string_attribute(document.attributes, "id"),
             swarm_id=string_attribute(document.attributes, "swarm"),
@@ -4529,7 +10313,7 @@ class AgoraWorkspace:
             from_actor=string_attribute(document.attributes, "from"),
             to_actor=string_attribute(document.attributes, "to"),
             authorized_by=string_attribute(document.attributes, "authorized-by"),
-            reason=_extract_section(document.body, "Reason"),
+            reason=reason,
             work_id=optional_string_attribute(document.attributes, "work"),
             created_at=string_attribute(document.attributes, "created-at"),
             path=str(path),
@@ -4652,6 +10436,8 @@ class AgoraWorkspace:
                     "acceptance-criteria": record.acceptance_criteria,
                     "required-artifacts": record.required_artifacts,
                     "result-kind": record.result_kind,
+                    "budget-limits": record.budget_limits,
+                    "artifact-promotions": record.artifact_promotions,
                     "status": record.status,
                     "created-at": record.created_at,
                     "accepted-by": record.accepted_by,
@@ -4712,6 +10498,12 @@ class AgoraWorkspace:
             status_by=optional_string_attribute(document.attributes, "status-by"),
             status_at=optional_string_attribute(document.attributes, "status-at"),
             path=str(path),
+            budget_limits=optional_integer_record_attribute(document.attributes, "budget-limits"),
+            artifact_promotions=(
+                record_attribute(document.attributes, "artifact-promotions")
+                if "artifact-promotions" in document.attributes
+                else {}
+            ),
         )
 
     def _load_work(self, swarm: SwarmRecord, work_id: str) -> WorkRecord:
@@ -4743,12 +10535,20 @@ class AgoraWorkspace:
             evidence_results=strings_attribute(evidence.attributes, "results"),
             approval_roles=approval_roles,
             path=str(path),
+            child_work_refs=(
+                strings_attribute(document.attributes, "child-work-refs")
+                if "child-work-refs" in document.attributes
+                else []
+            ),
+            budget_limits=optional_integer_record_attribute(document.attributes, "budget-limits"),
             operational_status=_work_operational_status(
                 document.attributes.get("operational-status", "active")
             ),
             status_reason=optional_string_attribute(document.attributes, "status-reason"),
             status_by=optional_string_attribute(document.attributes, "status-by"),
             status_at=optional_string_attribute(document.attributes, "status-at"),
+            delegation_id=optional_string_attribute(document.attributes, "delegation"),
+            parent_work_ref=optional_string_attribute(document.attributes, "parent-work"),
         )
 
     def _render_work(self, work: WorkRecord) -> str:
@@ -4757,22 +10557,29 @@ class AgoraWorkspace:
             for item, description in work.acceptance_criteria.items()
         )
         artifacts = "\n".join(f"- {item}" for item in work.required_artifacts) or "- none"
+        attributes: dict[str, object] = {
+            "schema": "agora/work/v1",
+            "id": work.id,
+            "swarm": work.swarm_id,
+            "title": work.title,
+            "state": work.state,
+            "operational-status": work.operational_status,
+            "status-reason": work.status_reason,
+            "status-by": work.status_by,
+            "status-at": work.status_at,
+            "acceptance-criteria": work.acceptance_criteria,
+            "satisfied-criteria": work.satisfied_criteria,
+            "required-artifacts": work.required_artifacts,
+            "child-work-refs": work.child_work_refs,
+            "budget-limits": work.budget_limits,
+        }
+        if work.delegation_id is not None:
+            attributes["delegation"] = work.delegation_id
+        if work.parent_work_ref is not None:
+            attributes["parent-work"] = work.parent_work_ref
         return render_markdown(
             MarkdownDocument(
-                attributes={
-                    "schema": "agora/work/v1",
-                    "id": work.id,
-                    "swarm": work.swarm_id,
-                    "title": work.title,
-                    "state": work.state,
-                    "operational-status": work.operational_status,
-                    "status-reason": work.status_reason,
-                    "status-by": work.status_by,
-                    "status-at": work.status_at,
-                    "acceptance-criteria": work.acceptance_criteria,
-                    "satisfied-criteria": work.satisfied_criteria,
-                    "required-artifacts": work.required_artifacts,
-                },
+                attributes=attributes,
                 body=(
                     f"# {work.title}\n\n## Description\n\n"
                     f"{work.description or 'No description provided.'}\n\n"
@@ -4781,6 +10588,194 @@ class AgoraWorkspace:
                 ),
             )
         )
+
+    @staticmethod
+    def _render_gate_waiver(record: GateWaiverRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/gate-waiver/v1",
+                    "id": record.id,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "gate": record.gate_id,
+                    "waived-criteria": record.waived_criteria,
+                    "waived-artifacts": record.waived_artifacts,
+                    "waive-successful-evidence": record.waive_successful_evidence,
+                    "waived-approval-roles": record.waived_approval_roles,
+                    "reason": record.reason,
+                    "evidence-refs": record.evidence_refs,
+                    "authorized-by": record.authorized_by,
+                    "created-at": record.created_at,
+                    "action": record.action_id,
+                },
+                body=(
+                    f"# Gate Waiver {record.id}\n\n"
+                    "This decision waives only the named obligations. The transition edge, "
+                    "role authority, WIP policy, and operational status remain enforced."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_gate_waiver(path: Path) -> GateWaiverRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/gate-waiver/v1", path)
+        record = GateWaiverRecord(
+            id=string_attribute(document.attributes, "id"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            gate_id=string_attribute(document.attributes, "gate"),
+            waived_criteria=strings_attribute(document.attributes, "waived-criteria"),
+            waived_artifacts=strings_attribute(document.attributes, "waived-artifacts"),
+            waive_successful_evidence=_boolean_attribute_default(
+                document.attributes, "waive-successful-evidence", False
+            ),
+            waived_approval_roles=strings_attribute(document.attributes, "waived-approval-roles"),
+            reason=string_attribute(document.attributes, "reason"),
+            evidence_refs=strings_attribute(document.attributes, "evidence-refs"),
+            authorized_by=string_attribute(document.attributes, "authorized-by"),
+            created_at=string_attribute(document.attributes, "created-at"),
+            path=str(path),
+            action_id=optional_string_attribute(document.attributes, "action"),
+        )
+        assert_slug(record.id, "Gate Waiver id")
+        assert_slug(record.gate_id, "Gate Waiver gate id")
+        if not record.reason.strip():
+            raise ValueError(f"Gate Waiver reason cannot be empty: {path}")
+        if not record.evidence_refs or any(not item.strip() for item in record.evidence_refs):
+            raise ValueError(f"Gate Waiver requires risk evidence references: {path}")
+        obligations = (
+            record.waived_criteria,
+            record.waived_artifacts,
+            record.waived_approval_roles,
+        )
+        if any(len(items) != len(set(items)) for items in obligations):
+            raise ValueError(f"Gate Waiver obligations must be unique: {path}")
+        if not any(obligations) and not record.waive_successful_evidence:
+            raise ValueError(f"Gate Waiver must name at least one obligation: {path}")
+        for label, items in (
+            ("criterion", record.waived_criteria),
+            ("approval role", record.waived_approval_roles),
+        ):
+            for item in items:
+                assert_slug(item, f"Gate Waiver {label}")
+        return record
+
+    def _load_gate_waivers(self, work: WorkRecord) -> list[GateWaiverRecord]:
+        return [
+            self._load_gate_waiver(path)
+            for path in sorted((Path(work.path) / "waivers").glob("*/WAIVER.md"))
+        ]
+
+    def _gate_waiver_coverage(
+        self, work: WorkRecord, gate_id: str
+    ) -> tuple[set[str], set[str], bool, set[str]]:
+        records = [record for record in self._load_gate_waivers(work) if record.gate_id == gate_id]
+        return (
+            {item for record in records for item in record.waived_criteria},
+            {item for record in records for item in record.waived_artifacts},
+            any(record.waive_successful_evidence for record in records),
+            {item for record in records for item in record.waived_approval_roles},
+        )
+
+    @staticmethod
+    def _render_approval_delegation(record: ApprovalDelegationRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/approval-delegation/v1",
+                    "id": record.id,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "role": record.role_id,
+                    "from": record.from_actor,
+                    "to": record.to_actor,
+                    "reason": record.reason,
+                    "status": record.status,
+                    "created-at": record.created_at,
+                    "action": record.action_id,
+                    "used-by": record.used_by,
+                    "used-at": record.used_at,
+                    "used-action": record.used_action_id,
+                    "revoked-by": record.revoked_by,
+                    "revoked-at": record.revoked_at,
+                    "revoked-reason": record.revoked_reason,
+                    "revocation-action": record.revocation_action_id,
+                },
+                body=(
+                    f"# Approval Delegation {record.id}\n\n"
+                    "This single-use authority is limited to the named work item and role."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_approval_delegation(work: WorkRecord, delegation_id: str) -> ApprovalDelegationRecord:
+        assert_slug(delegation_id, "Approval Delegation id")
+        path = Path(work.path) / "approval-delegations" / delegation_id / "DELEGATION.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/approval-delegation/v1", path)
+        status = string_attribute(document.attributes, "status")
+        if status not in {"active", "used", "revoked"}:
+            raise ValueError(f"Unsupported Approval Delegation status: {status}")
+        record = ApprovalDelegationRecord(
+            id=string_attribute(document.attributes, "id"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            role_id=string_attribute(document.attributes, "role"),
+            from_actor=string_attribute(document.attributes, "from"),
+            to_actor=string_attribute(document.attributes, "to"),
+            reason=string_attribute(document.attributes, "reason"),
+            status=status,  # type: ignore[arg-type]
+            created_at=string_attribute(document.attributes, "created-at"),
+            path=str(path),
+            action_id=optional_string_attribute(document.attributes, "action"),
+            used_by=optional_string_attribute(document.attributes, "used-by"),
+            used_at=optional_string_attribute(document.attributes, "used-at"),
+            used_action_id=optional_string_attribute(document.attributes, "used-action"),
+            revoked_by=optional_string_attribute(document.attributes, "revoked-by"),
+            revoked_at=optional_string_attribute(document.attributes, "revoked-at"),
+            revoked_reason=optional_string_attribute(document.attributes, "revoked-reason"),
+            revocation_action_id=optional_string_attribute(
+                document.attributes, "revocation-action"
+            ),
+        )
+        assert_slug(record.id, "Approval Delegation id")
+        assert_slug(record.role_id, "Approval Delegation role id")
+        if not record.reason.strip():
+            raise ValueError(f"Approval Delegation reason cannot be empty: {path}")
+        if record.from_actor == record.to_actor or any(
+            ":" not in actor for actor in (record.from_actor, record.to_actor)
+        ):
+            raise ValueError(f"Approval Delegation actors are invalid: {path}")
+        used_required = (record.used_by, record.used_at)
+        used_all = (*used_required, record.used_action_id)
+        revoked_required = (record.revoked_by, record.revoked_at, record.revoked_reason)
+        revoked_all = (*revoked_required, record.revocation_action_id)
+        if status == "active" and any(value is not None for value in (*used_all, *revoked_all)):
+            raise ValueError(f"Active Approval Delegation has terminal attribution: {path}")
+        if status == "used" and (
+            any(value is None for value in used_required)
+            or any(value is not None for value in revoked_all)
+        ):
+            raise ValueError(f"Used Approval Delegation attribution is invalid: {path}")
+        if status == "revoked" and (
+            any(value is None for value in revoked_required)
+            or any(value is not None for value in used_all)
+        ):
+            raise ValueError(f"Revoked Approval Delegation attribution is invalid: {path}")
+        if record.used_by is not None and record.used_by != record.to_actor:
+            raise ValueError(f"Approval Delegation was used by the wrong actor: {path}")
+        if record.revoked_reason is not None and not record.revoked_reason.strip():
+            raise ValueError(f"Approval Delegation revocation reason cannot be empty: {path}")
+        return record
+
+    def _load_approval_delegations(self, work: WorkRecord) -> list[ApprovalDelegationRecord]:
+        return [
+            self._load_approval_delegation(work, path.parent.name)
+            for path in sorted((Path(work.path) / "approval-delegations").glob("*/DELEGATION.md"))
+        ]
 
     @staticmethod
     def _runtime_command(integration: Integration, runner: str | None) -> list[str]:
@@ -4794,6 +10789,646 @@ class AgoraWorkspace:
         if integration == "claude":
             return ["claude"]
         return []
+
+    @staticmethod
+    def _work_precondition_sha256(work: WorkRecord) -> str:
+        digest = hashlib.sha256()
+        work_root = Path(work.path)
+        for name in ("WORK.md", "approvals.md", "artifacts.md", "evidence.md"):
+            path = work_root / name
+            if not path.is_file():
+                raise FileNotFoundError(f"Work policy document is missing: {path}")
+            digest.update(name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+        for path in sorted((work_root / "waivers").glob("*/WAIVER.md")):
+            digest.update(b"waiver\0")
+            digest.update(path.parent.name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+        for path in sorted((work_root / "approval-delegations").glob("*/DELEGATION.md")):
+            digest.update(b"approval-delegation\0")
+            digest.update(path.parent.name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+        return digest.hexdigest()
+
+    def _lifecycle_precondition_sha256(
+        self,
+        root: Path,
+        action: str,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord | None,
+        parameters: dict[str, str],
+    ) -> str:
+        if action in {
+            "approval.add",
+            "approval.delegate",
+            "approval.delegation.revoke",
+            "artifact.add",
+            "criterion.satisfy",
+            "evidence.add",
+            "gate.waive",
+            "work.block",
+            "work.cancel",
+            "work.decompose",
+            "work.resume",
+            "work.transition",
+        }:
+            if work is None:
+                raise ValueError(f"Lifecycle Action {action} requires work")
+            return self._work_precondition_sha256(work)
+        if action == "work.create":
+            swarm_path = Path(swarm.path) / "SWARM.md"
+            if not swarm_path.is_file():
+                raise FileNotFoundError(f"Swarm policy document is missing: {swarm_path}")
+            digest = hashlib.sha256()
+            digest.update(b"SWARM.md\0")
+            digest.update(swarm_path.read_bytes())
+            digest.update(b"\0")
+            return digest.hexdigest()
+        if action == "swarm.assign":
+            target = self._find_actor(root, parameters["target"])
+            digest = hashlib.sha256()
+            for label, path in (
+                ("authorizer", Path(actor.path)),
+                ("target", Path(target.path)),
+                ("swarm", Path(swarm.path) / "SWARM.md"),
+            ):
+                if not path.is_file():
+                    raise FileNotFoundError(f"Assignment policy document is missing: {path}")
+                digest.update(f"{label}\0".encode("ascii"))
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+            return digest.hexdigest()
+        if action in {
+            "actor.key.recover",
+            "actor.key.revoke",
+            "actor.key.rotate",
+            "actor.runtime.update",
+        }:
+            target = (
+                self._find_actor(root, parameters["target"])
+                if action in {"actor.key.recover", "actor.key.revoke"}
+                else actor
+            )
+            digest = hashlib.sha256()
+            policy_paths = [
+                ("authorizer", Path(actor.path)),
+                ("swarm", Path(swarm.path) / "SWARM.md"),
+            ]
+            if target.reference != actor.reference:
+                policy_paths.append(("target", Path(target.path)))
+            for label, path in policy_paths:
+                if not path.is_file():
+                    raise FileNotFoundError(f"Actor policy document is missing: {path}")
+                digest.update(f"{label}\0".encode("ascii"))
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+            if action != "actor.runtime.update":
+                for path in sorted(self._actor_key_root(target).glob("*.md")):
+                    digest.update(b"actor-key\0")
+                    digest.update(path.name.encode("ascii"))
+                    digest.update(b"\0")
+                    digest.update(path.read_bytes())
+                    digest.update(b"\0")
+            return digest.hexdigest()
+        if action == "session.prepare":
+            session = StartSessionInput(
+                id=parameters["session"],
+                actor_id=actor.reference,
+                swarm_id=swarm.id,
+                work_id=work.id if work is not None else None,
+                runner=parameters["runner"] or None,
+            )
+            context = self._validate_session_preparation(root, session)[-1]
+            return hashlib.sha256(context.encode()).hexdigest()
+        if action == "handoff.create":
+            swarm_path = Path(swarm.path) / "SWARM.md"
+            if not swarm_path.is_file():
+                raise FileNotFoundError(f"Swarm policy document is missing: {swarm_path}")
+            digest = hashlib.sha256()
+            digest.update(b"SWARM.md\0")
+            digest.update(swarm_path.read_bytes())
+            digest.update(b"\0")
+            if work is not None:
+                digest.update(b"work-precondition-sha256\0")
+                digest.update(self._work_precondition_sha256(work).encode("ascii"))
+                digest.update(b"\0")
+            return digest.hexdigest()
+        if action == "delegation.create":
+            if work is None:
+                raise ValueError("Lifecycle Action delegation.create requires parent work")
+            child_actor = self._find_actor(root, parameters["child-actor"])
+            if child_actor.represented_swarm is None:
+                raise ValueError(f"Actor {child_actor.reference} does not represent a child swarm")
+            child = self._load_swarm(root, child_actor.represented_swarm)
+            digest = hashlib.sha256()
+            for label, path in (
+                ("parent-swarm", Path(swarm.path) / "SWARM.md"),
+                ("child-actor", Path(child_actor.path)),
+                ("child-swarm", Path(child.path) / "SWARM.md"),
+            ):
+                if not path.is_file():
+                    raise FileNotFoundError(f"Delegation policy document is missing: {path}")
+                digest.update(f"{label}\0".encode("ascii"))
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+            digest.update(b"parent-work-precondition-sha256\0")
+            digest.update(self._work_precondition_sha256(work).encode("ascii"))
+            digest.update(b"\0")
+            return digest.hexdigest()
+        if action in {
+            "delegation.accept",
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.collect",
+            "delegation.reject",
+            "delegation.resume",
+        }:
+            if work is None:
+                raise ValueError(f"Lifecycle Action {action} requires parent work")
+            delegation_id = parameters.get("delegation")
+            if delegation_id is None:
+                raise ValueError(f"Lifecycle Action {action} requires a delegation")
+            delegation = self._load_delegation(root, delegation_id)
+            digest = hashlib.sha256()
+            digest.update(b"DELEGATION.md\0")
+            digest.update(Path(delegation.path).read_bytes())
+            digest.update(b"\0parent-work-precondition-sha256\0")
+            digest.update(self._work_precondition_sha256(work).encode("ascii"))
+            digest.update(b"\0")
+            if action in {"delegation.accept", "delegation.collect"}:
+                child = self._load_swarm(root, delegation.child_swarm_id)
+                child_swarm_path = Path(child.path) / "SWARM.md"
+                digest.update(b"child-swarm\0")
+                digest.update(child_swarm_path.read_bytes())
+                digest.update(b"\0")
+            if action == "delegation.collect":
+                child_work = self._load_work(child, delegation.child_work_id)
+                digest.update(b"child-work-precondition-sha256\0")
+                digest.update(self._work_precondition_sha256(child_work).encode("ascii"))
+                digest.update(b"\0")
+            return digest.hexdigest()
+        raise ValueError(f"Unsupported Lifecycle Action kind: {action}")
+
+    def _assert_lifecycle_precondition(self, root: Path, record: LifecycleActionRecord) -> None:
+        swarm = self._load_swarm(root, record.swarm_id)
+        work = (
+            self._load_work(swarm, record.work_id)
+            if record.work_id is not None and record.action != "work.create"
+            else None
+        )
+        actor = self._find_actor(root, record.actor)
+        actual = self._lifecycle_precondition_sha256(
+            root, record.action, actor, swarm, work, record.parameters
+        )
+        if actual != record.precondition_sha256:
+            raise ValueError(f"Lifecycle Action precondition digest mismatch: {record.id}")
+
+    @staticmethod
+    def _render_lifecycle_action(record: LifecycleActionRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/lifecycle-action/v1",
+                    "id": record.id,
+                    "action": record.action,
+                    "actor": record.actor,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "parameters": record.parameters,
+                    "precondition-sha256": record.precondition_sha256,
+                    "status": record.status,
+                    "created-at": record.created_at,
+                    "applied-at": record.applied_at,
+                    "authentication-verified": record.authentication_verified,
+                    "authentication-fingerprint": record.authentication_fingerprint,
+                    "authentication-public-key": record.authentication_public_key,
+                    "authorization-sha256": record.authorization_sha256,
+                    "authorization-signature": record.authorization_signature,
+                },
+                body=(
+                    f"# Lifecycle Action {record.id}\n\n"
+                    "This durable intent binds an actor, a governed mutation, its parameters, "
+                    "and the durable state against which it was authorized."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_lifecycle_action(path: Path) -> LifecycleActionRecord:
+        document = read_markdown(path / "ACTION.md")
+        _assert_schema(document, "agora/lifecycle-action/v1", path / "ACTION.md")
+        action = string_attribute(document.attributes, "action")
+        if action not in {
+            "actor.key.recover",
+            "actor.key.revoke",
+            "actor.key.rotate",
+            "actor.runtime.update",
+            "approval.add",
+            "approval.delegate",
+            "approval.delegation.revoke",
+            "artifact.add",
+            "criterion.satisfy",
+            "delegation.accept",
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.collect",
+            "delegation.create",
+            "delegation.reject",
+            "delegation.resume",
+            "evidence.add",
+            "gate.waive",
+            "handoff.create",
+            "session.prepare",
+            "swarm.assign",
+            "work.block",
+            "work.cancel",
+            "work.decompose",
+            "work.resume",
+            "work.transition",
+            "work.create",
+        }:
+            raise ValueError(f"Unsupported Lifecycle Action kind: {action}")
+        status = string_attribute(document.attributes, "status")
+        if status not in {"prepared", "applied"}:
+            raise ValueError(f"Unsupported Lifecycle Action status: {status}")
+        parameters = record_attribute(document.attributes, "parameters")
+        if any(not isinstance(value, str) for value in parameters.values()):
+            raise ValueError(f"Lifecycle Action parameters must contain string values: {path}")
+        expected_parameters = {
+            "actor.key.recover": {
+                "target",
+                "from",
+                "public-key",
+                "fingerprint",
+                "reason",
+            },
+            "actor.key.revoke": {"target", "fingerprint", "reason"},
+            "actor.key.rotate": {"from", "public-key", "fingerprint", "reason"},
+            "actor.runtime.update": {"integration", "provider", "model", "clear"},
+            "approval.add": {"role", "note", "delegation"},
+            "approval.delegate": {"delegation", "role", "target", "reason"},
+            "approval.delegation.revoke": {"delegation", "reason"},
+            "artifact.add": {"kind", "uri"},
+            "criterion.satisfy": {"criterion"},
+            "delegation.accept": {"delegation"},
+            "delegation.block": {"delegation", "reason"},
+            "delegation.cancel": {"delegation", "reason"},
+            "delegation.collect": {"delegation"},
+            "delegation.create": {
+                "delegation",
+                "child-actor",
+                "child-work",
+                "title",
+                "description",
+                "acceptance-criteria",
+                "required-artifacts",
+                "result-kind",
+                "budget-limits",
+                "artifact-promotions",
+            },
+            "delegation.reject": {"delegation", "reason"},
+            "delegation.resume": {"delegation", "reason"},
+            "evidence.add": {"type", "result", "artifacts"},
+            "gate.waive": {
+                "waiver",
+                "gate",
+                "criteria",
+                "artifacts",
+                "successful-evidence",
+                "approvals",
+                "reason",
+                "evidence",
+            },
+            "handoff.create": {"role", "from", "to", "reason"},
+            "session.prepare": {"session", "runner"},
+            "swarm.assign": {"role", "target"},
+            "work.block": {"reason"},
+            "work.cancel": {"reason"},
+            "work.resume": {"reason"},
+            "work.transition": {"to"},
+            "work.create": {
+                "title",
+                "description",
+                "acceptance-criteria",
+                "required-artifacts",
+            },
+            "work.decompose": {
+                "child-work",
+                "title",
+                "description",
+                "acceptance-criteria",
+                "required-artifacts",
+            },
+        }[action]
+        parameter_keys = set(parameters)
+        optional_delegation_parameters = {"budget-limits", "artifact-promotions"}
+        legacy_delegation_parameters = (
+            action == "delegation.create"
+            and (expected_parameters - parameter_keys).issubset(optional_delegation_parameters)
+            and parameter_keys.issubset(expected_parameters)
+        )
+        legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
+        if (
+            parameter_keys != expected_parameters
+            and not legacy_delegation_parameters
+            and not legacy_approval_parameters
+        ):
+            raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
+        if action in {"actor.key.recover", "actor.key.revoke", "actor.key.rotate"}:
+            fingerprint_keys = (
+                ("fingerprint",) if action == "actor.key.revoke" else ("from", "fingerprint")
+            )
+            for key in fingerprint_keys:
+                if re.fullmatch(r"[0-9a-f]{64}", parameters[key]) is None:
+                    raise ValueError(f"Lifecycle Action has invalid actor key fingerprint: {path}")
+            if action != "actor.key.revoke":
+                replacement = actor_key_from_public_key(
+                    "project:validation",
+                    parameters["public-key"],
+                    Path("."),
+                    "validation",
+                )
+                if replacement.fingerprint != parameters["fingerprint"]:
+                    raise ValueError(f"Lifecycle Action actor key fingerprint mismatch: {path}")
+            if not parameters["reason"].strip():
+                raise ValueError(f"Lifecycle Action actor key reason cannot be empty: {path}")
+            if (
+                action in {"actor.key.recover", "actor.key.revoke"}
+                and ":" not in parameters["target"]
+            ):
+                raise ValueError(f"Lifecycle Action target actor must be scoped: {path}")
+        if action == "actor.runtime.update":
+            if parameters["integration"] and parameters["integration"] not in INTEGRATIONS:
+                raise ValueError(f"Lifecycle Action has invalid runtime integration: {path}")
+            if parameters["clear"] not in {"true", "false"}:
+                raise ValueError(f"Lifecycle Action has invalid runtime clear flag: {path}")
+            if parameters["clear"] == "false" and not any(
+                parameters[key] for key in ("integration", "provider", "model")
+            ):
+                raise ValueError(f"Lifecycle Action has no runtime change: {path}")
+        if action == "handoff.create":
+            assert_slug(parameters["role"], "Lifecycle Action handoff role")
+            if not parameters["reason"].strip():
+                raise ValueError(f"Lifecycle Action handoff reason cannot be empty: {path}")
+            if any(":" not in parameters[key] for key in ("from", "to")):
+                raise ValueError(
+                    f"Lifecycle Action handoff actors must use scoped references: {path}"
+                )
+        if action == "session.prepare":
+            assert_slug(parameters["session"], "Lifecycle Action session id")
+        if action == "swarm.assign":
+            assert_slug(parameters["role"], "Lifecycle Action assignment role")
+            if ":" not in parameters["target"]:
+                raise ValueError(f"Lifecycle Action target actor must be scoped: {path}")
+        if action in {"approval.delegate", "approval.delegation.revoke"}:
+            assert_slug(parameters["delegation"], "Lifecycle Action Approval Delegation id")
+            if not parameters["reason"].strip():
+                raise ValueError(
+                    f"Lifecycle Action Approval Delegation reason cannot be empty: {path}"
+                )
+        if action == "approval.delegate":
+            assert_slug(parameters["role"], "Lifecycle Action delegated approval role")
+            if ":" not in parameters["target"]:
+                raise ValueError(
+                    f"Lifecycle Action Approval Delegation target must be scoped: {path}"
+                )
+        if action == "approval.add" and parameters.get("delegation"):
+            assert_slug(
+                parameters["delegation"], "Lifecycle Action consumed Approval Delegation id"
+            )
+        if action.startswith("delegation."):
+            assert_slug(parameters["delegation"], "Lifecycle Action delegation id")
+        if action == "delegation.create":
+            assert_slug(parameters["child-work"], "Lifecycle Action child work id")
+            assert_slug(parameters["result-kind"], "Lifecycle Action result kind")
+            if ":" not in parameters["child-actor"]:
+                raise ValueError(
+                    f"Lifecycle Action child actor must use a scoped reference: {path}"
+                )
+            try:
+                criteria = json.loads(parameters["acceptance-criteria"])
+                artifacts = json.loads(parameters["required-artifacts"])
+                budgets = (
+                    json.loads(parameters["budget-limits"])
+                    if "budget-limits" in parameters
+                    else None
+                )
+                promotions = (
+                    json.loads(parameters["artifact-promotions"])
+                    if "artifact-promotions" in parameters
+                    else {}
+                )
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Lifecycle Action has invalid delegation JSON parameters: {path}"
+                ) from error
+            if not isinstance(criteria, list) or any(
+                not isinstance(item, list)
+                or len(item) != 2
+                or any(not isinstance(value, str) for value in item)
+                for item in criteria
+            ):
+                raise ValueError(
+                    f"Lifecycle Action has invalid delegation acceptance criteria: {path}"
+                )
+            if not isinstance(artifacts, list) or any(
+                not isinstance(value, str) for value in artifacts
+            ):
+                raise ValueError(
+                    f"Lifecycle Action has invalid delegation required artifacts: {path}"
+                )
+            if budgets is not None and (
+                not isinstance(budgets, dict)
+                or any(
+                    not isinstance(name, str)
+                    or not isinstance(limit, int)
+                    or isinstance(limit, bool)
+                    or limit < 0
+                    for name, limit in budgets.items()
+                )
+            ):
+                raise ValueError(f"Lifecycle Action has invalid delegation budgets: {path}")
+            for dimension in budgets or {}:
+                assert_slug(dimension, "Lifecycle Action delegation budget dimension")
+            if not isinstance(promotions, dict) or any(
+                not isinstance(source, str) or not isinstance(target, str)
+                for source, target in promotions.items()
+            ):
+                raise ValueError(
+                    f"Lifecycle Action has invalid delegation artifact promotions: {path}"
+                )
+            AgoraWorkspace._normalize_artifact_promotions(promotions)
+        if action in {"work.create", "work.decompose"}:
+            if action == "work.decompose":
+                assert_slug(parameters["child-work"], "Lifecycle Action child work id")
+            try:
+                criteria = json.loads(parameters["acceptance-criteria"])
+                artifacts = json.loads(parameters["required-artifacts"])
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Lifecycle Action has invalid work JSON parameters: {path}"
+                ) from error
+            if not isinstance(criteria, list) or any(
+                not isinstance(item, list)
+                or len(item) != 2
+                or any(not isinstance(value, str) for value in item)
+                for item in criteria
+            ):
+                raise ValueError(f"Lifecycle Action has invalid work acceptance criteria: {path}")
+            if not isinstance(artifacts, list) or any(
+                not isinstance(value, str) for value in artifacts
+            ):
+                raise ValueError(f"Lifecycle Action has invalid work required artifacts: {path}")
+        if action == "evidence.add":
+            if parameters["result"] not in {"success", "failure"}:
+                raise ValueError(f"Lifecycle Action has invalid evidence result: {path}")
+            try:
+                artifacts = json.loads(parameters["artifacts"])
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Lifecycle Action has invalid evidence artifacts: {path}"
+                ) from error
+            if not isinstance(artifacts, list) or any(
+                not isinstance(value, str) for value in artifacts
+            ):
+                raise ValueError(f"Lifecycle Action evidence artifacts must be strings: {path}")
+        if action == "gate.waive":
+            assert_slug(parameters["waiver"], "Lifecycle Action Gate Waiver id")
+            assert_slug(parameters["gate"], "Lifecycle Action gate id")
+            if parameters["successful-evidence"] not in {"true", "false"}:
+                raise ValueError(
+                    f"Lifecycle Action has invalid successful evidence waiver flag: {path}"
+                )
+            if not parameters["reason"].strip():
+                raise ValueError(f"Lifecycle Action Gate Waiver reason cannot be empty: {path}")
+            parsed_lists: dict[str, list[str]] = {}
+            for key in ("criteria", "artifacts", "approvals", "evidence"):
+                try:
+                    value = json.loads(parameters[key])
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        f"Lifecycle Action has invalid Gate Waiver {key}: {path}"
+                    ) from error
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    raise ValueError(
+                        f"Lifecycle Action Gate Waiver {key} must be a string list: {path}"
+                    )
+                parsed_lists[key] = value
+            if not parsed_lists["evidence"] or any(
+                not item.strip() for item in parsed_lists["evidence"]
+            ):
+                raise ValueError(
+                    f"Lifecycle Action Gate Waiver requires risk evidence references: {path}"
+                )
+            if (
+                not parsed_lists["criteria"]
+                and not parsed_lists["artifacts"]
+                and parameters["successful-evidence"] == "false"
+                and not parsed_lists["approvals"]
+            ):
+                raise ValueError(f"Lifecycle Action Gate Waiver must name an obligation: {path}")
+        reason_actions = {
+            "delegation.block",
+            "delegation.cancel",
+            "delegation.reject",
+            "delegation.resume",
+            "work.block",
+            "work.cancel",
+            "work.resume",
+        }
+        if action in reason_actions and not parameters["reason"].strip():
+            raise ValueError(f"Lifecycle Action status reason cannot be empty: {path}")
+        precondition_sha256 = string_attribute(document.attributes, "precondition-sha256")
+        authentication_verified = _boolean_attribute_default(
+            document.attributes, "authentication-verified", False
+        )
+        authentication_fingerprint = optional_string_attribute(
+            document.attributes, "authentication-fingerprint"
+        )
+        authentication_public_key = optional_string_attribute(
+            document.attributes, "authentication-public-key"
+        )
+        authorization_sha256 = optional_string_attribute(
+            document.attributes, "authorization-sha256"
+        )
+        authorization_signature = optional_string_attribute(
+            document.attributes, "authorization-signature"
+        )
+        authentication_values = (
+            authentication_fingerprint,
+            authentication_public_key,
+            authorization_sha256,
+            authorization_signature,
+        )
+        if authentication_verified and any(value is None for value in authentication_values):
+            raise ValueError(
+                f"Verified Lifecycle Action authentication evidence is incomplete: {path}"
+            )
+        if not authentication_verified and any(
+            value is not None for value in authentication_values
+        ):
+            raise ValueError(
+                f"Unverified Lifecycle Action cannot contain authentication evidence: {path}"
+            )
+        applied_at = optional_string_attribute(document.attributes, "applied-at")
+        if status == "prepared" and applied_at is not None:
+            raise ValueError(f"Prepared Lifecycle Action cannot have applied-at: {path}")
+        if status == "applied" and applied_at is None:
+            raise ValueError(f"Applied Lifecycle Action requires applied-at: {path}")
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (
+                precondition_sha256,
+                *(
+                    value
+                    for value in (authentication_fingerprint, authorization_sha256)
+                    if value is not None
+                ),
+            )
+        ):
+            raise ValueError(f"Lifecycle Action digests must be SHA-256 values: {path}")
+        work_id = optional_string_attribute(document.attributes, "work")
+        if (
+            action
+            not in {
+                "actor.key.recover",
+                "actor.key.revoke",
+                "actor.key.rotate",
+                "actor.runtime.update",
+                "handoff.create",
+                "session.prepare",
+                "swarm.assign",
+            }
+            and work_id is None
+        ):
+            raise ValueError(f"Lifecycle Action {action} requires work: {path}")
+        record = LifecycleActionRecord(
+            id=string_attribute(document.attributes, "id"),
+            action=action,
+            actor=string_attribute(document.attributes, "actor"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=work_id,
+            parameters=parameters,
+            precondition_sha256=precondition_sha256,
+            status=status,  # type: ignore[arg-type]
+            path=str(path),
+            created_at=string_attribute(document.attributes, "created-at"),
+            applied_at=applied_at,
+            authentication_verified=authentication_verified,
+            authentication_fingerprint=authentication_fingerprint,
+            authentication_public_key=authentication_public_key,
+            authorization_sha256=authorization_sha256,
+            authorization_signature=authorization_signature,
+        )
+        validate_persisted_lifecycle_authorization(record)
+        return record
 
     @staticmethod
     def _render_session(record: SessionRecord) -> str:
@@ -4813,6 +11448,13 @@ class AgoraWorkspace:
             "runtime-available": record.runtime_available,
             "created-at": record.created_at,
             "exit-code": record.exit_code,
+            "context-sha256": record.context_sha256,
+            "authentication-verified": record.authentication_verified,
+            "authentication-fingerprint": record.authentication_fingerprint,
+            "authentication-public-key": record.authentication_public_key,
+            "authorization-sha256": record.authorization_sha256,
+            "authorization-signature": record.authorization_signature,
+            "preparation-action": record.preparation_action_id,
         }
         return render_markdown(
             MarkdownDocument(
@@ -4831,7 +11473,43 @@ class AgoraWorkspace:
         status = string_attribute(document.attributes, "status")
         if status not in {"prepared", "running", "completed", "failed"}:
             raise ValueError(f"Unsupported session status: {status}")
-        return SessionRecord(
+        authentication_verified = _boolean_attribute_default(
+            document.attributes, "authentication-verified", False
+        )
+        authentication_fingerprint = optional_string_attribute(
+            document.attributes, "authentication-fingerprint"
+        )
+        authentication_public_key = optional_string_attribute(
+            document.attributes, "authentication-public-key"
+        )
+        authorization_sha256 = optional_string_attribute(
+            document.attributes, "authorization-sha256"
+        )
+        authorization_signature = optional_string_attribute(
+            document.attributes, "authorization-signature"
+        )
+        authentication_values = (
+            authentication_fingerprint,
+            authentication_public_key,
+            authorization_sha256,
+            authorization_signature,
+        )
+        if authentication_verified and any(value is None for value in authentication_values):
+            raise ValueError(f"Verified Session authentication evidence is incomplete: {path}")
+        if not authentication_verified and any(
+            value is not None for value in authentication_values
+        ):
+            raise ValueError(f"Unverified Session cannot contain authentication evidence: {path}")
+        context_sha256 = optional_string_attribute(document.attributes, "context-sha256")
+        if any(
+            value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (context_sha256, authentication_fingerprint, authorization_sha256)
+        ):
+            raise ValueError(f"Session digests must be SHA-256 values: {path}")
+        preparation_action_id = optional_string_attribute(document.attributes, "preparation-action")
+        if preparation_action_id is not None:
+            assert_slug(preparation_action_id, "Session preparation action id")
+        record = SessionRecord(
             id=string_attribute(document.attributes, "id"),
             actor=string_attribute(document.attributes, "actor"),
             swarm_id=string_attribute(document.attributes, "swarm"),
@@ -4847,7 +11525,16 @@ class AgoraWorkspace:
             runtime_available=_boolean_attribute(document.attributes, "runtime-available"),
             created_at=string_attribute(document.attributes, "created-at"),
             exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
+            context_sha256=context_sha256,
+            authentication_verified=authentication_verified,
+            authentication_fingerprint=authentication_fingerprint,
+            authentication_public_key=authentication_public_key,
+            authorization_sha256=authorization_sha256,
+            authorization_signature=authorization_signature,
+            preparation_action_id=preparation_action_id,
         )
+        validate_persisted_session_authorization(record)
+        return record
 
     def _render_session_context(
         self,
@@ -4864,6 +11551,7 @@ class AgoraWorkspace:
         method_root = root / ".agora" / "methods" / swarm.method
         swarm_root = Path(swarm.path)
         role_paths = [method_root / "roles" / f"{role}.md" for role in roles]
+        environment_paths = sorted((root / ".agora" / "environments").glob("*.md"))
         handoff_paths = sorted((swarm_root / "handoffs").glob("*/HANDOFF.md"))
         delegation_paths = self._related_delegation_paths(
             root, swarm.id, work.id if work is not None else None
@@ -4884,6 +11572,7 @@ class AgoraWorkspace:
             root / ".agora" / "constitution.md",
             root / ".agora" / "PROTOCOL.md",
             root / ".agora" / "STANDARDS.md",
+            root / ".agora" / "coordination.md",
             root / ".agora" / "tools" / "TOOLS.md",
             swarm_root / "SWARM.md",
             swarm_root / "events.md",
@@ -4891,6 +11580,7 @@ class AgoraWorkspace:
             method_root / "PROTOCOL.md",
             method_root / "TOOLS.md",
             *role_paths,
+            *environment_paths,
             *handoff_paths,
             *delegation_paths,
             *represented_paths,
@@ -4902,6 +11592,8 @@ class AgoraWorkspace:
                     Path(work.path) / "artifacts.md",
                     Path(work.path) / "evidence.md",
                     Path(work.path) / "approvals.md",
+                    *sorted((Path(work.path) / "waivers").glob("*/WAIVER.md")),
+                    *sorted((Path(work.path) / "approval-delegations").glob("*/DELEGATION.md")),
                 ]
             )
         reading = "\n".join(
@@ -5012,8 +11704,61 @@ class AgoraWorkspace:
             implements_operations=contract.implements_operations,
             version_command=contract.version_command,
             minimum_runtime_version=contract.minimum_runtime_version,
+            timeout_seconds=contract.timeout_seconds,
+            max_output_bytes=contract.max_output_bytes,
             source=source,
             updates=updates,
+        )
+
+    @staticmethod
+    def _render_environment(record: EnvironmentPolicyRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/environment-policy/v1",
+                    "id": record.id,
+                    "name": record.name,
+                    "allowed-tool-capabilities": record.allowed_tool_capabilities,
+                    "required-approval-roles": record.required_approval_roles,
+                    "require-successful-evidence": record.require_successful_evidence,
+                },
+                body=(
+                    f"# {record.name}\n\n"
+                    "This policy limits governed Tool Runs for one project-defined environment. "
+                    "Provider targets and credentials remain in reviewed adapters and external "
+                    "runtime configuration."
+                ),
+            )
+        )
+
+    @staticmethod
+    def _load_environment(path: Path) -> EnvironmentPolicyRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/environment-policy/v1", path)
+        environment_id = string_attribute(document.attributes, "id")
+        assert_slug(environment_id, "Environment id")
+        capabilities = strings_attribute(document.attributes, "allowed-tool-capabilities")
+        if not capabilities or len(set(capabilities)) != len(capabilities):
+            raise ValueError(
+                f"Environment {environment_id} must declare unique allowed tool capabilities"
+            )
+        for capability in capabilities:
+            if CAPABILITY_PATTERN.fullmatch(capability) is None:
+                raise ValueError(f"Invalid environment tool capability: {capability}")
+        approval_roles = strings_attribute(document.attributes, "required-approval-roles")
+        if len(set(approval_roles)) != len(approval_roles):
+            raise ValueError(f"Environment {environment_id} approval roles must be unique")
+        for role_id in approval_roles:
+            assert_slug(role_id, "Environment approval role id")
+        return EnvironmentPolicyRecord(
+            id=environment_id,
+            name=string_attribute(document.attributes, "name"),
+            allowed_tool_capabilities=capabilities,
+            required_approval_roles=approval_roles,
+            require_successful_evidence=_boolean_attribute(
+                document.attributes, "require-successful-evidence"
+            ),
+            path=str(path),
         )
 
     def _actor_tool_capabilities(
@@ -5029,6 +11774,69 @@ class AgoraWorkspace:
                 raise ValueError(f"Role {role} allowed-tool-capabilities must be a string array")
             capabilities.update(value)
         return capabilities
+
+    def _assert_environment_permission(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        roles: list[str],
+        capability: str,
+        environment_id: str | None,
+        environment_required: bool,
+        work: WorkRecord | None,
+    ) -> None:
+        if environment_id is None:
+            if environment_required:
+                raise ValueError(f"Tool capability {capability} requires a governed environment")
+            return
+        assert_slug(environment_id, "Environment id")
+        policy = self._load_environment(root / ".agora" / "environments" / f"{environment_id}.md")
+        if policy.id != environment_id:
+            raise ValueError(
+                f"Environment id {policy.id} does not match policy filename {environment_id}"
+            )
+        if capability not in policy.allowed_tool_capabilities:
+            raise PermissionError(
+                f"Environment {environment_id} does not allow tool capability {capability}"
+            )
+
+        permitted_roles: list[str] = []
+        for role_id in roles:
+            attributes = read_markdown(
+                root / ".agora" / "methods" / swarm.method / "roles" / f"{role_id}.md"
+            ).attributes
+            capabilities = strings_attribute(attributes, "allowed-tool-capabilities")
+            environments = attributes.get("allowed-environments", ["*"])
+            if not isinstance(environments, list) or any(
+                not isinstance(item, str) or not item for item in environments
+            ):
+                raise ValueError(f"Role {role_id} allowed-environments must be a string array")
+            if capability in capabilities and (
+                "*" in environments or environment_id in environments
+            ):
+                permitted_roles.append(role_id)
+        if not permitted_roles:
+            raise PermissionError(
+                f"Actor roles do not allow tool capability {capability} in environment "
+                f"{environment_id}"
+            )
+
+        if policy.required_approval_roles or policy.require_successful_evidence:
+            if work is None:
+                raise ValueError(
+                    f"Environment {environment_id} requires governed work for its approvals "
+                    "or evidence"
+                )
+            missing_roles = sorted(set(policy.required_approval_roles) - set(work.approval_roles))
+            if missing_roles:
+                raise PermissionError(
+                    f"Environment {environment_id} requires approval from: "
+                    f"{', '.join(missing_roles)}"
+                )
+            if policy.require_successful_evidence and "success" not in work.evidence_results:
+                raise PermissionError(
+                    f"Environment {environment_id} requires successful work evidence"
+                )
 
     @staticmethod
     def _substitute_tool_inputs(argument: str, inputs: dict[str, str]) -> str:
@@ -5049,6 +11857,7 @@ class AgoraWorkspace:
                     "actor": record.actor,
                     "swarm": record.swarm_id,
                     "work": record.work_id,
+                    "environment": record.environment_id,
                     "capability": record.capability,
                     "risk": record.risk,
                     "inputs": record.inputs,
@@ -5056,9 +11865,16 @@ class AgoraWorkspace:
                     "runtime-available": record.runtime_available,
                     "status": record.status,
                     "result-kind": record.result_kind,
+                    "timeout-seconds": record.timeout_seconds,
+                    "max-output-bytes": record.max_output_bytes,
                     "authentication-reference": contract.authentication_reference,
                     "created-at": record.created_at,
                     "exit-code": record.exit_code,
+                    "authentication-verified": record.authentication_verified,
+                    "authentication-fingerprint": record.authentication_fingerprint,
+                    "authentication-public-key": record.authentication_public_key,
+                    "authorization-sha256": record.authorization_sha256,
+                    "authorization-signature": record.authorization_signature,
                 },
                 body=(
                     f"# Tool run {record.id}\n\n"
@@ -5078,13 +11894,60 @@ class AgoraWorkspace:
         status = string_attribute(document.attributes, "status")
         if status not in {"prepared", "running", "completed", "failed"}:
             raise ValueError(f"Unsupported tool run status: {status}")
-        return ToolRunRecord(
+        authentication_verified = _boolean_attribute_default(
+            document.attributes, "authentication-verified", False
+        )
+        authentication_fingerprint = optional_string_attribute(
+            document.attributes, "authentication-fingerprint"
+        )
+        authentication_public_key = optional_string_attribute(
+            document.attributes, "authentication-public-key"
+        )
+        authorization_sha256 = optional_string_attribute(
+            document.attributes, "authorization-sha256"
+        )
+        authorization_signature = optional_string_attribute(
+            document.attributes, "authorization-signature"
+        )
+        timeout_seconds = _positive_integer_attribute_default(
+            document.attributes,
+            "timeout-seconds",
+            DEFAULT_TOOL_TIMEOUT_SECONDS,
+            MAX_TOOL_TIMEOUT_SECONDS,
+        )
+        max_output_bytes = _positive_integer_attribute_default(
+            document.attributes,
+            "max-output-bytes",
+            DEFAULT_TOOL_MAX_OUTPUT_BYTES,
+            MAX_TOOL_MAX_OUTPUT_BYTES,
+        )
+        authentication_values = (
+            authentication_fingerprint,
+            authentication_public_key,
+            authorization_sha256,
+            authorization_signature,
+        )
+        if authentication_verified and any(value is None for value in authentication_values):
+            raise ValueError(
+                f"Verified Tool Run authentication requires fingerprint and payload digest: {path}"
+            )
+        if not authentication_verified and any(
+            value is not None for value in authentication_values
+        ):
+            raise ValueError(f"Unverified Tool Run cannot contain authentication evidence: {path}")
+        if any(
+            value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (authentication_fingerprint, authorization_sha256)
+        ):
+            raise ValueError(f"Tool Run authentication digests must be SHA-256 values: {path}")
+        record = ToolRunRecord(
             id=string_attribute(document.attributes, "id"),
             tool_id=string_attribute(document.attributes, "tool"),
             operation_id=string_attribute(document.attributes, "operation"),
             actor=string_attribute(document.attributes, "actor"),
             swarm_id=string_attribute(document.attributes, "swarm"),
             work_id=optional_string_attribute(document.attributes, "work"),
+            environment_id=optional_string_attribute(document.attributes, "environment"),
             capability=string_attribute(document.attributes, "capability"),
             risk=_tool_risk(risk),
             inputs=record_attribute(document.attributes, "inputs"),
@@ -5095,7 +11958,18 @@ class AgoraWorkspace:
             created_at=string_attribute(document.attributes, "created-at"),
             result_kind=optional_string_attribute(document.attributes, "result-kind"),
             exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
+            authentication_verified=authentication_verified,
+            authentication_fingerprint=authentication_fingerprint,
+            authentication_public_key=authentication_public_key,
+            authorization_sha256=authorization_sha256,
+            authorization_signature=authorization_signature,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
         )
+        if record.environment_id is not None:
+            assert_slug(record.environment_id, "Tool Run environment id")
+        validate_persisted_tool_authorization(record)
+        return record
 
     @staticmethod
     def _render_tool_result(record: ToolRunRecord, stdout: str, stderr: str) -> str:
@@ -5143,22 +12017,36 @@ class AgoraWorkspace:
                 f"WIP limit reached for {target_state}: limit={limit}, active={active}"
             )
 
-    @staticmethod
-    def _assert_work_gate(work: WorkRecord, gate: GatePolicy, gate_id: str) -> None:
+    def _assert_work_gate(self, work: WorkRecord, gate: GatePolicy, gate_id: str) -> None:
+        waived_criteria, waived_artifacts, waived_evidence, waived_approvals = (
+            self._gate_waiver_coverage(work, gate_id)
+        )
         unsatisfied = (
-            [item for item in work.acceptance_criteria if item not in work.satisfied_criteria]
+            [
+                item
+                for item in work.acceptance_criteria
+                if item not in work.satisfied_criteria and item not in waived_criteria
+            ]
             if gate.require_all_criteria
             else []
         )
         missing_artifacts = (
-            [item for item in work.required_artifacts if item not in work.artifact_kinds]
+            [
+                item
+                for item in work.required_artifacts
+                if item not in work.artifact_kinds and item not in waived_artifacts
+            ]
             if gate.require_required_artifacts
             else []
         )
         has_success = "success" in work.evidence_results
-        evidence_missing = gate.require_successful_evidence and not has_success
+        evidence_missing = (
+            gate.require_successful_evidence and not has_success and not waived_evidence
+        )
         missing_approvals = [
-            role for role in gate.required_approval_roles if role not in work.approval_roles
+            role
+            for role in gate.required_approval_roles
+            if role not in work.approval_roles and role not in waived_approvals
         ]
         if unsatisfied or missing_artifacts or evidence_missing or missing_approvals:
             raise ValueError(
@@ -5258,6 +12146,156 @@ class AgoraWorkspace:
     def _timestamp(self) -> str:
         return self._now().astimezone(UTC).isoformat().replace("+00:00", "Z")
 
+    def quickstart(self, data: QuickstartInput) -> QuickstartResult:
+        target = (self.cwd / (data.path or ".")).resolve()
+        project_path = target / ".agora" / "project.md"
+        if project_path.is_file():
+            project = self._load_project_configuration(target)
+        else:
+            project = self.initialize(InitInput(target=data.path, default_method=data.method))
+        self.cwd = target
+
+        method = data.method or project.default_method
+        root = target
+        contract = load_method_contract(root / ".agora" / "methods" / method)
+        assert_slug(data.swarm_id, "Swarm id")
+        if not data.objective.strip():
+            raise ValueError("Quickstart objective cannot be empty")
+
+        human_id = "owner"
+        ai_id = "agent"
+        reserved_paths = (
+            root / ".agora" / "actors" / f"{human_id}.md",
+            root / ".agora" / "actors" / f"{ai_id}.md",
+            root / ".agora" / "swarms" / data.swarm_id,
+        )
+        existing = next((path for path in reserved_paths if path.exists()), None)
+        if existing is not None:
+            raise FileExistsError(f"Quickstart target already exists: {existing}")
+        # First required role goes to the human actor; every other role goes to the
+        # AI actor, so the pair covers the whole method out of the box.
+        human_roles = contract.required_roles[:1]
+        ai_roles = contract.required_roles[1:] or contract.required_roles
+
+        def _role_capabilities(role_ids: list[str]) -> list[str]:
+            capabilities: list[str] = []
+            for role_id in role_ids:
+                attributes = read_markdown(
+                    root / ".agora" / "methods" / method / "roles" / f"{role_id}.md"
+                ).attributes
+                for capability in strings_attribute(attributes, "required-capabilities"):
+                    if capability not in capabilities:
+                        capabilities.append(capability)
+            return capabilities
+
+        human_key = ai_key = None
+        keys_dir: Path | None = None
+        if data.key_directory is not None and not data.secure:
+            raise ValueError("--key-dir requires secure quickstart mode")
+        if data.secure:
+            keys_dir = self._quickstart_key_directory(root, data.key_directory)
+            human_key = self._generate_quickstart_keypair(keys_dir, human_id)
+            ai_key = self._generate_quickstart_keypair(keys_dir, ai_id)
+
+        self.add_actor(
+            AddActorInput(
+                id=human_id,
+                name="Owner",
+                kind="human",
+                capabilities=_role_capabilities(human_roles),
+                scope="project",
+                public_key=human_key,
+                require_authentication=data.secure,
+            )
+        )
+        self.add_actor(
+            AddActorInput(
+                id=ai_id,
+                name="Agent",
+                kind="ai-agent",
+                capabilities=_role_capabilities(ai_roles),
+                scope="project",
+                public_key=ai_key,
+                require_authentication=data.secure,
+            )
+        )
+
+        swarm = self.create_swarm(
+            CreateSwarmInput(id=data.swarm_id, objective=data.objective, method=method)
+        )
+
+        assignments: dict[str, str] = {}
+        for role_id in contract.required_roles:
+            actor_id = human_id if role_id in human_roles else ai_id
+            swarm = self.assign_actor(
+                AssignActorInput(swarm_id=swarm.id, role_id=role_id, actor_id=actor_id)
+            )
+            assignments[role_id] = actor_id
+
+        return QuickstartResult(
+            project=project,
+            swarm=swarm,
+            human_actor=human_id,
+            ai_actor=ai_id,
+            assignments=assignments,
+            secure=data.secure,
+            key_directory=str(keys_dir) if keys_dir is not None else None,
+        )
+
+    @staticmethod
+    def _quickstart_key_directory(root: Path, configured: str | None) -> Path:
+        if configured is not None:
+            return Path(configured).expanduser().resolve()
+        project_digest = hashlib.sha256(str(root).encode()).hexdigest()[:16]
+        return Path.home() / ".config" / "agora-quickstart-keys" / project_digest
+
+    @staticmethod
+    def _generate_quickstart_keypair(keys_dir: Path, actor_id: str) -> str:
+        keys_dir.mkdir(parents=True, exist_ok=True)
+        keys_dir.chmod(0o700)
+        private_path = keys_dir / f"{actor_id}-private.pem"
+        public_path = keys_dir / f"{actor_id}-public.pem"
+        if private_path.exists() != public_path.exists():
+            raise FileExistsError(
+                f"Quickstart keypair is incomplete for actor {actor_id}: {keys_dir}"
+            )
+        if private_path.exists():
+            loaded_private = serialization.load_pem_private_key(
+                private_path.read_bytes(), password=None
+            )
+            loaded_public = serialization.load_pem_public_key(public_path.read_bytes())
+            if not isinstance(loaded_private, Ed25519PrivateKey) or not isinstance(
+                loaded_public, Ed25519PublicKey
+            ):
+                raise ValueError(f"Quickstart keypair must use Ed25519: {keys_dir}")
+            expected_public = loaded_private.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            actual_public = loaded_public.public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            if expected_public != actual_public:
+                raise ValueError(f"Quickstart keypair does not match for actor {actor_id}")
+            return str(public_path)
+        private_key = Ed25519PrivateKey.generate()
+        private_path.write_bytes(
+            private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        private_path.chmod(0o600)
+        public_path.write_bytes(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        return str(public_path)
+
 
 def _extract_section(body: str, heading: str) -> str:
     marker = f"## {heading}\n\n"
@@ -5287,12 +12325,28 @@ def _boolean_attribute(attributes: dict[str, object], key: str) -> bool:
     return value
 
 
+def _boolean_attribute_default(attributes: dict[str, object], key: str, default: bool) -> bool:
+    value = attributes.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"Expected boolean attribute: {key}")
+    return value
+
+
 def _optional_integer_attribute(attributes: dict[str, object], key: str) -> int | None:
     value = attributes.get(key)
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"Expected integer attribute or null: {key}")
+    return value
+
+
+def _positive_integer_attribute_default(
+    attributes: dict[str, object], key: str, default: int, maximum: int
+) -> int:
+    value = attributes.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > maximum:
+        raise ValueError(f"Expected integer attribute between 1 and {maximum}: {key}")
     return value
 
 
@@ -5333,13 +12387,77 @@ def _launch_process(command: list[str], cwd: Path, environment: dict[str, str]) 
 
 
 def _run_tool_process(
-    command: list[str], cwd: Path, environment: dict[str, str]
+    command: list[str],
+    cwd: Path,
+    environment: dict[str, str],
+    timeout_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
+    max_output_bytes: int = DEFAULT_TOOL_MAX_OUTPUT_BYTES,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    started = time.monotonic()
+    boundary: str | None = None
+    boundary_exit_code: int | None = None
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=environment,
+            stdout=stdout_file,
+            stderr=stderr_file,
+        )
+        while process.poll() is None:
+            output_size = (
+                os.fstat(stdout_file.fileno()).st_size + os.fstat(stderr_file.fileno()).st_size
+            )
+            if output_size > max_output_bytes:
+                boundary = (
+                    f"Agora terminated the tool after output exceeded {max_output_bytes} bytes."
+                )
+                boundary_exit_code = 125
+                process.kill()
+                break
+            if time.monotonic() - started >= timeout_seconds:
+                boundary = f"Agora terminated the tool after {timeout_seconds:g} seconds."
+                boundary_exit_code = 124
+                process.kill()
+                break
+            time.sleep(0.01)
+        process.wait()
+        actual_output_size = (
+            os.fstat(stdout_file.fileno()).st_size + os.fstat(stderr_file.fileno()).st_size
+        )
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read(max_output_bytes)
+        stderr = stderr_file.read(max(0, max_output_bytes - len(stdout)))
+
+    if boundary is None and actual_output_size > max_output_bytes:
+        boundary = f"Agora limited captured tool output to {max_output_bytes} bytes."
+        boundary_exit_code = 125
+    exit_code = process.returncode if boundary_exit_code is None else boundary_exit_code
+    stderr_text = stderr.decode("utf-8", errors="replace")
+    if boundary:
+        stderr_text = f"{stderr_text.rstrip()}\n{boundary}\n".lstrip()
+    return subprocess.CompletedProcess(
         command,
-        cwd=cwd,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
+        exit_code,
+        stdout.decode("utf-8", errors="replace"),
+        stderr_text,
+    )
+
+
+def _bound_tool_output(
+    result: subprocess.CompletedProcess[str], max_output_bytes: int
+) -> subprocess.CompletedProcess[str]:
+    stdout = result.stdout.encode("utf-8")
+    stderr = result.stderr.encode("utf-8")
+    if len(stdout) + len(stderr) <= max_output_bytes:
+        return result
+    bounded_stdout = stdout[:max_output_bytes]
+    bounded_stderr = stderr[: max(0, max_output_bytes - len(bounded_stdout))]
+    diagnostic = f"Agora limited captured tool output to {max_output_bytes} bytes.\n"
+    return subprocess.CompletedProcess(
+        result.args,
+        125,
+        bounded_stdout.decode("utf-8", errors="replace"),
+        f"{bounded_stderr.decode('utf-8', errors='replace').rstrip()}\n{diagnostic}".lstrip(),
     )

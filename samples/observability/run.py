@@ -9,6 +9,7 @@ from agora.markdown import read_markdown, render_markdown
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
+    AddEnvironmentInput,
     AssignActorInput,
     CreateSwarmInput,
     CreateWorkInput,
@@ -81,6 +82,13 @@ def main() -> None:
     agora.create_work(
         CreateWorkInput("delivery", "incident-response", "Restore API health", "owner")
     )
+    agora.add_environment(
+        AddEnvironmentInput(
+            id="production",
+            name="Production",
+            allowed_tool_capabilities=["observability.read"],
+        )
+    )
     health = agora.invoke_tool(
         InvokeToolInput(
             id="health-check",
@@ -89,6 +97,7 @@ def main() -> None:
             actor_id="developer",
             swarm_id="delivery",
             work_id="incident-response",
+            environment_id="production",
             inputs={"service": "api", "environment": "production"},
             launch=True,
         )

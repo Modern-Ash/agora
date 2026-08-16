@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,34 @@ def test_loads_a_provider_neutral_tool_pack() -> None:
     assert contract.operations["create-branch"].risk == "write"
     assert contract.operations["create-branch"].inputs == ["branch"]
     assert contract.operations["commit"].input_rules == {"message": "conventional-commits/v1.0.0"}
+    assert contract.timeout_seconds == 300
+    assert contract.max_output_bytes == 1048576
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("timeout-seconds", "0"),
+        ("timeout-seconds", "true"),
+        ("timeout-seconds", "3601"),
+        ("max-output-bytes", "0"),
+        ("max-output-bytes", "10485761"),
+    ],
+)
+def test_rejects_invalid_tool_execution_boundaries(
+    tmp_path: Path, attribute: str, value: str
+) -> None:
+    source = template_root() / "tools" / "repository"
+    tool = tmp_path / "repository"
+    shutil.copytree(source, tool)
+    manifest = tool / "TOOL.md"
+    contents = manifest.read_text(encoding="utf-8")
+    default = "300" if attribute == "timeout-seconds" else "1048576"
+    contents = contents.replace(f"{attribute}: {default}", f"{attribute}: {value}")
+    manifest.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=attribute):
+        load_tool_contract(tool)
 
 
 def test_loads_the_bundled_work_management_contract() -> None:
@@ -207,6 +236,15 @@ def test_rejects_an_extra_operation_in_a_partial_adapter() -> None:
         validate_tool_adapter_contract(adapter, implemented)
 
 
+def test_rejects_an_adapter_that_weakens_environment_governance() -> None:
+    adapter = load_tool_contract(template_root() / "adapters" / "cli" / "terraform")
+    implemented = load_tool_contract(template_root() / "tools" / "cloud-infrastructure")
+    adapter.operations["plan"] = replace(adapter.operations["plan"], environment_required=False)
+
+    with pytest.raises(ValueError, match="environment requirement must match"):
+        validate_tool_adapter_contract(adapter, implemented)
+
+
 def test_loads_the_bundled_knowledge_base_contract() -> None:
     contract = load_tool_contract(template_root() / "tools" / "knowledge-base")
 
@@ -236,6 +274,7 @@ def test_loads_the_bundled_cloud_infrastructure_contract() -> None:
     assert contract.operations["plan"].capability == "cloud.plan"
     assert contract.operations["apply-plan"].capability == "cloud.deploy"
     assert contract.operations["destroy-resource"].capability == "cloud.destroy"
+    assert contract.operations["plan"].environment_required is True
     assert contract.operations["destroy-resource"].risk == "destructive"
 
 

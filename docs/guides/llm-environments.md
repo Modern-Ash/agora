@@ -183,6 +183,23 @@ agora actor runtime --actor ai-facilitator --clear
 `--clear` restores project inheritance. A human, AI agent, swarm, service, or automation can carry
 runtime metadata; actor kind describes accountable identity, not a permanent execution technology.
 
+When the actor requires authentication, prepare and sign the change in a swarm where its role grants
+`actor.runtime.update`:
+
+```bash
+agora actor runtime-prepare --id update-ai-facilitator-runtime \
+  --actor ai-facilitator --swarm payment-idempotency \
+  --integration generic --provider internal-gateway --model security-reviewed-model
+agora action authorization --action update-ai-facilitator-runtime \
+  --output /tmp/update-ai-facilitator-runtime.json
+# Sign the exact exported bytes outside Agora.
+agora action apply --action update-ai-facilitator-runtime \
+  --signature /tmp/update-ai-facilitator-runtime.sig
+```
+
+The signature binds the requested runtime fields to the current actor and swarm documents. Apply
+also rechecks the assignment and current Method Pack permission before changing the actor record.
+
 ## Prepare and launch a session
 
 After the actor has a swarm assignment, prepare a durable execution session:
@@ -226,6 +243,13 @@ The child process receives `AGORA_PROJECT`, `AGORA_SESSION`, `AGORA_CONTEXT`, `A
 `AGORA_SWARM`, and, when selected, `AGORA_WORK`. The runner owns model authentication and should read
 `AGORA_CONTEXT` before acting. Agora records the command, resolved integration/provider/model, exit
 status, and session events without binding the framework to a provider SDK.
+
+When the actor was registered with `--require-authentication`, immediate `start` is rejected. Use
+`agora session prepare`, sign and apply that Lifecycle Action, then export the launch payload with
+`agora session authorization`. Sign those bytes separately and launch with
+`agora session launch --signature`. Preparation covers the prospective context; launch covers the
+exact runtime selection, command, assignments, and materialized `CONTEXT.md` digest. See
+[Actor authentication](actor-authentication.md) for the complete flow.
 
 ## Credentials and sensitive data
 

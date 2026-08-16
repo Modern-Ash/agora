@@ -105,6 +105,7 @@ required-capabilities: ["delivery"]
 allowed-actor-kinds: ["human", "ai-agent", "swarm", "automation"]
 allowed-actions: ["work.transition", "artifact.add", "evidence.add"]
 allowed-tool-capabilities: ["repository.read", "repository.write", "ci.run"]
+allowed-environments: ["integration", "staging"]
 ---
 
 # Maker
@@ -117,14 +118,23 @@ Produces the governed outcome and its inspectable artifacts.
 swarm; it does not grant operating-system, cloud, or external-service permissions.
 
 `allowed-tool-capabilities` is optional and defaults to no external-tool authority. Each value must
-match the capability of an installed Tool Pack operation. See the
-[Tool Pack reference](tool-packs.md) for invocation and result contracts.
+match the capability of an installed Tool Pack operation. `allowed-environments` is optional for
+legacy roles and defaults to `["*"]`; explicit ids must reference project environment policies.
+One assigned role must grant both the operation capability and selected environment. See the
+[Tool Pack reference](tool-packs.md) for invocation and result contracts and
+[Environment permissions](../guides/environment-permissions.md) for project policy.
 
 Actions currently issued by the CLI are:
 
 | Action | CLI operation |
 | --- | --- |
+| `actor.key.recover` | Authorize another assigned actor's replacement after revocation |
+| `actor.key.revoke` | Revoke another assigned actor's active public key |
+| `actor.key.rotate` | Authorize the acting actor's next active public key |
+| `actor.runtime.update` | Change the acting actor's runtime selection |
+| `swarm.assign` | Assign a compatible actor to a vacant swarm role |
 | `work.create` | Create a governed work item |
+| `work.decompose` | Materialize a child work contract under active same-swarm work |
 | `work.transition` | Traverse an allowed transition edge |
 | `work.block` | Suspend mutations without changing method state |
 | `work.resume` | Resume blocked work in its preserved method state |
@@ -133,6 +143,9 @@ Actions currently issued by the CLI are:
 | `artifact.add` | Register a durable output or reference |
 | `evidence.add` | Register a successful or failed result |
 | `approval.add` | Record approval for a named role |
+| `approval.delegate` | Grant one compatible actor a work-scoped, single-use role approval |
+| `approval.delegation.revoke` | Revoke an unused approval delegation as its grantor |
+| `gate.waive` | Waive exact outstanding gate obligations with reason and risk evidence |
 | `handoff.create` | Transfer the role held by the acting actor |
 | `handoff.manage` | Transfer another role under governance authority |
 | `work.delegate` | Propose work through the linked child actor holding the role |
@@ -145,6 +158,8 @@ Actions currently issued by the CLI are:
 | `delegation.cancel` | Close a delegation under parent authority |
 
 A role may combine actions, but projects should grant only the authority required by that role.
+`gate.waive` does not bypass transition edges, role restrictions, WIP limits, child closure, or
+operational status; see the [Gate Waivers guide](../guides/gate-waivers.md).
 Delegation actions require a linked swarm graph in addition to role authority. See the
 [delegated work guide](../guides/delegated-work.md) for the state and attribution rules.
 See [interruptions and cancellation](../guides/interruptions-and-cancellation.md) for operational
@@ -170,8 +185,11 @@ Explain what this policy protects and what evidence reviewers should inspect.
 ```
 
 The three Boolean requirements may be enabled independently. Each role in
-`required-approval-roles` must have an approval recorded by an actor currently assigned to that role.
-The approving role needs the `approval.add` action. A gate runs only on transition edges that name it.
+`required-approval-roles` must have an approval recorded by its assigned actor or the target of a
+valid single-use Approval Delegation. The approving role needs `approval.add`; the grantor
+additionally needs `approval.delegate` and `approval.delegation.revoke`. See
+[Approval Delegation](../guides/approval-delegation.md). A gate runs only on transition edges that
+name it.
 
 For backward compatibility, a legacy pack that has no gate files receives a strict `completion` gate
 requiring all criteria, required artifacts, and at least one successful evidence record. The derived

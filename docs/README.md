@@ -5,14 +5,26 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 
 ## Start here
 
+- [Quickstart](guides/quickstart.md): initialize a project, create human and AI actors, and form a
+  method-derived swarm in one command, with optional external Ed25519 keys.
 - [Installation and customization](guides/installation-and-customization.md): install the CLI and
   tailor user, project, lifecycle, actor, template, and agent-environment scopes.
 - [Project upgrades](guides/project-upgrades.md): preview, apply, audit, and recover protocol
   migrations without replacing local policies or Method Packs.
 - [Concurrent writers](guides/concurrent-writers.md): serialize local mutations, inspect lock owners,
-  and configure bounded contention waits.
+  configure bounded contention waits, and add an optional cross-host lease CLI.
 - [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
   through project rules and governed Tool Pack input validation.
+- [Actor authentication](guides/actor-authentication.md): bind governed operations to external
+  Ed25519 identities, sign key rotation, independent revocation and recovery, plus agent-session
+  preparation and launch without storing private keys.
+- [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
+  and audit actor administration, swarm composition, work creation, material records, transitions,
+  governance, and delegation lifecycles.
+- [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct
+  process timeouts and captured-output limits without claiming operating-system isolation.
+- [Environment permissions](guides/environment-permissions.md): restrict Tool Runs through
+  project-defined capability, role, approval, and evidence policies.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native
   CLI integrations while keeping MCP as an explicit alternative transport.
 - [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
@@ -29,18 +41,18 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
   resolve catalog dependencies, and reject broken or cyclic compositions.
-- [Pack updates](guides/pack-updates.md): persist catalog provenance, preview dependency-aware
-  upgrades, and protect local pack amendments.
+- [Pack updates](guides/pack-updates.md): audit catalog installations, persist provenance, preview
+  dependency-aware upgrades, and protect local pack amendments.
 - [Pack composition locks](guides/pack-locks.md): inventory installed trees and validate durable,
   continuous per-pack update histories.
 - [Pack removal](guides/pack-removal.md): preview safe removals, protect dependents and durable
   references, and explicitly prune unused dependency closures.
 - [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
-  checksum-pinned and Ed25519-signed registry snapshots.
-- [Registry trust stores](guides/registry-trust.md): approve, resolve, rotate, and revoke registry
-  signing keys through local Markdown and Git.
-- [Registry updates](guides/registry-updates.md): preview and transactionally apply authenticated
-  releases while preserving provenance and update history.
+  checksum-pinned and Ed25519-signed registry snapshots and external transparency proofs.
+- [Registry trust stores](guides/registry-trust.md): approve, rotate, revoke, and synchronize signed
+  organization registry trust through local Markdown and Git.
+- [Registry updates](guides/registry-updates.md): audit, notify, preview, and transactionally apply
+  authenticated releases while preserving provenance and update history.
 - [Getting started](getting-started.md): install Agora, initialize a project, form a swarm, and
   complete governed work.
 - [LLM environments](guides/llm-environments.md): configure project and actor runtimes, prepare
@@ -50,6 +62,16 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Recursive swarms](guides/recursive-swarms.md): link a real child swarm with cycle and depth limits.
 - [Delegated work](guides/delegated-work.md): propose child work, accept it, and collect a terminal
   result into its parent.
+- [Delegation budgets](guides/delegation-budgets.md): propagate provider-neutral integer limits and
+  prevent sibling allocations from exceeding their parent work budget.
+- [Delegated artifact promotion](guides/delegated-artifacts.md): promote promised child artifact
+  kinds as typed parent references without copying opaque external content.
+- [Work decomposition](guides/work-decomposition.md): materialize same-swarm child contracts and
+  enforce parent-child closure.
+- [Granular Gate Waivers](guides/gate-waivers.md): accept exact residual-risk exceptions without
+  bypassing transition, role, WIP, or work-status policy.
+- [Approval Delegation](guides/approval-delegation.md): grant one compatible actor a single-use,
+  work-scoped role approval without handing off the role.
 - [Operations and validation](guides/operations-and-validation.md): query active state, inspect
   events, and audit every durable record.
 - [Complete verification](guides/verification.md): validate all command Markdown, generated agent
@@ -68,6 +90,10 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 
 ## Executable samples
 
+- [Actor authentication](../samples/actor-authentication/README.md): sign a lifecycle action, Tool
+  Run, and agent session externally, then rotate and revoke the public key without losing evidence.
+- [Approval Delegation](../samples/approval-delegation/README.md): consume one scoped delegated
+  approval, revoke another, and preserve the original role assignment.
 - [Basic Scrum swarm](../samples/basic-swarm/README.md): a human Product Owner, AI Scrum Master, and
   nested delivery swarm complete a governed increment.
 - [LLM environments](../samples/llm-environments/README.md): materialize Codex, Claude, and
@@ -76,6 +102,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   or Kanban.
 - [Governed tool integration](../samples/tool-integration/README.md): invoke Git through a
   role-authorized Tool Pack and inspect its durable result.
+- [Tool execution boundaries](../samples/execution-boundaries/README.md): observe a successful run,
+  timeout, and output-limit failure through one bounded Python provider.
 - [Governed work management](../samples/work-management/README.md): execute a provider-neutral issue
   tracker contract through a local Python adapter and reject unauthorized transitions.
 - [Governed CI/CD](../samples/ci-cd/README.md): trigger a pipeline and require explicit capability
@@ -94,6 +122,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   require approval before publication, and reject unauthorized archival.
 - [Governed cloud infrastructure](../samples/cloud-infrastructure/README.md): plan a cloud change,
   require approval before apply, and reject unauthorized destruction.
+- [Environment permissions](../samples/environment-permissions/README.md): require role scope,
+  approval, and successful evidence before preparing a production Tool Run.
 - [Native cloud inventory](../samples/cloud-inventory-cli/README.md): prepare bounded AWS and Google
   Cloud reads while proving partial adapters expose no deployment operation.
 - [Governed observability](../samples/observability/README.md): inspect health, declare an incident,
@@ -103,7 +133,11 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Recursive swarms](../samples/recursive-swarms/README.md): delegate a parent role to a real child
   swarm and reject excessive nesting.
 - [Delegated work](../samples/delegated-work/README.md): execute the proposal, child acceptance, and
-  result collection lifecycle.
+  result collection lifecycle with a signed inherited budget.
+- [Work decomposition](../samples/work-decomposition/README.md): create local child work and reject
+  parent closure until every child is terminal or cancelled.
+- [Gate Waivers](../samples/gate-waivers/README.md): reject an incomplete Scrum gate, record an exact
+  risk-backed exception, and complete the governed transition.
 - [Operational queries](../samples/operational-query/README.md): summarize and validate a generated
   workspace without a database.
 - [Interruptions and cancellation](../samples/interruptions/README.md): exercise durable status
@@ -112,6 +146,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   preserving local policy and validating the resulting records.
 - [Concurrent writers](../samples/concurrent-writes/README.md): reject a competing mutation and
   continue safely after the operating-system lock is released.
+- [Distributed coordination](../samples/distributed-coordination/README.md): wrap a project mutation
+  in an external lease while preserving mandatory local locking.
 - [Pack registry](../samples/pack-registry/README.md): discover and install a custom lifecycle from a
   user-scoped Markdown catalog.
 - [Pack dependencies](../samples/pack-dependencies/README.md): install a Method Pack and recursively
@@ -124,7 +160,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 ## MVP boundaries
 
 Agora currently validates transition graphs, role capabilities and actions, WIP limits, gates,
-required artifacts, acceptance criteria, successful evidence, approvals, handoffs, work and
+required artifacts, acceptance criteria, successful evidence, direct and delegated approvals, Gate
+Waivers, handoffs, work and
 delegation interruption histories, delegated work, Tool Pack operations, cross-record integrity,
 and event syntax. It can launch local LLM and tool CLIs with durable context, but does not call
 provider APIs directly, manage credentials, implement a remote scheduler or distributed lease

@@ -184,14 +184,16 @@ agora tool invoke \
   --operation plan \
   --actor developer \
   --swarm delivery \
+  --environment staging \
   --input environment=infra/staging \
   --input change=plans/staging.tfplan
 ```
 
-The `environment` input is the reviewed Terraform root-module directory. The `change` input is the
-saved plan path, not free-form change text. Saved plan files can contain sensitive configuration and
-must remain outside Git or follow the project's protected artifact policy. Applying a saved plan and
-targeted destruction retain their separate capabilities and are not granted to bundled roles.
+The governed `staging` environment must allow `cloud.plan`. The `environment` input is the reviewed
+Terraform root-module directory. The `change` input is the saved plan path, not free-form change
+text. Saved plan files can contain sensitive configuration and must remain outside Git or follow the
+project's protected artifact policy. Applying a saved plan and targeted destruction retain their
+separate capabilities and are not granted to bundled roles.
 
 ## Partial AWS and Google Cloud inventory
 

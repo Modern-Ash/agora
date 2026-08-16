@@ -21,6 +21,20 @@ The child may reject a proposal. The parent may cancel a proposed, accepted, or 
 Every such change requires a reason and writes a sequenced `status-changes/<id>/STATUS.md` record.
 See [Interruptions and cancellation](interruptions-and-cancellation.md) for the complete graph.
 
+Authenticated actors prepare these decisions before signing and applying them:
+
+```bash
+agora delegation block-prepare --id pause-specialist-task \
+  --delegation specialist-task --by facilitator --reason "Clarify the boundary"
+agora action authorization --action pause-specialist-task --output /tmp/pause.json
+openssl pkeyutl -sign -inkey facilitator-private.pem -rawin \
+  -in /tmp/pause.json -out /tmp/pause.sig
+agora action apply --action pause-specialist-task --signature /tmp/pause.sig
+```
+
+Equivalent `resume-prepare`, `reject-prepare`, and `cancel-prepare` commands retain the original
+parent or child authority rules. See [Signed lifecycle actions](signed-lifecycle-actions.md).
+
 ## Preconditions
 
 Create and fully assign the child, register a project-scoped swarm actor with
@@ -66,13 +80,24 @@ agora delegation create \
   --description "Return a result that the parent can integrate." \
   --criterion usable:"The result can be integrated" \
   --required-artifact child-result \
+  --promote-artifact child-result=specialist-result \
+  --budget effort=8 \
+  --budget tokens=50000 \
   --result-kind delegated-result \
   --by specialist-swarm
 ```
 
 A different parent participant needs `delegation.manage`. The request persists the exact parent and
 child identities, criteria, required child artifacts, and the artifact kind expected by the parent.
-The child work id must not already exist.
+The child work id must not already exist. Optional provider-neutral budgets are persisted in the
+proposal and inherited by accepted child work. Nested sibling allocations cannot exceed that map;
+see [Delegation budgets](delegation-budgets.md).
+Promoted artifacts must be required by the child gate and become typed parent references during
+collection; see [Delegated artifact promotion](delegated-artifacts.md).
+
+When the requester requires authentication, use `create-prepare` with a distinct `--action-id`,
+export its authorization, sign it outside Agora, and apply it. The signature binds every field shown
+above plus the parent work, both swarm manifests, and linked actor record.
 
 ## Accept inside the child
 
@@ -82,6 +107,10 @@ pack, the Product Owner has those actions:
 ```bash
 agora delegation accept --delegation specialist-task --by owner
 ```
+
+Use `accept-prepare --id accept-specialist-task` for an authenticated child participant. Applying
+the signed action creates the same linked child work and uses the action id for its durable status
+change.
 
 Agora creates `specialists/work/child-slice` in the child's initial lifecycle state. Its `WORK.md`
 links back to both the delegation and `delivery/parent-slice`. From that point the child executes its
@@ -99,15 +128,20 @@ agora delegation collect \
   --by specialist-swarm
 ```
 
+Use `collect-prepare --id collect-specialist-task` when the linked swarm actor requires
+authentication. The signature is bound to the terminal child work and current parent work, so a
+change to either side invalidates the prepared collection.
+
 Collection adds two records to the parent work:
 
 - An artifact of the proposal's `result-kind` whose URI is
   `agora://swarms/<child-swarm>/work/<child-work>`.
 - Successful `delegated-work` evidence referring to the same URI.
 
-The URI points to the authoritative child work. Agora does not copy or merge child artifacts, and it
-does not automatically satisfy parent acceptance criteria or approvals. Parent gates therefore
-remain independently enforceable.
+The URI points to the authoritative child work. Explicit `artifact-promotions` add typed references
+to promised child kinds, but Agora does not copy or merge opaque artifact contents. Collection does
+not automatically satisfy parent acceptance criteria or approvals. Parent gates therefore remain
+independently enforceable.
 
 The child swarm may already be `completed` when collection occurs. Agora permits this narrow action
 because completing all child work is the condition that makes the result collectible; it does not

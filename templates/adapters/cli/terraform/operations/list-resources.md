@@ -4,6 +4,7 @@ id: "list-resources"
 name: "List Terraform state resources"
 capability: "cloud.read"
 risk: "read"
+environment-required: true
 arguments: ["-chdir={environment}","state","list"]
 inputs: ["environment"]
 result-kind: "cloud-resource-list"
