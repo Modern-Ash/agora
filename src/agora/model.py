@@ -471,6 +471,38 @@ class TransparencyTrustKeyRecord:
 
 
 @dataclass(frozen=True)
+class TransparencyInclusionProofRecord:
+    log: str
+    key_id: str
+    registry: str
+    version: str
+    archive: str
+    sha256: str
+    tree_size: int
+    leaf_index: int
+    root_sha256: str
+    inclusion_path: list[str]
+    checkpoint_signature: str
+    integrated_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class TransparencyVerificationResult:
+    log: str
+    registry: str
+    version: str
+    tree_size: int
+    leaf_index: int
+    root_sha256: str
+    key_id: str
+    signature_verified: bool
+    inclusion_verified: bool
+    recorded: bool
+    path: str | None = None
+
+
+@dataclass(frozen=True)
 class OrganizationTrustRootRecord:
     id: str
     algorithm: Literal["ed25519"]
@@ -986,6 +1018,13 @@ class RevokeTransparencyTrustKeyInput:
     scope: Literal["user", "project"]
     reason: str
     replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
+class VerifyTransparencyProofInput:
+    source: str
+    scope: Literal["user", "project"]
+    record: bool = False
 
 
 @dataclass(frozen=True)

@@ -196,7 +196,9 @@ from agora.model import (
     ToolRunRecord,
     ToolRuntimeProbe,
     TransitionWorkInput,
+    TransparencyInclusionProofRecord,
     TransparencyTrustKeyRecord,
+    TransparencyVerificationResult,
     UpdateCatalogPackInput,
     UpdateRegistryInput,
     UpgradeInput,
@@ -204,6 +206,7 @@ from agora.model import (
     UserConfiguration,
     ValidationIssue,
     ValidationReport,
+    VerifyTransparencyProofInput,
     WaiveGateInput,
     WorkActorInput,
     WorkOperationalStatus,
@@ -267,9 +270,12 @@ from agora.tools import (
 )
 from agora.transparency import (
     load_transparency_key,
+    load_transparency_proof,
     render_transparency_key,
+    render_transparency_proof,
     revoke_transparency_key,
     transparency_key_from_pem,
+    verify_transparency_proof,
 )
 from agora.trust import load_trust_key, render_trust_key, revoke_trust_key, trust_key_from_pem
 from agora.upgrades import (
@@ -1195,6 +1201,48 @@ class AgoraWorkspace:
         )
         atomic_write(path, render_transparency_key(revoked))
         return load_transparency_key(path, data.scope)
+
+    @_locked_mutation("scoped")
+    def verify_transparency_inclusion(
+        self, data: VerifyTransparencyProofInput
+    ) -> TransparencyVerificationResult:
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported transparency proof scope: {data.scope}")
+        source = Path(data.source).expanduser().resolve()
+        proof = load_transparency_proof(source)
+        key = next(
+            (key for key in self.list_transparency_trust_keys() if key.id == proof.key_id),
+            None,
+        )
+        if key is None:
+            raise ValueError(
+                f"Trusted transparency key not found: {proof.key_id} for log {proof.log}"
+            )
+        if key.status != "active":
+            raise ValueError(f"Transparency trust key is revoked: {proof.key_id}")
+        verify_transparency_proof(proof, key)
+        path: Path | None = None
+        if data.record:
+            root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+            path = root / "transparency" / proof.log / proof.registry / proof.version / "PROOF.md"
+            if path.exists():
+                raise FileExistsError(f"Transparency proof already recorded: {path}")
+            persisted = replace(proof, path=str(path))
+            atomic_write(path, render_transparency_proof(persisted))
+            verify_transparency_proof(load_transparency_proof(path), key)
+        return TransparencyVerificationResult(
+            log=proof.log,
+            registry=proof.registry,
+            version=proof.version,
+            tree_size=proof.tree_size,
+            leaf_index=proof.leaf_index,
+            root_sha256=proof.root_sha256,
+            key_id=proof.key_id,
+            signature_verified=True,
+            inclusion_verified=True,
+            recorded=data.record,
+            path=str(path) if path is not None else None,
+        )
 
     @_locked_mutation("scoped")
     def add_organization_trust_root(
@@ -7007,6 +7055,7 @@ class AgoraWorkspace:
             "pack-update-audit-applications": 0,
             "trust-keys": 0,
             "transparency-trust-keys": 0,
+            "transparency-proofs": 0,
             "organization-trust-roots": 0,
             "organization-trust-bundles": 0,
             "organization-trust-root-rotations": 0,
@@ -7227,6 +7276,43 @@ class AgoraWorkspace:
                     Path(record.path),
                     "Replacement transparency trust key must be active for the same log",
                 )
+        user_transparency_keys: dict[str, TransparencyTrustKeyRecord] = {}
+        for path in sorted((agora_home() / "trust" / "transparency").glob("*.md")):
+            try:
+                record = load_transparency_key(path, "user")
+            except Exception:
+                continue
+            user_transparency_keys[record.id] = record
+        proof_root = root / ".agora" / "transparency"
+        for path in sorted(proof_root.rglob("PROOF.md")):
+            proof = inspect(
+                "transparency-proofs",
+                "transparency-proof.invalid",
+                path,
+                lambda path=path: load_transparency_proof(path),
+            )
+            if not isinstance(proof, TransparencyInclusionProofRecord):
+                continue
+            relative = path.relative_to(proof_root)
+            expected = (proof.log, proof.registry, proof.version, "PROOF.md")
+            if relative.parts != expected:
+                issue(
+                    "transparency-proof.location-mismatch",
+                    path,
+                    "Transparency proof identity does not match its durable location",
+                )
+            key = transparency_keys.get(proof.key_id) or user_transparency_keys.get(proof.key_id)
+            if key is None:
+                issue(
+                    "transparency-proof.key-missing",
+                    path,
+                    f"Transparency trust key does not exist: {proof.key_id}",
+                )
+                continue
+            try:
+                verify_transparency_proof(proof, key)
+            except Exception as error:
+                issue("transparency-proof.verification-failed", path, str(error))
         for directory in _child_directories(root / ".agora" / "trust" / "organizations"):
             root_path = directory / "ROOT.md"
             organization_root = inspect(

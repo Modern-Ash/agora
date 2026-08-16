@@ -118,7 +118,8 @@ Ed25519 signatures. See [Remote registry releases](remote-registries.md). Depend
 implemented for explicit pack installation; installed packs are never refreshed by a registry
 update. Signed organization trust and revocation feeds plus externally schedulable aggregate update
 notifications, dual-signed root rotation, and distinct-key registry release thresholds are
-implemented; third-party transparency proofs and automatic installed-pack updates remain future
-work. Local and project trust stores are described in [Registry trust stores](registry-trust.md).
+implemented. Explicit transparency proof verification is available, while mandatory install/update
+proof policy and automatic installed-pack updates remain future work. Local and project trust stores
+are described in [Registry trust stores](registry-trust.md).
 Explicit release checks and transactional application are described in
 [Registry updates](registry-updates.md).

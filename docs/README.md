@@ -48,7 +48,7 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 - [Pack removal](guides/pack-removal.md): preview safe removals, protect dependents and durable
   references, and explicitly prune unused dependency closures.
 - [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
-  checksum-pinned and Ed25519-signed registry snapshots.
+  checksum-pinned and Ed25519-signed registry snapshots and external transparency proofs.
 - [Registry trust stores](guides/registry-trust.md): approve, rotate, revoke, and synchronize signed
   organization registry trust through local Markdown and Git.
 - [Registry updates](guides/registry-updates.md): audit, notify, preview, and transactionally apply

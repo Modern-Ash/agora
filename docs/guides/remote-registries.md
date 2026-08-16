@@ -83,6 +83,52 @@ An explicit PEM can satisfy at most one signature. Threshold verification theref
 user or project trust keys for values above one. A signature made by a persistently revoked key
 blocks the release even when other signatures would otherwise satisfy the threshold.
 
+## Transparency inclusion proofs
+
+Agora can independently verify that the canonical release payload is included in an RFC 6962-style
+Merkle tree and that the resulting checkpoint was signed by a trusted transparency log key. First
+pin the log's Ed25519 checkpoint key, then verify a proof supplied as a local Markdown artifact:
+
+```bash
+agora trust transparency add \
+  --id public-log-2026 \
+  --log public-log \
+  --public-key ./public-log-2026.pem \
+  --scope project
+agora registry verify-transparency \
+  --source ./PROOF.md \
+  --scope project \
+  --record
+```
+
+`--record` persists the canonical proof at
+`.agora/transparency/<log>/<registry>/<version>/PROOF.md`. `agora validate` repeats both checkpoint
+signature and inclusion verification. A later key revocation blocks new proof acceptance but does
+not erase the cryptographic audit of evidence recorded before rotation or revocation.
+
+The proof uses schema `agora/transparency-inclusion-proof/v1` and declares `log`, `key-id`,
+`registry`, `version`, `archive`, `sha256`, `tree-size`, `leaf-index`, `root-sha256`,
+`inclusion-path`, `checkpoint-signature`, and `integrated-at`. Each inclusion-path value is a
+lowercase SHA-256 hex digest. The leaf is:
+
+```text
+SHA256(0x00 || <canonical registry release signature payload>)
+```
+
+Each internal node is `SHA256(0x01 || left || right)`. The Ed25519 checkpoint signature covers these
+exact UTF-8 bytes, including the final newline:
+
+```text
+agora/transparency-checkpoint/v1
+log=public-log
+tree-size=<tree size>
+root-sha256=<Merkle root>
+integrated-at=<integration timestamp>
+```
+
+Proof files are bounded, contain an exact versioned attribute set, and are verified only against the
+separate transparency authority namespace. They cannot satisfy a registry release signature.
+
 ## Install a release
 
 Checksum verification is always mandatory:
@@ -152,10 +198,11 @@ directory. Removed files do not leak from an older release into a newer verified
 
 Agora manages local and project trust keys, rotations, revocations, and signed sequential
 organization trust feeds. Organization roots rotate through dual-signed, feed-bound declarations.
-Agora enforces distinct-key signature thresholds for registry releases. It does not yet verify
-third-party transparency-log proofs, although their checkpoint authorities now have a separate
-rotatable and revocable trust store. The index is a distribution convenience; installed filesystem
-state remains the governed operational record.
+Agora enforces distinct-key signature thresholds for registry releases and explicitly verifies and
+records third-party transparency-log inclusion proofs. Proof verification is not yet an automatic
+precondition of `registry install` or `registry update`; policy-driven proof requirements are the
+next boundary. The index is a distribution convenience; installed filesystem state remains the
+governed operational record.
 
 Use [Registry updates](registry-updates.md) to check and apply later releases without replacing packs
 that were already installed from the catalog.

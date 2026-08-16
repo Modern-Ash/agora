@@ -308,6 +308,11 @@ A transparency trust key authorizes only signed checkpoints for one external log
 scoped, append-by-new-id rotation and durable revocation properties as release trust, but resides in
 a separate namespace and grants no registry release authority.
 
+A transparency inclusion proof binds the canonical registry release payload to a Merkle leaf,
+inclusion path, tree position, and signed checkpoint from one transparency trust key. A verified
+proof may be persisted under the log, registry, and release version; validation repeats its
+cryptographic checks even if the key is later revoked. Revocation prevents accepting new evidence.
+
 An organization trust root verifies a sequential feed of registry trust keys and revocations. A
 root rotation is an immutable, dual-signed transition that binds both public roots to the current
 feed checksum and previous rotation. `ROOT.md` retains the initial public anchor plus current state;

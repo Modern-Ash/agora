@@ -78,6 +78,7 @@ from agora.model import (
     UpdateRegistryInput,
     UpgradeInput,
     ValidationReport,
+    VerifyTransparencyProofInput,
     WaiveGateInput,
     WorkActorInput,
 )
@@ -256,6 +257,16 @@ def _build_parser() -> argparse.ArgumentParser:
     registry_audit.add_argument("--record", action="store_true")
     registry_audit.add_argument("--allow-insecure-http", action="store_true")
     registry.add_parser("list", help="List bundled and installed registries")
+    registry_verify_transparency = registry.add_parser(
+        "verify-transparency", help="Verify a signed registry release inclusion proof"
+    )
+    registry_verify_transparency.add_argument("--source", required=True)
+    registry_verify_transparency.add_argument(
+        "--scope", choices=("user", "project"), default="project"
+    )
+    registry_verify_transparency.add_argument(
+        "--record", action="store_true", help="Persist the verified proof in Agora"
+    )
 
     trust = commands.add_parser(
         "trust", help="Manage trusted registry release keys"
@@ -1081,6 +1092,14 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         )
     if args.command == "registry" and args.registry_command == "list":
         return workspace.list_registries()
+    if args.command == "registry" and args.registry_command == "verify-transparency":
+        return workspace.verify_transparency_inclusion(
+            VerifyTransparencyProofInput(
+                source=args.source,
+                scope=args.scope,
+                record=args.record,
+            )
+        )
     if args.command == "trust" and args.trust_command == "add":
         return workspace.add_registry_trust_key(
             AddRegistryTrustKeyInput(

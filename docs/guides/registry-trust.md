@@ -251,10 +251,16 @@ requires the replacement to be active for the same log. Project validation check
 locations, status, and replacement continuity. These keys are stored under
 `.agora/trust/transparency/` and cannot verify registry release signatures.
 
+Verify a log-supplied release proof with `agora registry verify-transparency --source ./PROOF.md`.
+Add `--record` to persist it beneath `.agora/transparency/`; project validation then repeats the
+Merkle inclusion and signed-checkpoint checks. Revoked keys cannot accept new proofs. Historical
+proofs remain cryptographically verifiable after a later revocation.
+
 ## Current boundary
 
 Agora supports one active Ed25519 organization root, dual-signed sequential root rotation, and
 sequential snapshot feeds. Registry releases support distinct-key signature thresholds, but
 organization feed bundles do not yet use a threshold root policy. Third-party transparency-log
-inclusion proofs and automatic background synchronization are not implemented. Feed and rotation
+inclusion proofs are explicitly verified and recorded, but are not yet mandatory install or update
+preconditions. Automatic background synchronization is not implemented. Feed and rotation
 application remain explicit reviewed operations.

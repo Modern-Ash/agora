@@ -22,3 +22,5 @@ current feed position. Preview it with `agora trust organization rotate` before 
 
 Transparency checkpoint keys belong under `../trust/transparency/`, separate from registry release
 keys. Manage them with `agora trust transparency` so rotation and revocation remain auditable.
+Verify a local proof with `agora registry verify-transparency --source <PROOF.md> --record`; Agora
+stores verified project evidence under `../transparency/<log>/<registry>/<version>/PROOF.md`.
