@@ -255,12 +255,15 @@ Verify a log-supplied release proof with `agora registry verify-transparency --s
 Add `--record` to persist it beneath `.agora/transparency/`; project validation then repeats the
 Merkle inclusion and signed-checkpoint checks. Revoked keys cannot accept new proofs. Historical
 proofs remain cryptographically verifiable after a later revocation.
+Pass `--require-transparency` to `registry install` after recording the selected release proof. The
+resulting policy is persisted and cannot be lowered by later updates; each target release needs its
+own previously recorded proof from an active checkpoint authority.
 
 ## Current boundary
 
 Agora supports one active Ed25519 organization root, dual-signed sequential root rotation, and
 sequential snapshot feeds. Registry releases support distinct-key signature thresholds, but
 organization feed bundles do not yet use a threshold root policy. Third-party transparency-log
-inclusion proofs are explicitly verified and recorded, but are not yet mandatory install or update
-preconditions. Automatic background synchronization is not implemented. Feed and rotation
-application remain explicit reviewed operations.
+inclusion proofs are explicitly verified, recorded, and available as a forward-only install and
+update precondition. Automatic proof discovery and background synchronization are not implemented.
+Feed and rotation application remain explicit reviewed operations.

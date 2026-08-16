@@ -168,6 +168,7 @@ from agora.model import (
     QuickstartResult,
     RefreshPackLockInput,
     RegistryRecord,
+    RegistryReleaseRecord,
     RegistrySourceRecord,
     RegistryTrustKeyRecord,
     RegistryUpdateAuditEntry,
@@ -273,6 +274,7 @@ from agora.transparency import (
     load_transparency_proof,
     render_transparency_key,
     render_transparency_proof,
+    require_proof_matches_release,
     revoke_transparency_key,
     transparency_key_from_pem,
     verify_transparency_proof,
@@ -776,6 +778,7 @@ class AgoraWorkspace:
                 or data.public_key
                 or data.require_signature
                 or data.signature_threshold
+                or data.require_transparency
                 or data.allow_insecure_http
             ):
                 raise ValueError("Remote registry options cannot be used with a local directory")
@@ -805,6 +808,19 @@ class AgoraWorkspace:
                     f"Registry archive version {registry.version or 'missing'} does not match "
                     f"release {release.version}"
                 )
+            destination_root = (
+                agora_home() if data.scope == "user" else self.project_root() / ".agora"
+            )
+            existing_source = destination_root / "registries" / registry.id / "SOURCE.md"
+            inherited_transparency = (
+                read_registry_source(existing_source).transparency_required
+                if existing_source.is_file()
+                else False
+            )
+            transparency_required = data.require_transparency or inherited_transparency
+            transparency_proof = None
+            if transparency_required:
+                transparency_proof = self._required_recorded_transparency_proof(release, data.scope)
             provenance = RegistrySourceRecord(
                 registry=registry.id,
                 version=release.version,
@@ -818,6 +834,9 @@ class AgoraWorkspace:
                 signature_threshold=(
                     required_threshold if required_threshold > 0 else (1 if verified_key_ids else 0)
                 ),
+                transparency_required=transparency_required,
+                transparency_proof=transparency_proof,
+                release_archive=release.archive if transparency_required else None,
             )
             return self._install_registry_snapshot(
                 registry_root,
@@ -838,6 +857,15 @@ class AgoraWorkspace:
         registry = load_registry(source, scope)
         destination_root = agora_home() if scope == "user" else self.project_root() / ".agora"
         destination = destination_root / "registries" / registry.id
+        existing_source = destination / "SOURCE.md"
+        if existing_source.is_file():
+            existing = read_registry_source(existing_source)
+            if existing.transparency_required and (
+                provenance is None or not provenance.transparency_required
+            ):
+                raise ValueError(
+                    "Registry replacement cannot lower the persisted transparency requirement"
+                )
         if destination.exists() and not force:
             raise FileExistsError(
                 f"Registry already exists: {destination}. Pass --force to replace its files."
@@ -899,6 +927,7 @@ class AgoraWorkspace:
                 f"{provenance.signature_threshold} to {requested_threshold}"
             )
         signature_required = requested_threshold > 0
+        transparency_required = provenance.transparency_required or data.require_transparency
         trusted_keys = self.list_registry_trust_keys()
         index, release, verified_key_ids = inspect_registry_release(
             current.source,
@@ -922,6 +951,9 @@ class AgoraWorkspace:
                 raise ValueError(
                     f"Registry release {current.id}@{current.version} changed checksum in its index"
                 )
+            transparency_proof = None
+            if transparency_required:
+                transparency_proof = self._required_recorded_transparency_proof(release, scope)
             return RegistryUpdateResult(
                 registry=current.id,
                 scope=scope,
@@ -932,7 +964,11 @@ class AgoraWorkspace:
                 index=index.source,
                 checksum=release.sha256,
                 signature_verified=bool(verified_key_ids),
+                transparency_verified=transparency_proof is not None,
             )
+        transparency_proof = None
+        if transparency_required:
+            transparency_proof = self._required_recorded_transparency_proof(release, scope)
         preview = RegistryUpdateResult(
             registry=current.id,
             scope=scope,
@@ -943,6 +979,7 @@ class AgoraWorkspace:
             index=index.source,
             checksum=release.sha256,
             signature_verified=bool(verified_key_ids),
+            transparency_verified=transparency_proof is not None,
         )
         if not data.apply:
             return preview
@@ -957,6 +994,10 @@ class AgoraWorkspace:
         ) as (registry_root, applied_index, applied_release, applied_key_ids, archive):
             if applied_release != release:
                 raise RuntimeError("Registry index changed while applying the selected release")
+            if transparency_required:
+                reapplied_proof = self._required_recorded_transparency_proof(applied_release, scope)
+                if reapplied_proof != transparency_proof:
+                    raise RuntimeError("Registry transparency proof changed while applying update")
             if (registry_root / "SOURCE.md").exists() or (registry_root / "updates").exists():
                 raise ValueError(
                     "Remote registry archives must not contain installer-owned SOURCE.md or updates"
@@ -985,6 +1026,8 @@ class AgoraWorkspace:
                 path=str(record_path),
                 verified_key_ids=applied_key_ids,
                 signature_threshold=requested_threshold,
+                transparency_verified=transparency_required,
+                transparency_proof=transparency_proof,
             )
             provenance = RegistrySourceRecord(
                 registry=current.id,
@@ -997,6 +1040,9 @@ class AgoraWorkspace:
                 installed_at=applied_at,
                 verified_key_ids=applied_key_ids,
                 signature_threshold=requested_threshold,
+                transparency_required=transparency_required,
+                transparency_proof=transparency_proof,
+                release_archive=release.archive if transparency_required else None,
             )
             self._install_registry_snapshot(
                 registry_root,
@@ -1015,6 +1061,7 @@ class AgoraWorkspace:
             index=applied_index.source,
             checksum=release.sha256,
             signature_verified=bool(applied_key_ids),
+            transparency_verified=transparency_required,
             record_path=str(record_path),
         )
 
@@ -1242,6 +1289,40 @@ class AgoraWorkspace:
             inclusion_verified=True,
             recorded=data.record,
             path=str(path) if path is not None else None,
+        )
+
+    def _required_recorded_transparency_proof(
+        self, release: RegistryReleaseRecord, scope: str
+    ) -> str:
+        root = agora_home() if scope == "user" else self.project_root() / ".agora"
+        candidates = sorted(
+            (root / "transparency").glob(f"*/{release.registry}/{release.version}/PROOF.md")
+        )
+        if not candidates:
+            raise FileNotFoundError(
+                "Required recorded transparency proof not found for "
+                f"{release.registry}@{release.version}"
+            )
+        errors: list[str] = []
+        for path in candidates:
+            try:
+                proof = load_transparency_proof(path)
+                require_proof_matches_release(proof, release)
+                key = next(
+                    (key for key in self.list_transparency_trust_keys() if key.id == proof.key_id),
+                    None,
+                )
+                if key is None:
+                    raise ValueError(f"Transparency trust key not found: {proof.key_id}")
+                if key.status != "active":
+                    raise ValueError(f"Transparency trust key is revoked: {proof.key_id}")
+                verify_transparency_proof(proof, key)
+                return path.relative_to(root).as_posix()
+            except Exception as error:
+                errors.append(str(error))
+        raise ValueError(
+            f"No valid recorded transparency proof for {release.registry}@{release.version}: "
+            + "; ".join(errors)
         )
 
     @_locked_mutation("scoped")
@@ -7142,6 +7223,23 @@ class AgoraWorkspace:
                     path,
                     f"Registry id {registry.id} does not match directory {directory.name}",
                 )
+            if isinstance(registry, RegistryRecord) and registry.source is not None:
+                source_record = read_registry_source(directory / "SOURCE.md")
+                if source_record.transparency_required:
+                    proof_path = root / ".agora" / str(source_record.transparency_proof)
+                    try:
+                        proof = load_transparency_proof(proof_path)
+                        require_proof_matches_release(
+                            proof,
+                            RegistryReleaseRecord(
+                                registry=source_record.registry,
+                                version=source_record.version,
+                                archive=str(source_record.release_archive),
+                                sha256=source_record.sha256,
+                            ),
+                        )
+                    except Exception as error:
+                        issue("registry.transparency-proof-invalid", proof_path, str(error))
         for directory in _child_directories(root / ".agora" / "notifications" / "registry-updates"):
             path = directory / "AUDIT.md"
             audit = inspect(

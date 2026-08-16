@@ -312,6 +312,8 @@ A transparency inclusion proof binds the canonical registry release payload to a
 inclusion path, tree position, and signed checkpoint from one transparency trust key. A verified
 proof may be persisted under the log, registry, and release version; validation repeats its
 cryptographic checks even if the key is later revoked. Revocation prevents accepting new evidence.
+Registry provenance may make that evidence mandatory. The policy is monotonic across update history,
+and each applied release references its exact recorded proof.
 
 An organization trust root verifies a sequential feed of registry trust keys and revocations. A
 root rotation is an immutable, dual-signed transition that binds both public roots to the current

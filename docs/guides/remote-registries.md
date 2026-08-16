@@ -129,6 +129,23 @@ integrated-at=<integration timestamp>
 Proof files are bounded, contain an exact versioned attribute set, and are verified only against the
 separate transparency authority namespace. They cannot satisfy a registry release signature.
 
+After recording the proof, make it a mutation precondition with:
+
+```bash
+agora registry install \
+  --source https://catalog.example.com/agora/INDEX.md \
+  --version 1.0.0 \
+  --require-transparency \
+  --scope project
+```
+
+The gate selects the recorded proof by the exact registry and semantic version, then verifies its
+literal release archive, SHA-256, active log authority, Merkle path, and checkpoint again. Agora
+persists `transparency-required`, the portable proof reference, and the literal release archive in
+`SOURCE.md`. Once enabled, every later update inherits the requirement and records it in `UPDATE.md`;
+the policy cannot be lowered. Record the target release proof before previewing or applying that
+update. Agora never discovers or downloads a proof implicitly.
+
 ## Install a release
 
 Checksum verification is always mandatory:
@@ -167,6 +184,7 @@ Agora generates `SOURCE.md` inside a remotely installed registry. It records:
 - the final index and archive locations;
 - the selected version and archive SHA-256;
 - the verified Ed25519 signer ids and required signature threshold;
+- the forward-only transparency requirement and exact recorded proof reference, when enabled;
 - the installation timestamp.
 
 `agora registry list` exposes the version, source, checksum, and signature status. `agora validate`
@@ -199,10 +217,9 @@ directory. Removed files do not leak from an older release into a newer verified
 Agora manages local and project trust keys, rotations, revocations, and signed sequential
 organization trust feeds. Organization roots rotate through dual-signed, feed-bound declarations.
 Agora enforces distinct-key signature thresholds for registry releases and explicitly verifies and
-records third-party transparency-log inclusion proofs. Proof verification is not yet an automatic
-precondition of `registry install` or `registry update`; policy-driven proof requirements are the
-next boundary. The index is a distribution convenience; installed filesystem state remains the
-governed operational record.
+records third-party transparency-log inclusion proofs. A recorded proof may be required for
+`registry install` and every later update. Proof discovery remains external and explicit. The index
+is a distribution convenience; installed filesystem state remains the governed operational record.
 
 Use [Registry updates](registry-updates.md) to check and apply later releases without replacing packs
 that were already installed from the catalog.

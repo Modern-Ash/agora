@@ -191,7 +191,7 @@ agora trust transparency add --id rekor-2026 --log rekor-public \
   --public-key ./rekor-public.pem --scope project
 agora registry verify-transparency --source ./PROOF.md --scope project --record
 agora registry install --source https://catalog.example.com/INDEX.md \
-  --version 1.0.0 --signature-threshold 2 --scope user
+  --version 1.0.0 --signature-threshold 2 --require-transparency --scope project
 agora registry update --id team-catalog
 agora registry update --id team-catalog --apply
 agora registry audit --scope project --record
@@ -777,9 +777,9 @@ mutation in a structured external lease while retaining the local operating-syst
   Signed organization trust synchronization and a locally verified feed history are implemented.
   Dual-signed organization root rotation and registry release signature thresholds are implemented.
   Explicit third-party transparency inclusion-proof verification and durable recording are
-  implemented. Requiring a proof automatically during registry installation or update, and
-  automatic background pack updates, are not. Aggregate update notifications and explicit audited
-  batch application are available for external schedulers.
+  implemented, and a recorded proof can be made a forward-only installation and update policy.
+  Automatic proof discovery and background pack updates are not implemented. Aggregate update
+  notifications and explicit audited batch application are available for external schedulers.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,

@@ -6,6 +6,19 @@ by default and changes the installed snapshot only when `--apply` is explicit.
 Updates are available only for registries originally installed from a versioned remote `INDEX.md`.
 Local directory snapshots have no release source to check.
 
+If the installed `SOURCE.md` requires transparency, first verify and record the proof for the target
+release. Both preview and application revalidate it, and the applied `UPDATE.md` preserves the
+forward-only policy:
+
+```bash
+agora registry verify-transparency --source ./PROOF-2.0.0.md --scope project --record
+agora registry update --id team-catalog --scope project
+agora registry update --id team-catalog --scope project --apply
+```
+
+`--require-transparency` can raise the policy while selecting a later release. It becomes durable
+only when that update is applied and cannot be lowered afterward.
+
 ## Check for an update
 
 ```bash

@@ -2,6 +2,8 @@ import base64
 import hashlib
 import io
 import json
+import shutil
+import tarfile
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,11 +16,14 @@ from agora.cli import main
 from agora.model import (
     AddTransparencyTrustKeyInput,
     InitInput,
+    InstallRegistryInput,
     RegistryReleaseRecord,
     RevokeTransparencyTrustKeyInput,
     TransparencyInclusionProofRecord,
+    UpdateRegistryInput,
     VerifyTransparencyProofInput,
 )
+from agora.registries import read_registry_source, read_registry_update
 from agora.registry_distribution import release_signature_payload
 from agora.transparency import render_transparency_proof, transparency_checkpoint_payload
 from agora.workspace import AgoraWorkspace
@@ -34,8 +39,12 @@ def _write_public_key(path: Path, private_key: Ed25519PrivateKey) -> Path:
     return path
 
 
-def _proof(private_key: Ed25519PrivateKey, path: Path) -> TransparencyInclusionProofRecord:
-    release = RegistryReleaseRecord(
+def _proof(
+    private_key: Ed25519PrivateKey,
+    path: Path,
+    release: RegistryReleaseRecord | None = None,
+) -> TransparencyInclusionProofRecord:
+    release = release or RegistryReleaseRecord(
         registry="community",
         version="1.2.0",
         archive="community-1.2.0.tar.gz",
@@ -65,6 +74,46 @@ def _proof(private_key: Ed25519PrivateKey, path: Path) -> TransparencyInclusionP
             private_key.sign(transparency_checkpoint_payload(unsigned))
         ).decode(),
     )
+
+
+def _registry_release(tmp_path: Path, version: str) -> RegistryReleaseRecord:
+    registry = tmp_path / f"registry-{version}"
+    registry.mkdir()
+    (registry / "REGISTRY.md").write_text(
+        '---\nschema: "agora/registry/v1"\nid: "community"\n'
+        f'name: "Community"\nversion: "{version}"\n---\n\n# Community\n'
+    )
+    shutil.copytree(
+        Path(__file__).parents[1] / "samples" / "custom-lifecycle" / "release-flow",
+        registry / "methods" / "release-flow",
+    )
+    archive_name = f"community-{version}.tar.gz"
+    archive_path = tmp_path / archive_name
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(registry, arcname="community")
+    return RegistryReleaseRecord(
+        registry="community",
+        version=version,
+        archive=archive_name,
+        sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+    )
+
+
+def _write_index(path: Path, releases: list[RegistryReleaseRecord]) -> Path:
+    values = [
+        {
+            "version": release.version,
+            "archive": release.archive,
+            "sha256": release.sha256,
+        }
+        for release in releases
+    ]
+    path.write_text(
+        '---\nschema: "agora/registry-index/v1"\nid: "community"\n'
+        f'name: "Community"\nreleases: {json.dumps(values, separators=(",", ":"))}\n'
+        "---\n\n# Community releases\n"
+    )
+    return path
 
 
 def _workspace(tmp_path: Path, monkeypatch) -> tuple[Path, AgoraWorkspace, Ed25519PrivateKey]:
@@ -221,3 +270,120 @@ def test_validation_rejects_proof_integrated_after_key_revocation(
         and "after its trust key was revoked" in item.message
         for item in report.issues
     )
+
+
+def test_registry_install_requires_exact_recorded_transparency_proof(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, workspace, private_key = _workspace(tmp_path, monkeypatch)
+    release = _registry_release(tmp_path, "1.0.0")
+    index = _write_index(tmp_path / "INDEX.md", [release])
+
+    with pytest.raises(FileNotFoundError, match="Required recorded transparency proof"):
+        workspace.install_registry(
+            InstallRegistryInput(
+                source=str(index),
+                scope="project",
+                require_transparency=True,
+            )
+        )
+
+    proof_path = tmp_path / "release-proof.md"
+    proof_path.write_text(render_transparency_proof(_proof(private_key, proof_path, release)))
+    workspace.verify_transparency_inclusion(
+        VerifyTransparencyProofInput(source=str(proof_path), scope="project", record=True)
+    )
+    output = io.StringIO()
+    assert (
+        main(
+            [
+                "registry",
+                "install",
+                "--source",
+                str(index),
+                "--scope",
+                "project",
+                "--require-transparency",
+            ],
+            cwd=project,
+            stdout=output,
+        )
+        == 0
+    )
+
+    installed = next(item for item in workspace.list_registries() if item.id == "community")
+    source = read_registry_source(Path(installed.path) / "SOURCE.md")
+    assert source.transparency_required is True
+    assert source.release_archive == release.archive
+    assert source.transparency_proof == "transparency/public-log/community/1.0.0/PROOF.md"
+    assert workspace.validate().ok is True
+
+    workspace.install_registry(InstallRegistryInput(source=str(index), scope="project", force=True))
+    reinstalled = next(item for item in workspace.list_registries() if item.id == "community")
+    assert read_registry_source(Path(reinstalled.path) / "SOURCE.md").transparency_required is True
+
+    with pytest.raises(ValueError, match="cannot lower the persisted transparency requirement"):
+        workspace.install_registry(
+            InstallRegistryInput(
+                source=str(tmp_path / "registry-1.0.0"),
+                scope="project",
+                force=True,
+            )
+        )
+
+
+def test_registry_gate_rejects_proof_for_different_release(tmp_path: Path, monkeypatch) -> None:
+    _, workspace, private_key = _workspace(tmp_path, monkeypatch)
+    release = _registry_release(tmp_path, "1.0.0")
+    index = _write_index(tmp_path / "INDEX.md", [release])
+    proof_path = tmp_path / "wrong-release-proof.md"
+    wrong_release = replace(release, sha256="f" * 64)
+    proof_path.write_text(render_transparency_proof(_proof(private_key, proof_path, wrong_release)))
+    workspace.verify_transparency_inclusion(
+        VerifyTransparencyProofInput(source=str(proof_path), scope="project", record=True)
+    )
+
+    with pytest.raises(ValueError, match="does not match the selected registry release"):
+        workspace.install_registry(
+            InstallRegistryInput(source=str(index), scope="project", require_transparency=True)
+        )
+
+
+def test_registry_update_preserves_transparency_requirement(tmp_path: Path, monkeypatch) -> None:
+    _, workspace, private_key = _workspace(tmp_path, monkeypatch)
+    releases = [_registry_release(tmp_path, version) for version in ("1.0.0", "2.0.0")]
+    index = _write_index(tmp_path / "INDEX.md", [releases[0]])
+    first_proof = tmp_path / "proof-1.md"
+    first_proof.write_text(render_transparency_proof(_proof(private_key, first_proof, releases[0])))
+    workspace.verify_transparency_inclusion(
+        VerifyTransparencyProofInput(source=str(first_proof), scope="project", record=True)
+    )
+    workspace.install_registry(
+        InstallRegistryInput(source=str(index), scope="project", require_transparency=True)
+    )
+    _write_index(index, releases)
+
+    with pytest.raises(FileNotFoundError, match="Required recorded transparency proof"):
+        workspace.update_registry(UpdateRegistryInput(id="community", scope="project"))
+
+    second_proof = tmp_path / "proof-2.md"
+    second_proof.write_text(
+        render_transparency_proof(_proof(private_key, second_proof, releases[1]))
+    )
+    workspace.verify_transparency_inclusion(
+        VerifyTransparencyProofInput(source=str(second_proof), scope="project", record=True)
+    )
+    preview = workspace.update_registry(UpdateRegistryInput(id="community", scope="project"))
+    assert preview.transparency_verified is True
+    applied = workspace.update_registry(
+        UpdateRegistryInput(id="community", scope="project", apply=True)
+    )
+
+    assert applied.transparency_verified is True
+    assert applied.record_path is not None
+    update = read_registry_update(Path(applied.record_path))
+    assert update.transparency_verified is True
+    assert update.transparency_proof == "transparency/public-log/community/2.0.0/PROOF.md"
+    installed = next(item for item in workspace.list_registries() if item.id == "community")
+    assert read_registry_source(Path(installed.path) / "SOURCE.md").transparency_required is True
+    assert workspace.validate().ok is True

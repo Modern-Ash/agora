@@ -436,6 +436,9 @@ class RegistrySourceRecord:
     installed_at: str
     verified_key_ids: list[str] = field(default_factory=list)
     signature_threshold: int = 0
+    transparency_required: bool = False
+    transparency_proof: str | None = None
+    release_archive: str | None = None
 
 
 @dataclass(frozen=True)
@@ -586,6 +589,8 @@ class RegistryUpdateRecord:
     path: str
     verified_key_ids: list[str] = field(default_factory=list)
     signature_threshold: int = 0
+    transparency_verified: bool = False
+    transparency_proof: str | None = None
 
 
 @dataclass(frozen=True)
@@ -599,6 +604,7 @@ class RegistryUpdateResult:
     index: str
     checksum: str
     signature_verified: bool
+    transparency_verified: bool = False
     record_path: str | None = None
 
 
@@ -993,6 +999,7 @@ class InstallRegistryInput:
     public_key: str | None = None
     require_signature: bool = False
     signature_threshold: int = 0
+    require_transparency: bool = False
     allow_insecure_http: bool = False
 
 
@@ -1069,6 +1076,7 @@ class UpdateRegistryInput:
     public_key: str | None = None
     require_signature: bool = False
     signature_threshold: int | None = None
+    require_transparency: bool = False
     allow_insecure_http: bool = False
 
 

@@ -230,6 +230,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Require this many distinct trusted release signatures",
     )
     registry_install.add_argument(
+        "--require-transparency",
+        action="store_true",
+        help="Require a previously recorded transparency proof for the selected release",
+    )
+    registry_install.add_argument(
         "--allow-insecure-http",
         action="store_true",
         help="Permit HTTP for an explicitly trusted development registry",
@@ -247,6 +252,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--signature-threshold",
         type=int,
         help="Raise the persisted minimum number of trusted release signatures",
+    )
+    registry_update.add_argument(
+        "--require-transparency",
+        action="store_true",
+        help="Require and persist transparency proof policy for the selected release",
     )
     registry_update.add_argument("--allow-insecure-http", action="store_true")
     registry_update.add_argument("--apply", action="store_true")
@@ -1066,6 +1076,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 public_key=args.public_key,
                 require_signature=args.require_signature,
                 signature_threshold=args.signature_threshold,
+                require_transparency=args.require_transparency,
                 allow_insecure_http=args.allow_insecure_http,
             )
         )
@@ -1079,6 +1090,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 public_key=args.public_key,
                 require_signature=args.require_signature,
                 signature_threshold=args.signature_threshold,
+                require_transparency=args.require_transparency,
                 allow_insecure_http=args.allow_insecure_http,
             )
         )

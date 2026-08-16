@@ -76,6 +76,8 @@ def load_registry(root: Path, scope: str) -> RegistryRecord:
             raise ValueError(f"Registry update checksum history is discontinuous: {current.path}")
         if current.signature_threshold < previous.signature_threshold:
             raise ValueError(f"Registry update signature threshold decreased: {current.path}")
+        if previous.transparency_verified and not current.transparency_verified:
+            raise ValueError(f"Registry update transparency policy decreased: {current.path}")
     if updates:
         if provenance is None or version is None:
             raise ValueError(f"Registry update history requires remote provenance: {root}")
@@ -85,6 +87,10 @@ def load_registry(root: Path, scope: str) -> RegistryRecord:
         if latest.signature_threshold != provenance.signature_threshold:
             raise ValueError(
                 f"Registry update signature threshold does not match provenance: {root}"
+            )
+        if latest.transparency_verified != provenance.transparency_required:
+            raise ValueError(
+                f"Registry update transparency policy does not match provenance: {root}"
             )
     return _registry_record(
         id_=id_,
@@ -143,6 +149,27 @@ def read_registry_source(path: Path) -> RegistrySourceRecord:
         or (not verified and signature_threshold != 0)
     ):
         raise ValueError(f"Registry source signature threshold is invalid: {path}")
+    transparency_required = attributes.get("transparency-required", False)
+    transparency_proof = optional_string_attribute(attributes, "transparency-proof")
+    release_archive = optional_string_attribute(attributes, "release-archive")
+    if not isinstance(transparency_required, bool):
+        raise ValueError(f"Registry source transparency-required must be boolean: {path}")
+    if transparency_required:
+        if transparency_proof is None or release_archive is None:
+            raise ValueError(f"Registry source transparency proof path is invalid: {path}")
+        proof_parts = Path(transparency_proof).parts
+        if (
+            Path(transparency_proof).is_absolute()
+            or ".." in proof_parts
+            or len(proof_parts) != 5
+            or proof_parts[0] != "transparency"
+            or proof_parts[2:] != (registry, version, "PROOF.md")
+        ):
+            raise ValueError(f"Registry source transparency proof path is not portable: {path}")
+    elif transparency_proof is not None or release_archive is not None:
+        raise ValueError(
+            f"Registry source has transparency fields without requiring transparency: {path}"
+        )
     installed_at = string_attribute(attributes, "installed-at")
     return RegistrySourceRecord(
         registry=registry,
@@ -155,6 +182,9 @@ def read_registry_source(path: Path) -> RegistrySourceRecord:
         installed_at=installed_at,
         verified_key_ids=verified_key_ids,
         signature_threshold=signature_threshold,
+        transparency_required=transparency_required,
+        transparency_proof=transparency_proof,
+        release_archive=release_archive,
     )
 
 
@@ -172,6 +202,9 @@ def render_registry_source(record: RegistrySourceRecord) -> str:
                 "key-id": record.key_id,
                 "verified-key-ids": record.verified_key_ids,
                 "signature-threshold": record.signature_threshold,
+                "transparency-required": record.transparency_required,
+                "transparency-proof": record.transparency_proof,
+                "release-archive": record.release_archive,
                 "installed-at": record.installed_at,
             },
             body=(
@@ -230,6 +263,22 @@ def read_registry_update(path: Path) -> RegistryUpdateRecord:
         or (not signature_verified and signature_threshold != 0)
     ):
         raise ValueError(f"Registry update signature threshold is invalid: {path}")
+    transparency_verified = attributes.get("transparency-verified", False)
+    transparency_proof = optional_string_attribute(attributes, "transparency-proof")
+    if not isinstance(transparency_verified, bool):
+        raise ValueError(f"Registry update transparency-verified must be boolean: {path}")
+    if transparency_verified != (transparency_proof is not None):
+        raise ValueError(f"Registry update transparency proof is inconsistent: {path}")
+    if transparency_proof is not None:
+        proof_parts = Path(transparency_proof).parts
+        if (
+            Path(transparency_proof).is_absolute()
+            or ".." in proof_parts
+            or len(proof_parts) != 5
+            or proof_parts[0] != "transparency"
+            or proof_parts[2:] != (registry, to_version, "PROOF.md")
+        ):
+            raise ValueError(f"Registry update transparency proof path is invalid: {path}")
     return RegistryUpdateRecord(
         id=id_,
         registry=registry,
@@ -243,6 +292,8 @@ def read_registry_update(path: Path) -> RegistryUpdateRecord:
         path=str(path),
         verified_key_ids=verified_key_ids,
         signature_threshold=signature_threshold,
+        transparency_verified=transparency_verified,
+        transparency_proof=transparency_proof,
     )
 
 
@@ -261,6 +312,8 @@ def render_registry_update(record: RegistryUpdateRecord) -> str:
                 "signature-verified": record.signature_verified,
                 "verified-key-ids": record.verified_key_ids,
                 "signature-threshold": record.signature_threshold,
+                "transparency-verified": record.transparency_verified,
+                "transparency-proof": record.transparency_proof,
                 "applied-at": record.applied_at,
             },
             body=(

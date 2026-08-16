@@ -24,3 +24,5 @@ Transparency checkpoint keys belong under `../trust/transparency/`, separate fro
 keys. Manage them with `agora trust transparency` so rotation and revocation remain auditable.
 Verify a local proof with `agora registry verify-transparency --source <PROOF.md> --record`; Agora
 stores verified project evidence under `../transparency/<log>/<registry>/<version>/PROOF.md`.
+Add `--require-transparency` to a remote registry installation to persist a forward-only proof
+requirement. Record each target release proof before checking or applying a later update.

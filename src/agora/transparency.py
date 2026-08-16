@@ -303,6 +303,18 @@ def verify_transparency_proof(
             raise ValueError("Transparency proof was integrated after its trust key was revoked")
 
 
+def require_proof_matches_release(
+    proof: TransparencyInclusionProofRecord, release: RegistryReleaseRecord
+) -> None:
+    actual = (proof.registry, proof.version, proof.archive, proof.sha256)
+    expected = (release.registry, release.version, release.archive, release.sha256)
+    if actual != expected:
+        raise ValueError(
+            "Transparency proof does not match the selected registry release "
+            f"{release.registry}@{release.version}"
+        )
+
+
 def transparency_checkpoint_payload(proof: TransparencyInclusionProofRecord) -> bytes:
     return (
         f"{TRANSPARENCY_CHECKPOINT_SCHEMA}\n"

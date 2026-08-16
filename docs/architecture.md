@@ -98,7 +98,8 @@ Transparency log checkpoint keys live in a separate public-only trust store with
 rotation and revocation history. Explicit verification binds the canonical registry release leaf to
 an RFC 6962-style Merkle path and an Ed25519-signed checkpoint, then optionally persists the proof
 for project validation. Their authority cannot satisfy a registry release signature, and proof
-verification is not yet an automatic registry mutation gate.
+verification becomes a forward-only registry mutation gate only when explicitly required in
+persisted registry provenance. Proof acquisition remains outside the kernel.
 
 Registry updates are read-only plans unless application is explicit. Update staging carries forward
 installer-owned history, adds the next transition record, validates the complete candidate, and only

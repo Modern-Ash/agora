@@ -38,11 +38,11 @@ validation, so front matter preserves structured metadata and gates remain execu
 
 ## Future work
 
-- Policy-driven transparency-proof requirements on registry installation and updates. Explicit
-  RFC 6962-style inclusion verification, signed checkpoint verification, durable proof recording,
-  the independent checkpoint authority store, distinct-key release signature thresholds, signed
-  sequential trust and revocation feeds, and dual-signed organization root rotation are
-  implemented.
+- Automatic transparency-proof discovery for registry releases. Explicit RFC 6962-style inclusion
+  verification, signed checkpoint verification, durable proof recording, forward-only install and
+  update enforcement, the independent checkpoint authority store, distinct-key release signature
+  thresholds, signed sequential trust and revocation feeds, and dual-signed organization root
+  rotation are implemented.
 - Automatic installed-pack updates and in-process background scheduling. Aggregate authenticated
   registry and pack notifications can be invoked and recorded by an external scheduler. Reviewed
   pack audits can be applied explicitly as one precondition-bound transaction. Release checks are
