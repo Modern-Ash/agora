@@ -54,8 +54,9 @@ The runner continues through independent failures and returns status `1` if any 
 2. Python linting.
 3. The complete test suite.
 4. Local Markdown link validation.
-5. Every `samples/*/run.py` scenario.
-6. Source and wheel distribution builds.
+5. The bundled human, AI-agent, and swarm role conformance self-test.
+6. Every `samples/*/run.py` scenario.
+7. Source and wheel distribution builds.
 
 The sample matrix covers human and AI actors, recursive swarms, delegation, handoffs, interruptions,
 signed remote registry distribution, custom methods, tools, operational queries, and Codex, Claude,

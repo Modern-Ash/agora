@@ -27,6 +27,10 @@ def build_steps(
             "documentation links",
             [python, str(root / "scripts" / "check_docs.py")],
         ),
+        VerificationStep(
+            "role conformance self-test",
+            [python, "-m", "agora", "self-test"],
+        ),
     ]
     if include_samples:
         steps.extend(

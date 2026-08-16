@@ -174,6 +174,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     commands.add_parser("doctor", help="Check environment prerequisites")
+    commands.add_parser(
+        "self-test",
+        help="Exercise bundled methods with human, AI, and swarm role holders",
+    )
     commands.add_parser("status", help="Summarize operational project state")
     commands.add_parser("validate", help="Validate every Agora record and reference")
     next_action = commands.add_parser("next", help="Show the next governed operational actions")
@@ -1140,6 +1144,10 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
     if args.command == "doctor":
         checks = workspace.doctor()
         return {"ok": all(item.ok or item.name == "git" for item in checks), "checks": checks}
+    if args.command == "self-test":
+        from agora.self_test import run_role_self_test
+
+        return run_role_self_test()
     if args.command == "status":
         return workspace.status()
     if args.command == "validate":
