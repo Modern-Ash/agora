@@ -177,6 +177,32 @@ def test_loads_the_jira_acli_adapter() -> None:
     assert contract.operations["transition"].arguments[-2:] == ["--yes", "--json"]
 
 
+def test_loads_the_twg_confluence_adapter_as_an_explicit_subset() -> None:
+    contract = load_tool_contract(template_root() / "adapters" / "cli" / "twg-confluence")
+    implemented = load_tool_contract(template_root() / "tools" / "knowledge-base")
+
+    validate_tool_adapter_contract(contract, implemented)
+    assert contract.provider == "atlassian-confluence"
+    assert contract.executable == "twg"
+    assert contract.version_command == ["-v"]
+    assert contract.minimum_runtime_version == "1.2.5"
+    assert contract.implements_operations == [
+        "view",
+        "create",
+        "update",
+        "publish",
+        "archive",
+    ]
+    assert "search" not in contract.operations
+    assert contract.operations["update"].inputs == [
+        "document",
+        "title",
+        "body",
+        "snapshot-token",
+    ]
+    assert contract.operations["archive"].risk == "destructive"
+
+
 @pytest.mark.parametrize(
     ("adapter_id", "output", "expected_version"),
     [
@@ -185,6 +211,7 @@ def test_loads_the_jira_acli_adapter() -> None:
         ("aws-resource-inventory", "aws-cli/2.0.30 Python/3.7.3", "2.0.30"),
         ("gcp-asset-inventory", "Google Cloud SDK 568.0.0", "568.0.0"),
         ("jira", "acli version 1.3.15", "1.3.15"),
+        ("twg-confluence", "1.2.5", "1.2.5"),
     ],
 )
 def test_probes_compatible_cli_adapter_versions(

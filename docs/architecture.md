@@ -239,7 +239,10 @@ adapters use this mechanism to provide bounded native reads without claiming pla
 destruction behavior that the provider-wide CLIs do not possess.
 The Jira adapter implements the complete work-management contract through `acli`; it remains
 discoverable but unavailable when that executable is absent. Availability never causes installation
-or an MCP fallback.
+or an MCP fallback. The `twg-confluence` adapter uses the same explicit-subset mechanism for page
+view, draft creation and concurrency-safe update, publication, and archival. It requires the native
+snapshot token on update and does not claim a search translation that cannot safely bind both
+provider-neutral space and query inputs.
 
 ## Recursive delegation
 
