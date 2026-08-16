@@ -191,3 +191,17 @@ at least one successful evidence record, and Spec Owner approval.
 Agora does not prescribe a specification format, programming language, LLM, planning template, or
 test framework. A project-local Method Pack can require additional design, plan, source, security,
 or release artifacts while preserving the same Markdown-first protocol.
+
+## Choosing between spec-driven, Scrum, and Kanban
+
+All three are equally supported Method Packs; `spec-driven` is only the *default*, not a requirement.
+
+- Prefer **spec-driven** for small teams, solo developers, or an agent-paired workflow where the
+  clarify-before-plan discipline matters more than sprint cadence or continuous-flow WIP limits.
+- Prefer **Scrum** when the team already runs sprints and needs the Product Owner / Scrum Master /
+  Developer split — see [Scrum delivery](scrum-delivery.md).
+- Prefer **Kanban** for continuous flow with WIP limits and no fixed iteration, using its
+  `service-request-manager`, `flow-manager`, and `delivery` roles.
+
+Switch at project creation with `agora configure --default-method scrum` (or `kanban`), or per swarm
+with `agora swarm create --method scrum`.
