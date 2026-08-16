@@ -235,6 +235,7 @@ This resolves actor overrides over project defaults, detects the selected local 
 .agora/sessions/idempotency-implementation/
   SESSION.md
   CONTEXT.md
+  RESULT.md  # after launch
 ```
 
 `CONTEXT.md` points the runner to the constitution, protocol, Method Pack, assigned role, work record,
@@ -259,7 +260,9 @@ agora start --id internal-run --actor ai-facilitator \
 The child process receives `AGORA_PROJECT`, `AGORA_SESSION`, `AGORA_CONTEXT`, `AGORA_ACTOR`,
 `AGORA_SWARM`, and, when selected, `AGORA_WORK`. The runner owns model authentication and should read
 `AGORA_CONTEXT` before acting. Agora records the command, resolved integration/provider/model, exit
-status, and session events without binding the framework to a provider SDK.
+status, bounded output, and session events without binding the framework to a provider SDK. Session
+launches default to a 3,600-second timeout and 4 MiB output limit. Customize them with
+`--timeout-seconds` and `--max-output-bytes`; the selected values are durable and signed.
 
 When the actor was registered with `--require-authentication`, immediate `start` is rejected. Use
 `agora session prepare`, sign and apply that Lifecycle Action, then export the launch payload with

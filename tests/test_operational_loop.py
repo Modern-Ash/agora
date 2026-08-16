@@ -1,4 +1,6 @@
 import io
+import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,7 +127,14 @@ def test_retries_a_failed_session_without_overwriting_it(tmp_path: Path, monkeyp
         launcher=lambda command, cwd, environment: 9,
     )
     with pytest.raises(RuntimeError, match="exited with code 9"):
-        workspace.run_next(RunNextInput(actor_id="developer", runner="/bin/false"))
+        workspace.run_next(
+            RunNextInput(
+                actor_id="developer",
+                runner="/bin/false",
+                timeout_seconds=17,
+                max_output_bytes=2048,
+            )
+        )
 
     failed = workspace.list_sessions("failed")[0]
     retry_workspace = AgoraWorkspace(
@@ -138,6 +147,8 @@ def test_retries_a_failed_session_without_overwriting_it(tmp_path: Path, monkeyp
     assert failed.status == "failed"
     assert completed.id == "retry-increment"
     assert completed.status == "completed"
+    assert completed.timeout_seconds == 17
+    assert completed.max_output_bytes == 2048
     assert {item.id for item in retry_workspace.list_sessions()} == {
         failed.id,
         "retry-increment",
@@ -263,6 +274,78 @@ def test_materializes_non_interactive_native_cli_commands(tmp_path: Path, monkey
     assert "human approval" in session.launch_command[-1]
 
 
+def test_bounds_real_session_runtime_and_persists_timeout_result(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _scrum_workspace(tmp_path, monkeypatch)
+    runner = shlex.join([sys.executable, "-c", "import time; time.sleep(2)"])
+
+    with pytest.raises(RuntimeError, match="exited with code 124"):
+        workspace.start_session(
+            StartSessionInput(
+                id="timed-session",
+                actor_id="developer",
+                swarm_id="delivery",
+                work_id="increment",
+                runner=runner,
+                launch=True,
+                timeout_seconds=1,
+                max_output_bytes=1024,
+            )
+        )
+
+    failed = workspace.list_sessions("failed")[0]
+    result = (Path(failed.path) / "RESULT.md").read_text(encoding="utf-8")
+    assert failed.exit_code == 124
+    assert failed.termination_reason == "timeout"
+    assert failed.timeout_seconds == 1
+    assert "terminated the session after 1 seconds" in result
+    result_path = Path(failed.path) / "RESULT.md"
+    result_path.write_text(
+        result.replace('termination-reason: "timeout"', 'termination-reason: "output-limit"'),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert any(issue.code == "session.result-invalid" for issue in report.issues)
+
+
+def test_bounds_real_session_output_and_rejects_invalid_limits(tmp_path: Path, monkeypatch) -> None:
+    workspace = _scrum_workspace(tmp_path, monkeypatch)
+    runner = shlex.join([sys.executable, "-c", "print('x' * 4096)"])
+
+    with pytest.raises(RuntimeError, match="exited with code 125"):
+        workspace.start_session(
+            StartSessionInput(
+                id="noisy-session",
+                actor_id="developer",
+                swarm_id="delivery",
+                work_id="increment",
+                runner=runner,
+                launch=True,
+                timeout_seconds=5,
+                max_output_bytes=256,
+            )
+        )
+
+    failed = workspace.list_sessions("failed")[0]
+    result = (Path(failed.path) / "RESULT.md").read_text(encoding="utf-8")
+    assert failed.exit_code == 125
+    assert failed.termination_reason == "output-limit"
+    assert failed.max_output_bytes == 256
+    assert failed.output_bytes <= 512
+    assert "session output to 256 bytes" in result or "output exceeded 256 bytes" in result
+
+    with pytest.raises(ValueError, match="Session timeout must be between"):
+        workspace.start_session(
+            StartSessionInput(
+                id="invalid-session",
+                actor_id="developer",
+                swarm_id="delivery",
+                timeout_seconds=0,
+            )
+        )
+
+
 def test_exposes_operational_loop_through_the_cli(tmp_path: Path, monkeypatch) -> None:
     workspace = _scrum_workspace(tmp_path, monkeypatch)
     output = io.StringIO()
@@ -282,6 +365,10 @@ def test_exposes_operational_loop_through_the_cli(tmp_path: Path, monkeypatch) -
                 "--runner",
                 "/bin/true",
                 "--prepare-only",
+                "--timeout-seconds",
+                "42",
+                "--max-output-bytes",
+                "4096",
             ],
             cwd=workspace.project_root(),
             stdout=output,
@@ -291,3 +378,5 @@ def test_exposes_operational_loop_through_the_cli(tmp_path: Path, monkeypatch) -
     )
     assert errors.getvalue() == ""
     assert '"status": "prepared"' in output.getvalue()
+    assert '"timeout_seconds": 42' in output.getvalue()
+    assert '"max_output_bytes": 4096' in output.getvalue()

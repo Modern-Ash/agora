@@ -73,7 +73,11 @@ from agora.markdown import (
 from agora.methods import load_method_contract
 from agora.model import (
     ACTOR_KINDS,
+    DEFAULT_SESSION_MAX_OUTPUT_BYTES,
+    DEFAULT_SESSION_TIMEOUT_SECONDS,
     INTEGRATIONS,
+    MAX_SESSION_MAX_OUTPUT_BYTES,
+    MAX_SESSION_TIMEOUT_SECONDS,
     ActorKeyRecord,
     ActorRecord,
     AddActorInput,
@@ -323,7 +327,7 @@ class AgoraWorkspace:
     ) -> None:
         self.cwd = Path(cwd or Path.cwd()).resolve()
         self._now = now or (lambda: datetime.now(UTC))
-        self._launcher = launcher or _launch_process
+        self._launcher = launcher
         self._tool_runner = tool_runner
         self._runtime_probe = runtime_probe or probe_tool_runtime
         self._lease_runner = lease_runner
@@ -4677,6 +4681,12 @@ class AgoraWorkspace:
                 swarm_id=record.swarm_id,
                 work_id=record.work_id,
                 runner=record.parameters["runner"] or None,
+                timeout_seconds=int(
+                    record.parameters.get("timeout-seconds", str(DEFAULT_SESSION_TIMEOUT_SECONDS))
+                ),
+                max_output_bytes=int(
+                    record.parameters.get("max-output-bytes", str(DEFAULT_SESSION_MAX_OUTPUT_BYTES))
+                ),
             )
             context = self._validate_session_preparation(root, session)
             _, swarm, actor, _, work, _, _, _, _, _, session_id, _, _ = context
@@ -6376,6 +6386,8 @@ class AgoraWorkspace:
             parameters={
                 "session": session_id,
                 "runner": data.session.runner or "",
+                "timeout-seconds": str(data.session.timeout_seconds),
+                "max-output-bytes": str(data.session.max_output_bytes),
             },
         )
 
@@ -6414,6 +6426,10 @@ class AgoraWorkspace:
         integration = actor.integration or project.integration
         provider = actor.provider or project.provider
         model = actor.model or project.model
+        self._assert_session_execution_boundaries(
+            data.timeout_seconds,
+            data.max_output_bytes,
+        )
         command = self._runtime_command(integration, data.runner, model)
         runtime_available = bool(command and shutil.which(command[0]))
         if data.launch and not command:
@@ -6507,6 +6523,8 @@ class AgoraWorkspace:
             launch_command=command,
             runtime_available=runtime_available,
             created_at=self._timestamp(),
+            timeout_seconds=data.timeout_seconds,
+            max_output_bytes=data.max_output_bytes,
             context_sha256=hashlib.sha256(context_contents.encode()).hexdigest(),
             preparation_action_id=preparation_action_id,
         )
@@ -6641,18 +6659,51 @@ class AgoraWorkspace:
         if work is not None:
             environment["AGORA_WORK"] = work.id
         launch_error: BaseException | None = None
+        stdout = ""
+        stderr = ""
         try:
-            exit_code = self._launcher(running.launch_command, root, environment)
+            if self._launcher is None:
+                result = _run_tool_process(
+                    running.launch_command,
+                    root,
+                    environment,
+                    timeout_seconds=running.timeout_seconds,
+                    max_output_bytes=running.max_output_bytes,
+                    boundary_subject="session",
+                )
+                exit_code = result.returncode
+                stdout = result.stdout
+                stderr = result.stderr
+            else:
+                exit_code = self._launcher(running.launch_command, root, environment)
         except BaseException as error:
             launch_error = error
             exit_code = None
+            stderr = f"{type(error).__name__}: {error}"
         status = "completed" if exit_code == 0 else "failed"
-        finished = SessionRecord(**{**running.__dict__, "status": status, "exit_code": exit_code})
+        termination_reason = {124: "timeout", 125: "output-limit"}.get(exit_code)
+        if launch_error is not None:
+            termination_reason = "launcher-error"
+        elif exit_code not in {None, 0, 124, 125}:
+            termination_reason = "nonzero-exit"
+        finished = SessionRecord(
+            **{
+                **running.__dict__,
+                "status": status,
+                "exit_code": exit_code,
+                "output_bytes": len(stdout.encode("utf-8")) + len(stderr.encode("utf-8")),
+                "termination_reason": termination_reason,
+            }
+        )
         with self._mutation_lock((root,), "finish_session"):
             current = self._load_session(session_path)
             if current.status != "running":
                 raise ValueError(f"Running session state changed during execution: {running.id}")
             atomic_write(session_path / "SESSION.md", self._render_session(finished))
+            atomic_write(
+                session_path / "RESULT.md",
+                self._render_session_result(finished, stdout, stderr),
+            )
             append_entry(
                 root / ".agora" / "events.md",
                 (
@@ -7285,6 +7336,8 @@ class AgoraWorkspace:
                         runner=data.runner,
                         prepare_only=data.prepare_only,
                         signature=data.signature,
+                        timeout_seconds=data.timeout_seconds,
+                        max_output_bytes=data.max_output_bytes,
                     )
                 )
         if data.signature is not None:
@@ -7300,6 +7353,8 @@ class AgoraWorkspace:
                 work_id=task.work_id,
                 runner=data.runner,
                 launch=not data.prepare_only,
+                timeout_seconds=data.timeout_seconds or DEFAULT_SESSION_TIMEOUT_SECONDS,
+                max_output_bytes=data.max_output_bytes or DEFAULT_SESSION_MAX_OUTPUT_BYTES,
             )
         )
 
@@ -7410,8 +7465,32 @@ class AgoraWorkspace:
                 work_id=previous.work_id,
                 runner=runner,
                 launch=not data.prepare_only,
+                timeout_seconds=data.timeout_seconds or previous.timeout_seconds,
+                max_output_bytes=data.max_output_bytes or previous.max_output_bytes,
             )
         )
+
+    @staticmethod
+    def _assert_session_execution_boundaries(
+        timeout_seconds: int,
+        max_output_bytes: int,
+    ) -> None:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, int)
+            or not 1 <= timeout_seconds <= MAX_SESSION_TIMEOUT_SECONDS
+        ):
+            raise ValueError(
+                f"Session timeout must be between 1 and {MAX_SESSION_TIMEOUT_SECONDS} seconds"
+            )
+        if (
+            isinstance(max_output_bytes, bool)
+            or not isinstance(max_output_bytes, int)
+            or not 1 <= max_output_bytes <= MAX_SESSION_MAX_OUTPUT_BYTES
+        ):
+            raise ValueError(
+                f"Session maximum output must be between 1 and {MAX_SESSION_MAX_OUTPUT_BYTES} bytes"
+            )
 
     def _operational_transition_blockers(
         self,
@@ -7504,6 +7583,7 @@ class AgoraWorkspace:
             "delegations": 0,
             "status-changes": 0,
             "sessions": 0,
+            "session-results": 0,
             "lifecycle-actions": 0,
             "tool-runs": 0,
             "event-files": 0,
@@ -9201,6 +9281,14 @@ class AgoraWorkspace:
                     self._assert_session_context(session)
                 except (FileNotFoundError, ValueError) as error:
                     issue("session.context-invalid", path, str(error))
+            result_path = path.parent / "RESULT.md"
+            if result_path.is_file():
+                inspect(
+                    "session-results",
+                    "session.result-invalid",
+                    result_path,
+                    lambda session=session: self._validate_session_result(session),
+                )
 
         for directory in _child_directories(root / ".agora" / "actions"):
             path = directory / "ACTION.md"
@@ -11294,6 +11382,12 @@ class AgoraWorkspace:
                 swarm_id=swarm.id,
                 work_id=work.id if work is not None else None,
                 runner=parameters["runner"] or None,
+                timeout_seconds=int(
+                    parameters.get("timeout-seconds", str(DEFAULT_SESSION_TIMEOUT_SECONDS))
+                ),
+                max_output_bytes=int(
+                    parameters.get("max-output-bytes", str(DEFAULT_SESSION_MAX_OUTPUT_BYTES))
+                ),
             )
             context = self._validate_session_preparation(root, session)[-1]
             return hashlib.sha256(context.encode()).hexdigest()
@@ -11497,7 +11591,12 @@ class AgoraWorkspace:
                 "evidence",
             },
             "handoff.create": {"role", "from", "to", "reason"},
-            "session.prepare": {"session", "runner"},
+            "session.prepare": {
+                "session",
+                "runner",
+                "timeout-seconds",
+                "max-output-bytes",
+            },
             "swarm.assign": {"role", "target"},
             "work.block": {"reason"},
             "work.cancel": {"reason"},
@@ -11525,10 +11624,15 @@ class AgoraWorkspace:
             and parameter_keys.issubset(expected_parameters)
         )
         legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
+        legacy_session_parameters = action == "session.prepare" and parameter_keys == {
+            "session",
+            "runner",
+        }
         if (
             parameter_keys != expected_parameters
             and not legacy_delegation_parameters
             and not legacy_approval_parameters
+            and not legacy_session_parameters
         ):
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
         if action in {"actor.key.recover", "actor.key.revoke", "actor.key.rotate"}:
@@ -11838,6 +11942,10 @@ class AgoraWorkspace:
             "runtime-available": record.runtime_available,
             "created-at": record.created_at,
             "exit-code": record.exit_code,
+            "timeout-seconds": record.timeout_seconds,
+            "max-output-bytes": record.max_output_bytes,
+            "output-bytes": record.output_bytes,
+            "termination-reason": record.termination_reason,
             "context-sha256": record.context_sha256,
             "authentication-verified": record.authentication_verified,
             "authentication-fingerprint": record.authentication_fingerprint,
@@ -11899,6 +12007,19 @@ class AgoraWorkspace:
         preparation_action_id = optional_string_attribute(document.attributes, "preparation-action")
         if preparation_action_id is not None:
             assert_slug(preparation_action_id, "Session preparation action id")
+        termination_reason = optional_string_attribute(document.attributes, "termination-reason")
+        if termination_reason not in {
+            None,
+            "timeout",
+            "output-limit",
+            "launcher-error",
+            "nonzero-exit",
+        }:
+            raise ValueError(f"Unsupported Session termination reason: {termination_reason}")
+        if status in {"prepared", "running"} and termination_reason is not None:
+            raise ValueError(f"Unfinished Session cannot have a termination reason: {path}")
+        if status == "completed" and termination_reason is not None:
+            raise ValueError(f"Completed Session cannot have a termination reason: {path}")
         record = SessionRecord(
             id=string_attribute(document.attributes, "id"),
             actor=string_attribute(document.attributes, "actor"),
@@ -11915,6 +12036,22 @@ class AgoraWorkspace:
             runtime_available=_boolean_attribute(document.attributes, "runtime-available"),
             created_at=string_attribute(document.attributes, "created-at"),
             exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
+            timeout_seconds=_positive_integer_attribute_default(
+                document.attributes,
+                "timeout-seconds",
+                DEFAULT_SESSION_TIMEOUT_SECONDS,
+                MAX_SESSION_TIMEOUT_SECONDS,
+            ),
+            max_output_bytes=_positive_integer_attribute_default(
+                document.attributes,
+                "max-output-bytes",
+                DEFAULT_SESSION_MAX_OUTPUT_BYTES,
+                MAX_SESSION_MAX_OUTPUT_BYTES,
+            ),
+            output_bytes=_nonnegative_integer_attribute_default(
+                document.attributes, "output-bytes", 0
+            ),
+            termination_reason=termination_reason,
             context_sha256=context_sha256,
             authentication_verified=authentication_verified,
             authentication_fingerprint=authentication_fingerprint,
@@ -11925,6 +12062,49 @@ class AgoraWorkspace:
         )
         validate_persisted_session_authorization(record)
         return record
+
+    @staticmethod
+    def _render_session_result(record: SessionRecord, stdout: str, stderr: str) -> str:
+        def block(value: str) -> str:
+            lines = value.rstrip().splitlines() or ["(empty)"]
+            return "\n".join(f"    {line}" for line in lines)
+
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/session-result/v1",
+                    "session": record.id,
+                    "status": record.status,
+                    "exit-code": record.exit_code,
+                    "output-bytes": record.output_bytes,
+                    "termination-reason": record.termination_reason,
+                },
+                body=(
+                    f"# Session result {record.id}\n\n## Standard output\n\n{block(stdout)}\n\n"
+                    f"## Standard error\n\n{block(stderr)}"
+                ),
+            )
+        )
+
+    @staticmethod
+    def _validate_session_result(record: SessionRecord) -> None:
+        path = Path(record.path) / "RESULT.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/session-result/v1", path)
+        attributes = document.attributes
+        if string_attribute(attributes, "session") != record.id:
+            raise ValueError(f"Session result id does not match SESSION.md: {path}")
+        if string_attribute(attributes, "status") != record.status:
+            raise ValueError(f"Session result status does not match SESSION.md: {path}")
+        if _optional_integer_attribute(attributes, "exit-code") != record.exit_code:
+            raise ValueError(f"Session result exit code does not match SESSION.md: {path}")
+        if (
+            _nonnegative_integer_attribute_default(attributes, "output-bytes", 0)
+            != record.output_bytes
+        ):
+            raise ValueError(f"Session result output size does not match SESSION.md: {path}")
+        if optional_string_attribute(attributes, "termination-reason") != record.termination_reason:
+            raise ValueError(f"Session result termination reason does not match SESSION.md: {path}")
 
     def _render_session_context(
         self,
@@ -12731,6 +12911,15 @@ def _optional_integer_attribute(attributes: dict[str, object], key: str) -> int 
     return value
 
 
+def _nonnegative_integer_attribute_default(
+    attributes: dict[str, object], key: str, default: int
+) -> int:
+    value = attributes.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Expected non-negative integer attribute: {key}")
+    return value
+
+
 def _positive_integer_attribute_default(
     attributes: dict[str, object], key: str, default: int, maximum: int
 ) -> int:
@@ -12772,16 +12961,13 @@ def _child_directories(root: Path) -> list[Path]:
     return sorted(path for path in root.iterdir() if path.is_dir())
 
 
-def _launch_process(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
-    return subprocess.run(command, cwd=cwd, env=environment, check=False).returncode
-
-
 def _run_tool_process(
     command: list[str],
     cwd: Path,
     environment: dict[str, str],
     timeout_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
     max_output_bytes: int = DEFAULT_TOOL_MAX_OUTPUT_BYTES,
+    boundary_subject: str = "tool",
 ) -> subprocess.CompletedProcess[str]:
     started = time.monotonic()
     boundary: str | None = None
@@ -12800,13 +12986,16 @@ def _run_tool_process(
             )
             if output_size > max_output_bytes:
                 boundary = (
-                    f"Agora terminated the tool after output exceeded {max_output_bytes} bytes."
+                    f"Agora terminated the {boundary_subject} after output exceeded "
+                    f"{max_output_bytes} bytes."
                 )
                 boundary_exit_code = 125
                 process.kill()
                 break
             if time.monotonic() - started >= timeout_seconds:
-                boundary = f"Agora terminated the tool after {timeout_seconds:g} seconds."
+                boundary = (
+                    f"Agora terminated the {boundary_subject} after {timeout_seconds:g} seconds."
+                )
                 boundary_exit_code = 124
                 process.kill()
                 break
@@ -12821,7 +13010,7 @@ def _run_tool_process(
         stderr = stderr_file.read(max(0, max_output_bytes - len(stdout)))
 
     if boundary is None and actual_output_size > max_output_bytes:
-        boundary = f"Agora limited captured tool output to {max_output_bytes} bytes."
+        boundary = f"Agora limited captured {boundary_subject} output to {max_output_bytes} bytes."
         boundary_exit_code = 125
     exit_code = process.returncode if boundary_exit_code is None else boundary_exit_code
     stderr_text = stderr.decode("utf-8", errors="replace")

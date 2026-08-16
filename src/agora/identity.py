@@ -289,6 +289,8 @@ def session_authorization_payload(record: SessionRecord) -> bytes:
         "provider": record.provider,
         "model": record.model,
         "launch-command": record.launch_command,
+        "timeout-seconds": record.timeout_seconds,
+        "max-output-bytes": record.max_output_bytes,
         "context-sha256": record.context_sha256,
         "created-at": record.created_at,
     }

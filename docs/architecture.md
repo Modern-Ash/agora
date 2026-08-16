@@ -269,11 +269,12 @@ may additionally configure a provider-neutral external lease CLI for cross-host 
 locks are acquired first and remain mandatory. Lock metadata is runtime-only while external lease
 configuration is reviewed Markdown. Atomic document replacement still protects readers.
 
-External commands still run with the caller's operating-system permissions. Tool Pack manifests
-bound the direct process by elapsed time and captured output; those values are persisted in the Tool
-Run and covered by signed actor authorization. The built-in runner terminates timeout and output
-violations, but does not isolate filesystems, networks, syscalls, resources, credentials, or detached
-descendants. Signed actor authorization currently covers work creation and decomposition, criteria,
+External commands still run with the caller's operating-system permissions. Tool Pack manifests and
+agent Session records bound direct processes by elapsed time and captured output; those values are
+persisted and covered by signed actor authorization. The built-in runners terminate timeout and
+output violations and retain bounded `RESULT.md` evidence, but do not isolate filesystems, networks,
+syscalls, resources, credentials, or detached descendants. Signed actor authorization currently
+covers work creation and decomposition, criteria,
 artifacts, evidence, transitions, interruptions, approvals, handoffs, actor key rotation, independently
 authorized revocation and recovery, actor runtime updates, vacant-role assignment, the complete
 delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not

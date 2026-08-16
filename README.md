@@ -459,9 +459,11 @@ agora start --id payment-session --actor delivery-swarm \
 ```
 
 The session records the effective actor or project runtime and writes `.agora/sessions/payment-session`
-with `SESSION.md` and `CONTEXT.md`. Add `--launch` to execute the detected Codex or Claude command, or
-provide `--runner "<command>"` for a generic environment. Agora delegates to the external process and
-does not import an LLM SDK.
+with `SESSION.md` and `CONTEXT.md`; launched sessions also persist bounded output in `RESULT.md`. Add
+`--launch` to execute the detected Codex or Claude command, or provide `--runner "<command>"` for a
+generic environment. Agora delegates to the external process and does not import an LLM SDK.
+Session time and output boundaries are configurable with `--timeout-seconds` and
+`--max-output-bytes`, persisted in Markdown, and bound by signed launch authorization.
 
 ## Governed developer tools
 
@@ -835,9 +837,9 @@ mutation in a structured external lease while retaining the local operating-syst
   criteria, artifacts, evidence, transitions, interruptions, direct and delegated approvals, Gate
   Waivers, handoffs, the complete work-delegation lifecycle, Tool Run launch, and agent-session
   preparation and launch while leaving private keys external. Public-key rotation and revocation
-  histories are implemented. Tool Packs declare portable direct-process timeouts and
-  captured-output limits. Filesystem/network/syscall isolation, resource quotas, and process-tree
-  containment are not yet covered by that policy.
+  histories are implemented. Tool Packs and agent sessions declare portable direct-process timeouts
+  and captured-output limits. Filesystem/network/syscall isolation, resource quotas, and detached
+  process containment remain responsibilities of reviewed external runners.
 - Credentials belong to the environment or secret manager; Agora stores references only.
 - Front matter deliberately accepts a JSON-compatible subset of YAML.
 

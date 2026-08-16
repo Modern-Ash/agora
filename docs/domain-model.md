@@ -166,7 +166,7 @@ parent-work links through every subsequent projection rewrite.
 Signed session preparation is a Lifecycle Action whose precondition is the prospective
 `CONTEXT.md` digest. The applied action materializes `SESSION.md` and `CONTEXT.md`, and the session
 links back to that action. Launch authorization remains separate and signs the materialized context,
-resolved runtime, and exact command.
+resolved runtime, exact command, timeout, and captured-output limit.
 
 A signed actor runtime update is self-authorized through an assigned swarm role. Its precondition
 covers the actor and swarm projections, while apply rechecks current `actor.runtime.update` Method
@@ -343,12 +343,13 @@ than invoking a model SDK.
 
 ## Session
 
-A session binds an assigned actor, its active roles, a swarm, optional work, and effective runtime.
-`SESSION.md` records the selection and launch result; `CONTEXT.md` lists the project, method, roles,
-work, related delegations, policies, and operating rules the external agent must read. An
-authenticated launch binds the runtime, exact command, and context digest to the actor's signature;
-the completed session retains public verification evidence. Conversation history remains external
-unless a material outcome is persisted in Agora files.
+A session binds an assigned actor, its active roles, a swarm, optional work, effective runtime, and
+execution boundaries. `SESSION.md` records the selection and launch result; `CONTEXT.md` lists the
+project, method, roles, work, related delegations, policies, and operating rules the external agent
+must read. After launch, `RESULT.md` retains bounded standard output and error. An authenticated
+launch binds the runtime, exact command, context digest, timeout, and output limit to the actor's
+signature; the completed session retains public verification evidence. Conversation history remains
+external unless a material outcome is persisted in Agora files.
 
 ## Operational view and validation
 

@@ -70,6 +70,27 @@ The session lock is released before the external process starts. The actor can t
 Agora to persist transitions, artifacts, evidence, approvals, delegations, or blocks while its
 session remains `running`. Short locks protect session start and finalization separately.
 
+## Bound runner execution
+
+Every built-in session launch has a durable elapsed-time and captured-output boundary. Defaults are
+3,600 seconds and 4 MiB; accepted maxima are 86,400 seconds and 64 MiB:
+
+```bash
+agora run --actor implementation-agent \
+  --timeout-seconds 1800 \
+  --max-output-bytes 2097152
+```
+
+The values are written to `SESSION.md` and included in signed session authorization. A timeout exits
+with code `124`; an output violation exits with code `125`. Both leave the session as `failed`, set
+an explicit `termination-reason`, and persist bounded standard output and error in `RESULT.md`.
+`agora resume` inherits the failed session boundaries unless replacements are supplied.
+
+These limits prevent an unattended local process from running forever or producing unbounded
+captured output. They are not a filesystem, network, syscall, credential, or resource sandbox.
+Run untrusted workloads through a reviewed container, VM, CI runner, or organization wrapper and
+pass that structured command through `--runner`.
+
 ## Run until human attention or a blocker
 
 ```bash
@@ -107,7 +128,8 @@ agora resume --session run-delivery-change-20260816t120000z \
 ```
 
 Authenticated actors retain the two-phase signed preparation and launch flow. Agora does not reuse
-one authorization across retries or multi-step execution.
+one authorization across retries or multi-step execution. The signature binds timeout and output
+limits as well as runtime, command, roles, and context digest.
 
 Run the [operational loop sample](../../samples/operational-loop/README.md) to execute a real Python
 subprocess that reads `AGORA_CONTEXT`, mutates the same governed workspace, prepares a Pull Request
