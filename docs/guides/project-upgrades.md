@@ -24,8 +24,8 @@ agora validate
 git diff -- .agora .agents .claude
 ```
 
-Agora applies only an ordered migration supported by the installed CLI. The `0.1.0` to `0.2.0`
-migration:
+Agora applies only an ordered migration supported by the installed CLI. The legacy `0.1.0` path to
+the current protocol:
 
 - updates the project protocol version;
 - materializes operational status fields on legacy work records;
@@ -34,6 +34,17 @@ migration:
 - adds the governed commit operation to the bundled Git repository pack when it is absent;
 - installs the portable `status` command when it is absent; and
 - installs its selected Codex or Claude adapter when it is absent.
+
+The `0.2.0` to `0.3.0` migration updates the protocol version while preserving installed pack
+composition, Method Pack roles, and portable commands. It reports the new operational-loop and
+code-review capabilities for explicit adoption. Install the reviewed neutral pack separately:
+
+```bash
+agora pack install --kind tool --id code-review --scope project
+```
+
+Then amend project roles deliberately or install a newer reviewed Method Pack. An upgrade never
+grants new external authority silently.
 
 Existing files at standard, operation, command, or adapter destinations are preserved. Project
 policy, constitution, Method Packs, customized Tool Pack files, actors, sessions, and work history

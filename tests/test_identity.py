@@ -2076,6 +2076,8 @@ def test_signs_session_launch_and_binds_its_materialized_context(
     payload = json.loads(payload_path.read_text(encoding="ascii"))
     assert payload["context-sha256"] == prepared.context_sha256
     assert payload["launch-command"] == ["/bin/true", "--agent"]
+    assert payload["timeout-seconds"] == 3600
+    assert payload["max-output-bytes"] == 4 * 1024 * 1024
     signature_path = tmp_path / "session-authorization.sig"
     signature_path.write_bytes(private_key.sign(payload_path.read_bytes()))
 

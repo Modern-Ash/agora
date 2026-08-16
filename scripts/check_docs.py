@@ -4,6 +4,15 @@ from pathlib import Path
 
 LINK_PATTERN = re.compile(r"\[[^]]*]\(([^)]+)\)")
 IGNORED_DIRECTORIES = {".git", ".venv", "dist", "node_modules"}
+PLUGIN_OUTPUT_ROOTS = {Path("docs/superpowers")}
+
+
+def is_ignored_document(relative_path: Path) -> bool:
+    if any(part in IGNORED_DIRECTORIES for part in relative_path.parts):
+        return True
+    return any(
+        root == relative_path or root in relative_path.parents for root in PLUGIN_OUTPUT_ROOTS
+    )
 
 
 def main() -> int:
@@ -11,7 +20,7 @@ def main() -> int:
     errors: list[str] = []
 
     for document in sorted(root.rglob("*.md")):
-        if any(part in IGNORED_DIRECTORIES for part in document.relative_to(root).parts):
+        if is_ignored_document(document.relative_to(root)):
             continue
         contents = document.read_text(encoding="utf-8")
         for target in LINK_PATTERN.findall(contents):

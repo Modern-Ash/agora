@@ -5,6 +5,15 @@ description: "Execute a permitted transition step for an assigned Agora role"
 
 # Execute governed work
 
+Use `agora next --actor "$AGORA_ACTOR"` to derive the current action from durable Method Pack state.
+When launched through `agora run`, read the context at `AGORA_CONTEXT` before changing the project.
+Record at least one governed transition, artifact, evidence, approval, block, or delegation outcome
+before exiting successfully; a bounded `--until-blocked` controller stops when no durable progress is
+detected. Never select a rework edge merely to avoid a higher-priority human decision.
+Treat the timeout and output limits in `AGORA_SESSION` as immutable execution policy. The controller
+records bounded process output in the session `RESULT.md`; place material outcomes in governed work
+artifacts and evidence rather than relying on that process log.
+
 Identify the active swarm, actor, assignment, work item, and current Method Pack state. Inspect the
 outgoing transition edges and perform only the selected edge using tools allowed to that role.
 Respect WIP limits and gates. Persist material decisions, interactions, artifacts, evidence, and

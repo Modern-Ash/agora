@@ -96,10 +96,12 @@ verification, requires the tag to match `project.version` in `pyproject.toml`, r
 source distribution, and generates `SHA256SUMS` through `scripts/prepare_release.py`. GitHub CLI then
 creates a release from the existing tag with generated notes and uploads those three artifacts.
 
-The release job receives `contents: write` only because GitHub release creation requires it. Checkout
-credentials remain disabled and all setup actions use immutable SHAs. PyPI publishing is not part of
-this workflow; it should be added only after the project configures PyPI trusted publishing and a
-reviewed release environment.
+The release job receives `contents: write` only because GitHub release creation requires it. It
+uploads the already verified distributions as a short-lived workflow artifact. A separate `pypi`
+environment job receives only `id-token: write`, downloads those exact files, and publishes through
+PyPI Trusted Publishing. Checkout credentials remain disabled and every action is pinned to an
+immutable SHA. The PyPI project must authorize this repository, workflow, and `pypi` environment as
+its trusted publisher before the first tag is released.
 
 ## Other CI systems
 

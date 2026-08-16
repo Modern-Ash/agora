@@ -202,7 +202,7 @@ def test_discovers_bundled_packs_without_an_initialized_project(
     tools = workspace.search_catalog(kind="tool", query="repository")
 
     assert [(item.id, item.scope) for item in registries] == [("agora-bundled", "bundled")]
-    assert [item.id for item in methods] == ["kanban", "scrum"]
+    assert [item.id for item in methods] == ["kanban", "scrum", "spec-driven"]
     assert [(item.id, item.registry) for item in tools] == [("repository", "agora-bundled")]
 
 

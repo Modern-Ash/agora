@@ -7,6 +7,8 @@ from typing import Any, TextIO
 
 from agora.model import (
     ACTOR_KINDS,
+    DEFAULT_SESSION_MAX_OUTPUT_BYTES,
+    DEFAULT_SESSION_TIMEOUT_SECONDS,
     INTEGRATIONS,
     AddActorInput,
     AddApprovalInput,
@@ -64,12 +66,14 @@ from agora.model import (
     QuickstartInput,
     RefreshPackLockInput,
     RemovePackInput,
+    ResumeSessionInput,
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
     RevokeTransparencyTrustKeyInput,
     RotateActorKeyInput,
     RotateOrganizationTrustRootInput,
+    RunNextInput,
     SetActorRuntimeInput,
     StartSessionInput,
     SyncOrganizationTrustInput,
@@ -129,9 +133,9 @@ def _build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--model", default="configured-by-integration")
     configure.add_argument(
         "--default-method",
-        default="scrum",
+        default="spec-driven",
         metavar="METHOD_ID",
-        help="Installed Method Pack to use by default (default: scrum)",
+        help="Installed Method Pack to use by default (default: spec-driven)",
     )
     configure.add_argument("--max-delegation-depth", type=int, default=3)
     configure.add_argument("--force", action="store_true")
@@ -170,6 +174,38 @@ def _build_parser() -> argparse.ArgumentParser:
     commands.add_parser("doctor", help="Check environment prerequisites")
     commands.add_parser("status", help="Summarize operational project state")
     commands.add_parser("validate", help="Validate every Agora record and reference")
+    next_action = commands.add_parser("next", help="Show the next governed operational actions")
+    next_action.add_argument("--actor")
+    next_action.add_argument("--swarm")
+    next_action.add_argument("--limit", type=int, default=20)
+    inbox = commands.add_parser("inbox", help="Show work requiring human attention")
+    inbox.add_argument("--actor")
+    inbox.add_argument("--swarm")
+    inbox.add_argument("--limit", type=int, default=20)
+    run = commands.add_parser("run", help="Prepare or launch the next eligible agent action")
+    run.add_argument("--actor")
+    run.add_argument("--swarm")
+    run.add_argument("--work")
+    run.add_argument("--id")
+    run.add_argument("--runner", help="External structured runner command")
+    run.add_argument("--prepare-only", action="store_true")
+    run.add_argument("--signature", help="Signature for an already prepared session")
+    run.add_argument("--timeout-seconds", type=int)
+    run.add_argument("--max-output-bytes", type=int)
+    run.add_argument(
+        "--until-blocked",
+        action="store_true",
+        help="Repeat bounded agent steps until human attention or no governed progress",
+    )
+    run.add_argument("--max-steps", type=int, default=20)
+    resume = commands.add_parser("resume", help="Resume a prepared or failed actor session")
+    resume.add_argument("--session", required=True)
+    resume.add_argument("--id", help="Replacement id when retrying a failed session")
+    resume.add_argument("--runner", help="Replacement external runner command")
+    resume.add_argument("--prepare-only", action="store_true")
+    resume.add_argument("--signature", help="Raw Ed25519 session authorization signature")
+    resume.add_argument("--timeout-seconds", type=int)
+    resume.add_argument("--max-output-bytes", type=int)
     environment = commands.add_parser(
         "environment", help="Manage project-defined execution environment policies"
     ).add_subparsers(dest="environment_command", required=True)
@@ -393,6 +429,8 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument("--swarm", required=True)
     start.add_argument("--work")
     start.add_argument("--runner", help="External command that executes the prepared session")
+    start.add_argument("--timeout-seconds", type=int, default=DEFAULT_SESSION_TIMEOUT_SECONDS)
+    start.add_argument("--max-output-bytes", type=int, default=DEFAULT_SESSION_MAX_OUTPUT_BYTES)
     start.add_argument("--launch", action="store_true")
     start.add_argument("--force", action="store_true")
 
@@ -866,6 +904,12 @@ def _build_parser() -> argparse.ArgumentParser:
     session_prepare.add_argument("--swarm", required=True)
     session_prepare.add_argument("--work")
     session_prepare.add_argument("--runner")
+    session_prepare.add_argument(
+        "--timeout-seconds", type=int, default=DEFAULT_SESSION_TIMEOUT_SECONDS
+    )
+    session_prepare.add_argument(
+        "--max-output-bytes", type=int, default=DEFAULT_SESSION_MAX_OUTPUT_BYTES
+    )
     session_authorization = session.add_parser(
         "authorization", help="Export the canonical payload for a prepared session"
     )
@@ -1062,6 +1106,47 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         return workspace.status()
     if args.command == "validate":
         return workspace.validate()
+    if args.command == "next":
+        return workspace.next_actions(
+            actor_id=args.actor,
+            swarm_id=args.swarm,
+            human_only=False,
+            limit=args.limit,
+        )
+    if args.command == "inbox":
+        return workspace.next_actions(
+            actor_id=args.actor,
+            swarm_id=args.swarm,
+            human_only=True,
+            limit=args.limit,
+        )
+    if args.command == "run":
+        run_input = RunNextInput(
+            actor_id=args.actor,
+            swarm_id=args.swarm,
+            work_id=args.work,
+            session_id=args.id,
+            runner=args.runner,
+            prepare_only=args.prepare_only,
+            signature=args.signature,
+            timeout_seconds=args.timeout_seconds,
+            max_output_bytes=args.max_output_bytes,
+        )
+        if args.until_blocked:
+            return workspace.run_until_blocked(run_input, max_steps=args.max_steps)
+        return workspace.run_next(run_input)
+    if args.command == "resume":
+        return workspace.resume_session(
+            ResumeSessionInput(
+                session_id=args.session,
+                replacement_id=args.id,
+                runner=args.runner,
+                prepare_only=args.prepare_only,
+                signature=args.signature,
+                timeout_seconds=args.timeout_seconds,
+                max_output_bytes=args.max_output_bytes,
+            )
+        )
     if args.command == "lock" and args.lock_command == "status":
         return workspace.lock_status(args.scope)
     if args.command == "upgrade":
@@ -1237,6 +1322,8 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 runner=args.runner,
                 launch=args.launch,
                 force=args.force,
+                timeout_seconds=args.timeout_seconds,
+                max_output_bytes=args.max_output_bytes,
             )
         )
     if args.command == "method" and args.method_command == "install":
@@ -1727,6 +1814,8 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                     swarm_id=args.swarm,
                     work_id=args.work,
                     runner=args.runner,
+                    timeout_seconds=args.timeout_seconds,
+                    max_output_bytes=args.max_output_bytes,
                 ),
             )
         )

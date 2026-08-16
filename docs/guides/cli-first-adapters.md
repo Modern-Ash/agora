@@ -17,7 +17,7 @@ Use this order when connecting an external system:
    execution environment is already governed through an MCP host.
 
 Transport selection never changes Method Pack authority. Roles continue to receive capabilities
-such as `ci.read`, `issue.write`, or `cloud.plan`, regardless of whether execution uses `gh`, `acli`,
+such as `ci.read`, `issue.write`, `review.decide`, or `cloud.plan`, regardless of whether execution uses `gh`, `acli`,
 `aws`, a team wrapper, or a future MCP bridge.
 
 Agora never silently switches transports. Discovery is read-only, installation is explicit, and
@@ -136,6 +136,13 @@ Search and view use bounded JSON fields; create and comment supply all content n
 Transition maps the state into the native command position, so its manifest restricts the value to
 `close` or `reopen`. Values such as `delete`, `edit`, or `transfer` are rejected before `RUN.md` is
 created.
+
+## GitHub Pull Requests through `gh`
+
+The `github-pull-requests` adapter implements the provider-neutral `code-review` contract. It can
+list and view reviews, create and comment on Pull Requests, inspect checks, and submit approval or
+request-changes decisions. Merge remains a distinct `review.merge` capability granted to no bundled
+role. See [Code-review integrations](code-review-integrations.md) for the complete flow.
 
 ## Jira through Atlassian CLI
 

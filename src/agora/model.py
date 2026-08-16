@@ -25,7 +25,11 @@ ACTOR_KINDS: tuple[ActorKind, ...] = (
     "automation",
 )
 INTEGRATIONS: tuple[Integration, ...] = ("generic", "codex", "claude")
-BUILTIN_METHODS: tuple[Method, ...] = ("scrum", "kanban")
+BUILTIN_METHODS: tuple[Method, ...] = ("spec-driven", "scrum", "kanban")
+DEFAULT_SESSION_TIMEOUT_SECONDS = 3600
+MAX_SESSION_TIMEOUT_SECONDS = 86400
+DEFAULT_SESSION_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_SESSION_MAX_OUTPUT_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -256,6 +260,10 @@ class SessionRecord:
     runtime_available: bool
     created_at: str
     exit_code: int | None = None
+    timeout_seconds: int = DEFAULT_SESSION_TIMEOUT_SECONDS
+    max_output_bytes: int = DEFAULT_SESSION_MAX_OUTPUT_BYTES
+    output_bytes: int = 0
+    termination_reason: str | None = None
     context_sha256: str | None = None
     authentication_verified: bool = False
     authentication_fingerprint: str | None = None
@@ -868,6 +876,53 @@ class WorkspaceStatus:
     session_statuses: dict[str, int]
     tool_run_statuses: dict[str, int]
     attention: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class OperationalTask:
+    id: str
+    kind: Literal["assign-role", "execute-work", "resume-work", "retry-session"]
+    actor: str | None
+    actor_kind: ActorKind | None
+    swarm_id: str | None
+    work_id: str | None
+    role: str | None
+    state: str | None
+    target_states: list[str]
+    blockers: list[str]
+    session_id: str | None
+    reason: str
+
+
+@dataclass(frozen=True)
+class RunNextInput:
+    actor_id: str | None = None
+    swarm_id: str | None = None
+    work_id: str | None = None
+    session_id: str | None = None
+    runner: str | None = None
+    prepare_only: bool = False
+    signature: str | None = None
+    timeout_seconds: int | None = None
+    max_output_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class RunLoopResult:
+    sessions: list[SessionRecord]
+    stop_reason: Literal["human-attention", "no-agent-action", "no-governed-progress", "max-steps"]
+    next_actions: list[OperationalTask]
+
+
+@dataclass(frozen=True)
+class ResumeSessionInput:
+    session_id: str
+    replacement_id: str | None = None
+    runner: str | None = None
+    prepare_only: bool = False
+    signature: str | None = None
+    timeout_seconds: int | None = None
+    max_output_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1506,6 +1561,8 @@ class StartSessionInput:
     runner: str | None = None
     launch: bool = False
     force: bool = False
+    timeout_seconds: int = DEFAULT_SESSION_TIMEOUT_SECONDS
+    max_output_bytes: int = DEFAULT_SESSION_MAX_OUTPUT_BYTES
 
 
 @dataclass(frozen=True)

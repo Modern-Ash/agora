@@ -3,88 +3,129 @@
 Agora is a local, Markdown-first, Git-native framework for customizing and governing work
 lifecycles. Start with the user journey, then use the conceptual and reference material as needed.
 
+## Documentation boundaries
+
+This directory contains explanatory product documentation. Operational Markdown is sourced from
+`../templates/` and becomes authoritative only after Agora materializes it under `.agora/`,
+`.agents/`, or `.claude/` in a governed project.
+
+The files under `superpowers/` are intentionally retained plugin-run output. They are useful
+development context but are not normative Agora documentation or installed agent protocol.
+
+See [Documentation and artifact locations](reference/artifact-locations.md) for the complete
+source-to-runtime map, including portable commands, Method Packs, Tool Packs, agent adapters,
+durable work records, and externally owned product artifacts.
+
+## Operational Markdown
+
+These directories are the operational product, not explanatory documentation:
+
+- [Portable agent commands](../templates/commands/): model-independent instructions projected into
+  Codex, Claude, or a generic environment.
+- [Project protocol](../templates/project/): constitution, shared protocol, standards, and catalogs.
+- [Method Packs](../templates/methods/): roles, transitions, gates, WIP, and lifecycle policy.
+- [Tool Packs](../templates/tools/): provider-neutral capabilities and operations.
+- [Reviewed CLI adapters](../templates/adapters/): bounded translations to native provider CLIs.
+
+After initialization, inspect their materialized forms in the governed project's `.agora/`,
+`.agents/`, or `.claude/` directories. Actor and swarm records are created there dynamically; they
+do not exist as one static agent file in this repository.
+
 ## Start here
 
-- [Quickstart](guides/quickstart.md): initialize a project, create human and AI actors, and form a
-  method-derived swarm in one command, with optional external Ed25519 keys.
-- [Installation and customization](guides/installation-and-customization.md): install the CLI and
-  tailor user, project, lifecycle, actor, template, and agent-environment scopes.
-- [Project upgrades](guides/project-upgrades.md): preview, apply, audit, and recover protocol
-  migrations without replacing local policies or Method Packs.
-- [Concurrent writers](guides/concurrent-writers.md): serialize local mutations, inspect lock owners,
-  configure bounded contention waits, and add an optional cross-host lease CLI.
-- [Conventional Commits](guides/conventional-commits.md): enforce standardized repository history
-  through project rules and governed Tool Pack input validation.
-- [Actor authentication](guides/actor-authentication.md): bind governed operations to external
-  Ed25519 identities, sign key rotation, independent revocation and recovery, plus agent-session
-  preparation and launch without storing private keys.
-- [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, externally sign, apply,
-  and audit actor administration, swarm composition, work creation, material records, transitions,
-  governance, and delegation lifecycles.
-- [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce declared direct
-  process timeouts and captured-output limits without claiming operating-system isolation.
-- [Environment permissions](guides/environment-permissions.md): restrict Tool Runs through
-  project-defined capability, role, approval, and evidence policies.
-- [CLI-first ecosystem adapters](guides/cli-first-adapters.md): discover and install reviewed native
-  CLI integrations while keeping MCP as an explicit alternative transport.
-- [Work-management integrations](guides/work-management-integrations.md): connect Jira, Linear, or
-  internal trackers through one provider-neutral, role-governed operation contract.
-- [CI/CD integrations](guides/ci-cd-integrations.md): inspect and trigger pipelines, restrict
-  cancellation, and guard deployments with explicit role approval.
-- [Knowledge-base integrations](guides/knowledge-base-integrations.md): connect Confluence, Notion,
-  or internal documentation while separating drafts, publication, and archival authority.
-- [Cloud integrations](guides/cloud-integrations.md): inspect and plan infrastructure while keeping
-  apply and destruction behind explicit role and approval policy.
-- [Observability integrations](guides/observability-integrations.md): query bounded health evidence,
-  declare incidents, and keep resolution behind explicit authority.
-- [Pack registries](guides/pack-registries.md): install local catalog snapshots, discover Method and
-  Tool Packs, and select provenance with deterministic scope precedence.
-- [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
-  resolve catalog dependencies, and reject broken or cyclic compositions.
-- [Pack updates](guides/pack-updates.md): audit catalog installations, persist provenance, preview
-  dependency-aware upgrades, and protect local pack amendments.
-- [Pack composition locks](guides/pack-locks.md): inventory installed trees and validate durable,
-  continuous per-pack update histories.
-- [Pack removal](guides/pack-removal.md): preview safe removals, protect dependents and durable
-  references, and explicitly prune unused dependency closures.
-- [Remote registry releases](guides/remote-registries.md): publish, verify, and persist versioned
-  checksum-pinned and Ed25519-signed registry snapshots and external transparency proofs.
-- [Registry trust stores](guides/registry-trust.md): approve, rotate, revoke, and synchronize signed
-  organization registry trust through local Markdown and Git.
-- [Registry updates](guides/registry-updates.md): audit, notify, preview, and transactionally apply
-  authenticated releases while preserving provenance and update history.
-- [Getting started](getting-started.md): install Agora, initialize a project, form a swarm, and
-  complete governed work.
-- [LLM environments](guides/llm-environments.md): configure project and actor runtimes, prepare
-  durable sessions, and launch Codex, Claude, or a generic CLI without a provider SDK.
+- [Visual adoption guide](adoption.md): choose an installation, execution environment, first
+  workflow, and team adoption level through diagrams and minimal commands.
+- [Quickstart](guides/quickstart.md): initialize a complete mixed human and agentic workspace.
+- [Getting started](getting-started.md): follow the governed workflow from installation to completed
+  work.
+- [Installation and customization](guides/installation-and-customization.md): configure user,
+  project, lifecycle, actor, template, and agent-environment scopes.
+- [Project upgrades](guides/project-upgrades.md): preview and apply protocol migrations without
+  replacing local policy.
+
+## Governance and operations
+
+- [Actor authentication](guides/actor-authentication.md): manage external actor identities, rotation,
+  revocation, recovery, and authenticated sessions.
+- [Signed lifecycle actions](guides/signed-lifecycle-actions.md): prepare, sign, apply, and audit
+  durable lifecycle mutations.
+- [Environment permissions](guides/environment-permissions.md): constrain Tool Runs by capability,
+  role, approval, and evidence.
+- [Portable Tool execution boundaries](guides/execution-boundaries.md): enforce process timeouts and
+  captured-output limits.
+- [Conventional Commits](guides/conventional-commits.md): govern repository history through project
+  standards and Tool Pack validation.
+- [Concurrent writers](guides/concurrent-writers.md): coordinate local mutations and optional
+  cross-host leases.
+- [Operations and validation](guides/operations-and-validation.md): query state, inspect events, and
+  audit durable records.
+- [Operational agent loop](guides/operational-loop.md): derive next actions, run bounded external
+  actors, stop at human authority, and resume durable failures.
+- [Complete verification](guides/verification.md): run format, lint, tests, documentation, samples,
+  and distribution checks.
+- [Interruptions and cancellation](guides/interruptions-and-cancellation.md): block, resume, reject,
+  or cancel work without erasing history.
+
+## Agents, swarms, and work
+
+- [LLM environments](guides/llm-environments.md): materialize portable commands for Codex, Claude,
+  or a generic runner without an LLM SDK.
 - [Scrum delivery](guides/scrum-delivery.md): run a complete mixed human and AI Scrum example.
-- [Governed handoffs](guides/handoffs.md): transfer a live role between human, AI, and swarm actors.
-- [Recursive swarms](guides/recursive-swarms.md): link a real child swarm with cycle and depth limits.
-- [Delegated work](guides/delegated-work.md): propose child work, accept it, and collect a terminal
-  result into its parent.
-- [Delegation budgets](guides/delegation-budgets.md): propagate provider-neutral integer limits and
-  prevent sibling allocations from exceeding their parent work budget.
-- [Delegated artifact promotion](guides/delegated-artifacts.md): promote promised child artifact
-  kinds as typed parent references without copying opaque external content.
-- [Work decomposition](guides/work-decomposition.md): materialize same-swarm child contracts and
-  enforce parent-child closure.
-- [Granular Gate Waivers](guides/gate-waivers.md): accept exact residual-risk exceptions without
-  bypassing transition, role, WIP, or work-status policy.
-- [Approval Delegation](guides/approval-delegation.md): grant one compatible actor a single-use,
-  work-scoped role approval without handing off the role.
-- [Operations and validation](guides/operations-and-validation.md): query active state, inspect
-  events, and audit every durable record.
-- [Complete verification](guides/verification.md): validate all command Markdown, generated agent
-  adapters, executable samples, tests, and distributions with one Python runner.
-- [Interruptions and cancellation](guides/interruptions-and-cancellation.md): block, resume,
-  reject, or cancel work and delegations without erasing lifecycle history.
-- [Method Pack reference](reference/method-packs.md): create and install a custom lifecycle.
-- [Tool Pack reference](reference/tool-packs.md): govern external CLIs and persist their results.
+- [Kanban delivery](guides/kanban-delivery.md): govern continuous pull, WIP, review, and service
+  acceptance.
+- [Spec-driven delivery](guides/spec-driven-delivery.md): clarify a durable specification before
+  planning and implementation.
+- [Governed handoffs](guides/handoffs.md): move a role between human, AI, service, or swarm actors.
+- [Recursive swarms](guides/recursive-swarms.md): link child swarms with cycle and depth limits.
+- [Delegated work](guides/delegated-work.md): propose, accept, execute, and collect child work.
+- [Delegation budgets](guides/delegation-budgets.md): propagate bounded provider-neutral limits.
+- [Delegated artifact promotion](guides/delegated-artifacts.md): promote typed child references
+  without copying opaque product bytes.
+- [Work decomposition](guides/work-decomposition.md): create same-swarm child contracts and enforce
+  parent-child closure.
+- [Granular Gate Waivers](guides/gate-waivers.md): record evidence-backed residual-risk exceptions.
+- [Approval Delegation](guides/approval-delegation.md): grant a single-use, work-scoped approval.
 
-## Concepts and design
+## Ecosystem integrations
 
+- [CLI-first ecosystem adapters](guides/cli-first-adapters.md): prefer reviewed native CLIs while
+  retaining MCP as an explicit alternative transport.
+- [Code-review integrations](guides/code-review-integrations.md): govern Pull Requests, checks,
+  decisions, and opt-in merge authority.
+- [Work-management integrations](guides/work-management-integrations.md): connect issue trackers
+  through a provider-neutral operation contract.
+- [CI/CD integrations](guides/ci-cd-integrations.md): inspect and trigger pipelines while governing
+  cancellation and deployment.
+- [Knowledge-base integrations](guides/knowledge-base-integrations.md): separate documentation draft,
+  publication, and archival authority.
+- [Cloud integrations](guides/cloud-integrations.md): separate infrastructure inspection, planning,
+  apply, and destruction.
+- [Observability integrations](guides/observability-integrations.md): collect bounded operational
+  evidence and govern incident mutation.
+
+## Packs, registries, and supply-chain trust
+
+- [Pack registries](guides/pack-registries.md): discover Method and Tool Packs through deterministic
+  scope precedence.
+- [Pack dependencies](guides/pack-dependencies.md): resolve compatible cross-kind dependency graphs.
+- [Pack updates](guides/pack-updates.md): preview dependency-aware updates and protect amendments.
+- [Pack composition locks](guides/pack-locks.md): inventory installed trees and verify update history.
+- [Pack removal](guides/pack-removal.md): remove compositions safely with explicit orphan pruning.
+- [Remote registry releases](guides/remote-registries.md): verify checksum-pinned, signed, and
+  transparency-backed releases.
+- [Registry trust stores](guides/registry-trust.md): manage scoped keys, revocations, organization
+  feeds, and root rotation.
+- [Registry updates](guides/registry-updates.md): audit and transactionally apply authenticated
+  releases.
+
+## Concepts, reference, and decisions
+
+- [Documentation and artifact locations](reference/artifact-locations.md): distinguish manuals,
+  plugin output, distribution templates, agent adapters, project records, and work products.
 - [Domain model](domain-model.md): packs, actors, roles, swarms, handoffs, work, and evidence.
 - [Architecture](architecture.md): scopes, adapters, filesystem persistence, and Git behavior.
+- [Method Pack reference](reference/method-packs.md): author and install custom lifecycles.
+- [Tool Pack reference](reference/tool-packs.md): govern external CLIs and persist results.
 - [ADR 0001](decisions/0001-initial-architecture.md): why Agora is local, Markdown-first, and
   Git-native.
 
@@ -140,6 +181,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   risk-backed exception, and complete the governed transition.
 - [Operational queries](../samples/operational-query/README.md): summarize and validate a generated
   workspace without a database.
+- [Operational loop](../samples/operational-loop/README.md): launch an external actor subprocess,
+  persist progress while it runs, stop at a human gate, and complete the lifecycle.
 - [Interruptions and cancellation](../samples/interruptions/README.md): exercise durable status
   histories and parent-child authority.
 - [Project upgrade](../samples/project-upgrade/README.md): migrate a legacy Codex project while

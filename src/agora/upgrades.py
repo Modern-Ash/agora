@@ -7,7 +7,7 @@ from agora.filesystem import assert_slug, atomic_write, template_root
 from agora.markdown import MarkdownDocument, read_markdown, render_markdown, string_attribute
 from agora.model import Integration, ProjectConfiguration, UpgradeChange, UpgradeResult
 
-CURRENT_PROJECT_VERSION = "0.2.0"
+CURRENT_PROJECT_VERSION = "0.3.0"
 VERSION_PATTERN = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)")
 
 
@@ -48,12 +48,12 @@ def plan_upgrade(root: Path, project: ProjectConfiguration) -> UpgradeResult:
             changes=[],
             warnings=[],
         )
-    if project.version != "0.1.0":
+    if project.version not in {"0.1.0", "0.2.0"}:
         raise ValueError(
             f"No supported migration path from {project.version} to {CURRENT_PROJECT_VERSION}"
         )
 
-    mutations, warnings = _migrate_0_1_0_to_0_2_0(root, project)
+    mutations, warnings = _migration_to_current(root, project)
     return UpgradeResult(
         from_version=project.version,
         to_version=CURRENT_PROJECT_VERSION,
@@ -76,7 +76,7 @@ def apply_upgrade(
     plan = plan_upgrade(root, project)
     if not plan.required:
         return plan
-    mutations, warnings = _migrate_0_1_0_to_0_2_0(root, project)
+    mutations, warnings = _migration_to_current(root, project)
     upgrade_root = root / ".agora" / "upgrades" / id_
     if upgrade_root.exists():
         raise FileExistsError(f"Upgrade record already exists: {upgrade_root}")
@@ -306,6 +306,46 @@ def _migrate_0_1_0_to_0_2_0(
             f"Preserved customized adapter {adapter_path.relative_to(root)}; synchronize it with "
             ".agora/commands/status.md if validation reports drift."
         )
+    return mutations, warnings
+
+
+def _migration_to_current(
+    root: Path, project: ProjectConfiguration
+) -> tuple[list[_Mutation], list[str]]:
+    if project.version == "0.1.0":
+        mutations, warnings = _migrate_0_1_0_to_0_2_0(root, project)
+        review_mutations, review_warnings = _migrate_0_2_0_to_0_3_0(
+            root, project, update_project_version=False
+        )
+        return [*mutations, *review_mutations], [*warnings, *review_warnings]
+    return _migrate_0_2_0_to_0_3_0(root, project, update_project_version=True)
+
+
+def _migrate_0_2_0_to_0_3_0(
+    root: Path,
+    project: ProjectConfiguration,
+    *,
+    update_project_version: bool,
+) -> tuple[list[_Mutation], list[str]]:
+    mutations: list[_Mutation] = []
+    warnings = [
+        "Existing Method Pack roles and portable commands are preserved; review and adopt new "
+        "operational-loop and code-review capabilities explicitly where local policy requires it.",
+        "The code-review Tool Pack is not installed implicitly; use `agora pack install --kind "
+        "tool --id code-review --scope project` after reviewing its capabilities.",
+    ]
+    if update_project_version:
+        project_path = root / ".agora" / "project.md"
+        project_document = read_markdown(project_path)
+        project_document.attributes["version"] = CURRENT_PROJECT_VERSION
+        _add_update(
+            mutations,
+            root,
+            project_path,
+            render_markdown(project_document),
+            "Set the project protocol version",
+        )
+
     return mutations, warnings
 
 

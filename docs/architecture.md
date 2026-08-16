@@ -7,6 +7,22 @@ agents. The distributed product is a small Python CLI accompanied by Markdown te
 an implementation choice for the CLI, not a required language or runtime for governed projects. The
 materialized product is the `.agora` directory and the selected agent adapter inside a project.
 
+```mermaid
+flowchart LR
+    H[Human] --> CLI[Agora Python CLI]
+    A[AI agent or swarm] --> CLI
+    CLI --> FS[Markdown filesystem state]
+    FS <--> G[Git history and review]
+    CLI --> MP[Method Packs]
+    CLI --> TP[Tool Packs]
+    TP --> EXT[Reviewed native CLIs and external systems]
+    FS --> CTX[Durable session context]
+    CTX --> A
+```
+
+The CLI owns validation and mutation rules. LLMs, IDEs, provider CLIs, and cloud services remain
+replaceable execution environments around the same protocol.
+
 ```text
 Python CLI + templates
           |
@@ -51,10 +67,10 @@ without changing the source of truth.
 
 ### Templates
 
-`templates/project` contains the base constitution, protocol, standards, and catalogs. `templates/methods`
-provides Scrum and Kanban as replaceable presets. User and project scopes may install any Method Pack
-that satisfies the Markdown contract. `templates/commands` contains portable instructions that
-adapters install as Codex skills or commands for other agents.
+`templates/project` contains the base constitution, protocol, standards, and catalogs.
+`templates/methods` provides Spec-Driven, Scrum, and Kanban as replaceable presets. User and project
+scopes may install any Method Pack that satisfies the Markdown contract. `templates/commands`
+contains portable instructions that adapters install as Codex skills or commands for other agents.
 
 ### Scopes
 
@@ -160,11 +176,19 @@ an adapter or execution environment decides how a configured model is reached.
 
 ### Session launcher
 
-`agora start` compiles durable context from the active project, actor, swarm, method, role, and work.
+`agora start` and `agora run` compile durable context from the active project, actor, swarm, method,
+role, and work.
 Actor runtime fields override project defaults. Without `--launch`, the command only prepares files.
 With `--launch`, it delegates to `codex`, `claude`, or an explicit runner and exports `AGORA_PROJECT`,
 `AGORA_SESSION`, `AGORA_CONTEXT`, `AGORA_ACTOR`, `AGORA_SWARM`, and optional `AGORA_WORK` variables.
-The external runtime remains responsible for model authentication and execution.
+The external runtime remains responsible for model authentication and execution. Codex and Claude
+use non-interactive native commands by default. `agora next` derives ordered actions from Method Pack
+transitions, while bounded `agora run --until-blocked` recomputes durable state after every session
+and stops at human attention, missing authority, unchanged governance state, or its step limit.
+
+Session preparation and finalization use short project locks. Agora releases the lock before the
+external runtime starts so that actor-owned Agora commands can persist work while `SESSION.md` is
+`running`.
 
 ## External integrations
 
@@ -184,6 +208,8 @@ The bundled cloud-infrastructure pack uses `cloudctl` to separate inspection and
 deployment and destructive operations, while provider identity and state remain external.
 The observability pack applies the same adapter boundary to health signals and incidents, keeping
 resolution distinct from evidence that recovery actually occurred.
+The code-review pack separates review reads, review writing, review decisions, and merge authority.
+Its GitHub Pull Requests adapter uses `gh`; no bundled role receives `review.merge`.
 
 Actor authentication is separate from provider authentication. An actor may require an Ed25519
 signature over a prepared lifecycle action, Tool Run, or agent session before execution. Agora
@@ -202,8 +228,8 @@ needed. MCP remains an optional external transport and never replaces Markdown o
 of truth. Plain adapter discovery only checks executable availability; an explicit compatibility
 check runs the manifest's local version command without provider access. Selection, installation,
 and every invocation remain explicit, and live invocation enforces declared minimum versions. The
-bundled `github-actions`, `github-issues`, and `terraform` adapters are concrete CLI-first
-implementations that delegate directly to `gh` and Terraform CLI.
+bundled `github-actions`, `github-issues`, `github-pull-requests`, and `terraform` adapters are
+concrete CLI-first implementations that delegate directly to `gh` and Terraform CLI.
 Partial adapters declare the exact operations they implement. The AWS and Google Cloud inventory
 adapters use this mechanism to provide bounded native reads without claiming plan, deployment, or
 destruction behavior that the provider-wide CLIs do not possess.
@@ -243,11 +269,12 @@ may additionally configure a provider-neutral external lease CLI for cross-host 
 locks are acquired first and remain mandatory. Lock metadata is runtime-only while external lease
 configuration is reviewed Markdown. Atomic document replacement still protects readers.
 
-External commands still run with the caller's operating-system permissions. Tool Pack manifests
-bound the direct process by elapsed time and captured output; those values are persisted in the Tool
-Run and covered by signed actor authorization. The built-in runner terminates timeout and output
-violations, but does not isolate filesystems, networks, syscalls, resources, credentials, or detached
-descendants. Signed actor authorization currently covers work creation and decomposition, criteria,
+External commands still run with the caller's operating-system permissions. Tool Pack manifests and
+agent Session records bound direct processes by elapsed time and captured output; those values are
+persisted and covered by signed actor authorization. The built-in runners terminate timeout and
+output violations and retain bounded `RESULT.md` evidence, but do not isolate filesystems, networks,
+syscalls, resources, credentials, or detached descendants. Signed actor authorization currently
+covers work creation and decomposition, criteria,
 artifacts, evidence, transitions, interruptions, approvals, handoffs, actor key rotation, independently
 authorized revocation and recovery, actor runtime updates, vacant-role assignment, the complete
 delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not

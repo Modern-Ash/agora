@@ -63,13 +63,13 @@ examples.
 
 ## Default authority
 
-Bundled Scrum and Kanban roles already separate CI/CD authority:
+Bundled Spec-Driven, Scrum, and Kanban roles already separate CI/CD authority:
 
 | Role type | Granted capabilities |
 | --- | --- |
 | Developer or Delivery | `ci.read`, `ci.run` |
 | Scrum Master or Flow Manager | `ci.read` |
-| Product Owner or Service Request Manager | none by default |
+| Product Owner, Service Request Manager, or Spec Owner | none by default |
 | Every bundled role | no `ci.cancel` or `deployment.create` |
 
 This makes routine verification usable while keeping cancellation and deployment opt-in. Installing

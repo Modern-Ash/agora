@@ -25,6 +25,7 @@ uv run python samples/handoffs/run.py
 uv run python samples/recursive-swarms/run.py
 uv run python samples/delegated-work/run.py
 uv run python samples/operational-query/run.py
+uv run python samples/operational-loop/run.py
 uv run python samples/interruptions/run.py
 uv run python samples/project-upgrade/run.py
 uv run python samples/concurrent-writes/run.py
@@ -50,6 +51,11 @@ uv run python samples/remote-registry/run.py
   interruptions, recursive swarms, delegated work, sessions, tool runs, queries, validation, and
   filesystem behavior.
 - Update templates and documentation whenever the installed protocol changes.
+- Keep explanatory material under `docs/`, operational protocol sources under `templates/`, and
+  plugin-owned run output under its existing plugin directory.
+- Use Mermaid when a decision tree, lifecycle, sequence, scope hierarchy, or ownership boundary is
+  easier to understand visually. Keep adjacent prose and commands authoritative, and prefer a table
+  when relationships are static rather than sequential.
 - Keep `scripts/verify_all.py` aligned with every executable sample and distribution check.
 - Never persist raw credentials; store only external authentication references.
 - Never persist registry private signing keys; trust records contain public keys only.

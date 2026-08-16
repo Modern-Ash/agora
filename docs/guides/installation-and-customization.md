@@ -1,8 +1,40 @@
 # Installation and customization
 
+## Install a published release
+
+Agora requires Python 3.11 or newer. Install the isolated CLI from PyPI:
+
+```bash
+uv tool install agora-framework
+agora --help
+```
+
+Upgrade the installed tool explicitly:
+
+```bash
+uv tool upgrade agora-framework
+agora upgrade
+```
+
+The package is published from a verified Git tag through PyPI Trusted Publishing. GitHub Actions
+uses an environment-bound OIDC identity rather than a stored API token.
+
 This guide installs the Agora CLI and then customizes its user, project, Method Pack, actor, and
 agent-environment scopes. Agora requires Python 3.11 or newer and does not require Node.js, an LLM
 SDK, a database, or a running server.
+
+```mermaid
+flowchart TD
+    A{How will you use Agora?}
+    A -->|Daily use| B[uv tool install]
+    A -->|Develop Agora| C[uv sync with dev dependencies]
+    A -->|Test an immutable package| D[Build and install wheel]
+    A -->|No uv available| E[Python virtual environment]
+    B --> F[Verify agora --help]
+    C --> F
+    D --> F
+    E --> F
+```
 
 ## Installation choices
 
@@ -60,7 +92,7 @@ Build the source distribution and wheel, then install the wheel as a tool:
 ```bash
 uv sync --extra dev
 uv build
-uv tool install --force dist/agora_framework-0.2.0-py3-none-any.whl
+uv tool install --force dist/agora_framework-0.3.0-py3-none-any.whl
 agora --help
 ```
 
@@ -116,9 +148,20 @@ Agora resolves configuration from broad defaults toward the active work context:
 bundled defaults < user home < project .agora < swarm selection
 ```
 
+```mermaid
+flowchart LR
+    B[Bundled defaults] --> U[User home ~/.agora]
+    U --> P[Project .agora]
+    P --> S[Active swarm and actor assignment]
+    S --> R[Effective runtime and governance]
+```
+
+Each arrow adds a narrower context. It does not erase durable identities, work history, or pack
+provenance from the broader scopes.
+
 | Scope | Default location | Shared in project Git | Typical contents |
 | --- | --- | --- | --- |
-| Distribution | Installed Python package | No | Base templates, Scrum, Kanban, commands |
+| Distribution | Installed Python package | No | Base templates, bundled Method Packs, commands |
 | User | `~/.agora` | No | Defaults, reusable actors, Method Packs, and Tool Packs |
 | Project | `<project>/.agora` | Yes | Policies, packs, actors, sessions, tool runs, work state |
 | Swarm | `.agora/swarms/<id>` | Yes | Objective, method, assignments, work, evidence, approvals |
@@ -195,6 +238,11 @@ agora init
 agora doctor
 agora validate
 ```
+
+`doctor` checks the materialized integration adapters and the selected native runtime. Codex and
+Claude projects report the resolved executable path or a `not found on PATH` failure. Generic
+projects remain valid without a fixed executable because they supply a structured `--runner` at
+launch time. Runtime authentication remains owned by the CLI and its environment.
 
 Validation includes the portable command Markdown and every generated Codex, Claude, or generic
 adapter. The [complete verification guide](verification.md) covers repository-wide tests and samples.

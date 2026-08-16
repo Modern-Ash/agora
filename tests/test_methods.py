@@ -22,6 +22,46 @@ def test_loads_explicit_transition_graph_gates_and_wip_limits() -> None:
     assert contract.gates["completion"].required_approval_roles == ["product-owner"]
 
 
+def test_loads_the_spec_driven_pack_with_its_clarification_gate() -> None:
+    contract = load_method_contract(template_root() / "methods" / "spec-driven")
+
+    assert contract.id == "spec-driven"
+    assert contract.required_roles == ["spec-owner", "developer"]
+    assert contract.work_states == [
+        "drafting",
+        "clarified",
+        "planned",
+        "implementing",
+        "verifying",
+        "completed",
+    ]
+    assert contract.terminal_state == "completed"
+    assert contract.wip_limits == {}
+
+    clarify = next(
+        rule
+        for rule in contract.transitions
+        if rule.source == "drafting" and rule.target == "clarified"
+    )
+    assert clarify.roles == ["spec-owner"]
+    assert clarify.gate == "spec-clarified"
+    assert contract.gates["spec-clarified"].required_approval_roles == []
+    assert contract.gates["spec-clarified"].require_required_artifacts is True
+
+    completion = next(rule for rule in contract.transitions if rule.target == "completed")
+    assert completion.roles == ["spec-owner"]
+    assert completion.gate == "completion"
+    assert contract.gates["completion"].required_approval_roles == ["spec-owner"]
+
+    rework = next(
+        rule
+        for rule in contract.transitions
+        if rule.source == "verifying" and rule.target == "implementing"
+    )
+    assert rework.roles == ["developer"]
+    assert rework.gate is None
+
+
 def test_rejects_an_explicit_transition_without_an_authorized_role(tmp_path: Path) -> None:
     method = tmp_path / "method"
     (method / "roles").mkdir(parents=True)

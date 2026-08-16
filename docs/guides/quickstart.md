@@ -4,6 +4,18 @@
 method, LLM provider, or programming language. It initializes the project, creates one human and one
 AI actor, creates a swarm, and assigns every required role declared by the selected Method Pack.
 
+```mermaid
+flowchart TD
+    Q[agora quickstart] --> I[Initialize project protocol]
+    I --> A[Create human, AI, and swarm actors]
+    A --> R[Read roles from active Method Pack]
+    R --> S[Assign compatible actors]
+    S --> V[Validate ready swarm]
+    Q --> M{Security mode}
+    M -->|default| P[Simple public identity records]
+    M -->|--secure| K[External Ed25519 keypair per actor]
+```
+
 ## Simple mode
 
 From an empty project directory:
@@ -32,7 +44,8 @@ agora quickstart \
   --objective "Reduce delivery lead time"
 ```
 
-The role and capability calculation is identical for Scrum, Kanban, and custom Method Packs.
+The role and capability calculation is identical for Spec-Driven, Scrum, Kanban, and custom Method
+Packs.
 
 ## Secure exploration mode
 
