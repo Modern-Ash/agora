@@ -5,6 +5,7 @@ from pathlib import Path
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
+    AddArtifactInput,
     AddEnvironmentInput,
     AddEvidenceInput,
     AssignActorInput,
@@ -88,8 +89,24 @@ def main() -> None:
     else:
         raise AssertionError("Environment unexpectedly accepted work without evidence")
 
+    agora.add_artifact(
+        AddArtifactInput(
+            "delivery",
+            "release",
+            "developer",
+            kind="test-report",
+            uri="ci://builds/release/tests",
+        )
+    )
     agora.add_evidence(
-        AddEvidenceInput("delivery", "release", "facilitator", type="test-run", result="success")
+        AddEvidenceInput(
+            "delivery",
+            "release",
+            "facilitator",
+            type="test-run",
+            result="success",
+            artifact_refs=["ci://builds/release/tests"],
+        )
     )
     prepared = agora.invoke_tool(invocation)
     assert agora.validate().ok

@@ -19,6 +19,8 @@ from agora.model import (
     AddRegistryTrustKeyInput,
     AddTransparencyTrustKeyInput,
     AddUsageInput,
+    AdoptionInput,
+    AdoptionReport,
     ApplyLifecycleActionInput,
     ApplyPackUpdateAuditInput,
     AssignActorInput,
@@ -109,7 +111,9 @@ def main(
         result = _dispatch(workspace, namespace)
         if result is not None:
             _print_json(output, result)
-        if isinstance(result, ValidationReport) and not result.ok:
+        if isinstance(result, (AdoptionReport, ValidationReport)) and not result.ok:
+            return 1
+        if isinstance(result, dict) and result.get("ok") is False:
             return 1
         return 0
     except (FileExistsError, FileNotFoundError, PermissionError, RuntimeError, ValueError) as error:
@@ -151,6 +155,19 @@ def _build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--max-delegation-depth", type=int)
     initialize.add_argument("--force", action="store_true")
 
+    adopt = commands.add_parser(
+        "adopt", help="Check whether an existing code repository is ready for Agora"
+    )
+    adopt.add_argument("--check", action="store_true", required=True)
+    adopt.add_argument("--path")
+    adopt.add_argument("--id", default="quickstart", help="Planned swarm id")
+    adopt.add_argument("--base", help="Expected current base branch")
+    adopt.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Accept existing working-tree changes after reporting them",
+    )
+
     quickstart = commands.add_parser(
         "quickstart",
         help="Scaffold a runnable project: init, a human and an AI actor, a swarm, and roles",
@@ -159,6 +176,12 @@ def _build_parser() -> argparse.ArgumentParser:
     quickstart.add_argument("--id", default="quickstart", help="Swarm id (default: quickstart)")
     quickstart.add_argument("--objective", default="Deliver the objective")
     quickstart.add_argument("--method", metavar="METHOD_ID")
+    quickstart.add_argument("--base", help="Expected current base branch")
+    quickstart.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Accept existing working-tree changes after reporting them",
+    )
     quickstart.add_argument(
         "--secure",
         action="store_true",
@@ -1130,6 +1153,15 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 force=args.force,
             )
         )
+    if args.command == "adopt":
+        return workspace.check_adoption(
+            AdoptionInput(
+                path=args.path,
+                swarm_id=args.id,
+                base_branch=args.base,
+                allow_dirty=args.allow_dirty,
+            )
+        )
     if args.command == "quickstart":
         return workspace.quickstart(
             QuickstartInput(
@@ -1139,6 +1171,8 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 secure=args.secure,
                 path=args.path,
                 key_directory=args.key_dir,
+                base_branch=args.base,
+                allow_dirty=args.allow_dirty,
             )
         )
     if args.command == "doctor":

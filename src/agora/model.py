@@ -314,6 +314,24 @@ class DoctorCheck:
 
 
 @dataclass(frozen=True)
+class AdoptionInput:
+    path: str | None = None
+    swarm_id: str = "quickstart"
+    base_branch: str | None = None
+    allow_dirty: bool = False
+
+
+@dataclass(frozen=True)
+class AdoptionReport:
+    ok: bool
+    target: str
+    initialized: bool
+    git_repository: bool
+    branch: str | None
+    checks: list[DoctorCheck]
+
+
+@dataclass(frozen=True)
 class MethodPackRecord:
     id: str
     name: str
@@ -1313,6 +1331,8 @@ class QuickstartInput:
     secure: bool = False
     path: str | None = None
     key_directory: str | None = None
+    base_branch: str | None = None
+    allow_dirty: bool = False
 
 
 @dataclass(frozen=True)

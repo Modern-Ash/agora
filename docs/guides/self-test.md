@@ -107,7 +107,8 @@ sequenceDiagram
     end
     H->>A: Create governed work
     H->>A: Satisfy acceptance criterion
-    H->>A: Register required spec artifact
+    H->>FS: Materialize a real local spec artifact
+    H->>A: Register required repo artifact
     H->>A: Record successful evidence
     H->>A: Add every approval required by gates
     loop Until terminal state

@@ -119,11 +119,47 @@ agora doctor
 agora validate
 ```
 
-Quickstart creates a project, one human actor, one AI actor, one swarm actor, a method-compatible
-swarm, and its assignments. The default mode stores no private keys. Add `--secure` when every actor
-should use an external Ed25519 identity from the beginning.
+Quickstart creates a project, one human actor, one AI actor, a method-compatible swarm, and its
+assignments. The default mode stores no private keys. Add `--secure` when every actor should use an
+external Ed25519 identity from the beginning.
 
 Use `agora init` instead when you want to register actors and form the swarm step by step.
+
+### Adopt an existing codebase
+
+Start from the clean base branch that will receive the feature:
+
+```bash
+git status --short
+agora adopt --check --id payment-idempotency --base main
+agora quickstart \
+  --id payment-idempotency \
+  --base main \
+  --objective "Deliver payment idempotency"
+```
+
+```mermaid
+flowchart TD
+    A[Existing repository] --> B[Read-only adoption preflight]
+    B -->|fail| C[No files or branches changed]
+    B -->|pass| D[Create agora/id branch]
+    D --> E[Initialize project and actors]
+    E --> F[Create swarm and assign roles]
+    F -->|success| G[Persist reviewable Agora state]
+    E -->|failure| H[Restore files and external quickstart keys]
+    F -->|failure| H
+    H --> I[Return to original branch]
+    I --> J[Delete failed feature branch]
+```
+
+The preflight stops when `.agora` or the selected Codex/Claude projection is ignored, because work
+that cannot enter Git cannot provide durable collaboration history. It also catches dirty state,
+detached or unexpected branches, a colliding `agora/<id>` branch, partial initialization, reserved
+quickstart identities, and a missing configured runtime. `--allow-dirty` is an explicit exception
+for reviewed local changes; it does not bypass any other check.
+
+Run the [existing codebase feature pilot](../samples/existing-codebase-feature/README.md) to exercise
+this entire path against a non-empty repository without an LLM, network, or provider credentials.
 
 ## 5. Review what Agora created
 

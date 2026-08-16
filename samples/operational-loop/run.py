@@ -96,6 +96,9 @@ def main() -> None:
                 target_state="implementing",
             )
         )
+        source_artifact = root / "src" / "operational-loop.py"
+        source_artifact.parent.mkdir(parents=True, exist_ok=True)
+        source_artifact.write_text("# Verified operational result\n", encoding="utf-8")
         workspace.add_artifact(
             AddArtifactInput(
                 swarm_id="delivery",

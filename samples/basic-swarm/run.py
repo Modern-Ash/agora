@@ -139,6 +139,9 @@ def main() -> None:
         WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="owner"),
         "installable",
     )
+    source_artifact = project / "src" / "agora" / "workspace.py"
+    source_artifact.parent.mkdir(parents=True, exist_ok=True)
+    source_artifact.write_text("# Verified sample source artifact\n", encoding="utf-8")
     agora.add_artifact(
         AddArtifactInput(
             swarm_id="first-slice",
