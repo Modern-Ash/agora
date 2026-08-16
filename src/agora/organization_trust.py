@@ -21,12 +21,20 @@ from agora.markdown import (
     render_markdown,
     string_attribute,
 )
-from agora.model import OrganizationTrustRootRecord, RegistryTrustKeyRecord
+from agora.model import (
+    OrganizationTrustRootRecord,
+    OrganizationTrustRootRotationRecord,
+    RegistryTrustKeyRecord,
+)
 from agora.trust import decode_trusted_public_key
 
 ORGANIZATION_TRUST_ROOT_SCHEMA = "agora/organization-trust-root/v1"
 ORGANIZATION_TRUST_BUNDLE_SCHEMA = "agora/organization-trust-bundle/v1"
 ORGANIZATION_TRUST_SIGNATURE_SCHEMA = "agora/organization-trust-signature/v1"
+ORGANIZATION_TRUST_ROOT_ROTATION_SCHEMA = "agora/organization-trust-root-rotation/v1"
+ORGANIZATION_TRUST_ROOT_ROTATION_SIGNATURE_SCHEMA = (
+    "agora/organization-trust-root-rotation-signature/v1"
+)
 MAXIMUM_BUNDLE_BYTES = 1024 * 1024
 DOWNLOAD_TIMEOUT = 15
 
@@ -50,6 +58,8 @@ def organization_trust_root_from_pem(
         algorithm="ed25519",
         public_key=base64.b64encode(raw).decode(),
         fingerprint=hashlib.sha256(raw).hexdigest(),
+        initial_public_key=base64.b64encode(raw).decode(),
+        initial_fingerprint=hashlib.sha256(raw).hexdigest(),
         scope=scope,  # type: ignore[arg-type]
         path=str(path),
         created_at=created_at,
@@ -60,7 +70,7 @@ def load_organization_trust_root(path: Path, scope: str) -> OrganizationTrustRoo
     _assert_scope(scope)
     document = read_markdown(path)
     attributes = document.attributes
-    expected_attributes = {
+    base_attributes = {
         "schema",
         "id",
         "algorithm",
@@ -72,7 +82,11 @@ def load_organization_trust_root(path: Path, scope: str) -> OrganizationTrustRoo
         "last-sequence",
         "last-sha256",
     }
-    if set(attributes) != expected_attributes:
+    initial_attributes = {"initial-public-key", "initial-fingerprint"}
+    if frozenset(attributes) not in {
+        frozenset(base_attributes),
+        frozenset(base_attributes | initial_attributes),
+    }:
         raise ValueError(f"Organization trust root contains unsupported attributes: {path}")
     if string_attribute(attributes, "schema") != ORGANIZATION_TRUST_ROOT_SCHEMA:
         raise ValueError(f"Expected schema {ORGANIZATION_TRUST_ROOT_SCHEMA}: {path}")
@@ -87,6 +101,15 @@ def load_organization_trust_root(path: Path, scope: str) -> OrganizationTrustRoo
     fingerprint = string_attribute(attributes, "fingerprint")
     if hashlib.sha256(raw).hexdigest() != fingerprint:
         raise ValueError(f"Organization trust root fingerprint mismatch: {path}")
+    if initial_attributes <= set(attributes):
+        initial_public_key = string_attribute(attributes, "initial-public-key")
+        initial_raw = decode_trusted_public_key(initial_public_key)
+        initial_fingerprint = string_attribute(attributes, "initial-fingerprint")
+        if hashlib.sha256(initial_raw).hexdigest() != initial_fingerprint:
+            raise ValueError(f"Organization trust initial root fingerprint mismatch: {path}")
+    else:
+        initial_public_key = public_key
+        initial_fingerprint = fingerprint
     last_sequence = attributes.get("last-sequence")
     if not isinstance(last_sequence, int) or isinstance(last_sequence, bool) or last_sequence < 0:
         raise ValueError(f"Organization trust last-sequence must be a non-negative integer: {path}")
@@ -100,6 +123,8 @@ def load_organization_trust_root(path: Path, scope: str) -> OrganizationTrustRoo
         algorithm="ed25519",
         public_key=public_key,
         fingerprint=fingerprint,
+        initial_public_key=initial_public_key,
+        initial_fingerprint=initial_fingerprint,
         scope=scope,  # type: ignore[arg-type]
         path=str(path),
         created_at=string_attribute(attributes, "created-at"),
@@ -118,6 +143,8 @@ def render_organization_trust_root(record: OrganizationTrustRootRecord) -> str:
                 "algorithm": record.algorithm,
                 "public-key": record.public_key,
                 "fingerprint": record.fingerprint,
+                "initial-public-key": record.initial_public_key,
+                "initial-fingerprint": record.initial_fingerprint,
                 "scope": record.scope,
                 "created-at": record.created_at,
                 "source": record.source,
@@ -246,6 +273,201 @@ def render_organization_trust_bundle(
     )
 
 
+def load_organization_trust_root_rotation(
+    contents: bytes, *, scope: str, path: str = ""
+) -> OrganizationTrustRootRotationRecord:
+    _assert_scope(scope)
+    try:
+        document = parse_markdown(contents.decode("utf-8"))
+    except UnicodeDecodeError as error:
+        raise ValueError("Organization trust root rotation must be UTF-8") from error
+    attributes = document.attributes
+    expected = {
+        "schema",
+        "organization",
+        "rotation",
+        "rotated-at",
+        "reason",
+        "from-public-key",
+        "from-fingerprint",
+        "to-public-key",
+        "to-fingerprint",
+        "bundle-sequence",
+        "bundle-sha256",
+        "previous-rotation-sha256",
+        "old-signature",
+        "new-signature",
+    }
+    if set(attributes) != expected:
+        raise ValueError("Organization trust root rotation contains unsupported attributes")
+    if string_attribute(attributes, "schema") != ORGANIZATION_TRUST_ROOT_ROTATION_SCHEMA:
+        raise ValueError(f"Expected schema {ORGANIZATION_TRUST_ROOT_ROTATION_SCHEMA}")
+    organization = string_attribute(attributes, "organization")
+    assert_slug(organization, "Organization trust id")
+    rotation = attributes.get("rotation")
+    bundle_sequence = attributes.get("bundle-sequence")
+    if not isinstance(rotation, int) or isinstance(rotation, bool) or rotation < 1:
+        raise ValueError("Organization trust root rotation number must be positive")
+    if (
+        not isinstance(bundle_sequence, int)
+        or isinstance(bundle_sequence, bool)
+        or bundle_sequence < 0
+    ):
+        raise ValueError("Organization trust root rotation bundle sequence must be non-negative")
+    rotated_at = string_attribute(attributes, "rotated-at")
+    reason = string_attribute(attributes, "reason").strip()
+    if not reason:
+        raise ValueError("Organization trust root rotation reason cannot be empty")
+    from_public_key = string_attribute(attributes, "from-public-key")
+    to_public_key = string_attribute(attributes, "to-public-key")
+    from_raw = decode_trusted_public_key(from_public_key)
+    to_raw = decode_trusted_public_key(to_public_key)
+    from_fingerprint = string_attribute(attributes, "from-fingerprint")
+    to_fingerprint = string_attribute(attributes, "to-fingerprint")
+    if hashlib.sha256(from_raw).hexdigest() != from_fingerprint:
+        raise ValueError("Organization trust root rotation source fingerprint mismatch")
+    if hashlib.sha256(to_raw).hexdigest() != to_fingerprint:
+        raise ValueError("Organization trust root rotation target fingerprint mismatch")
+    if from_fingerprint == to_fingerprint:
+        raise ValueError("Organization trust root rotation must change the public key")
+    bundle_sha256 = optional_string_attribute(attributes, "bundle-sha256")
+    previous_rotation_sha256 = optional_string_attribute(attributes, "previous-rotation-sha256")
+    if (bundle_sequence == 0) != (bundle_sha256 is None):
+        raise ValueError("Organization trust root rotation bundle state is inconsistent")
+    for name, value in (
+        ("bundle-sha256", bundle_sha256),
+        ("previous-rotation-sha256", previous_rotation_sha256),
+    ):
+        if value is not None and not _is_sha256(value):
+            raise ValueError(f"Organization trust root rotation {name} is invalid")
+    old_signature = string_attribute(attributes, "old-signature")
+    new_signature = string_attribute(attributes, "new-signature")
+    payload = organization_trust_root_rotation_payload(
+        organization=organization,
+        rotation=rotation,
+        rotated_at=rotated_at,
+        reason=reason,
+        from_public_key=from_public_key,
+        from_fingerprint=from_fingerprint,
+        to_public_key=to_public_key,
+        to_fingerprint=to_fingerprint,
+        bundle_sequence=bundle_sequence,
+        bundle_sha256=bundle_sha256,
+        previous_rotation_sha256=previous_rotation_sha256,
+    )
+    for label, public_key, signature in (
+        ("old", from_raw, old_signature),
+        ("new", to_raw, new_signature),
+    ):
+        try:
+            signature_bytes = base64.b64decode(signature, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise ValueError(
+                f"Organization trust root rotation {label} signature must be valid base64"
+            ) from error
+        try:
+            Ed25519PublicKey.from_public_bytes(public_key).verify(signature_bytes, payload)
+        except InvalidSignature as error:
+            raise ValueError(
+                f"Organization trust root rotation {label} signature is invalid"
+            ) from error
+    checksum = hashlib.sha256(
+        payload + old_signature.encode("ascii") + b"\n" + new_signature.encode("ascii") + b"\n"
+    ).hexdigest()
+    return OrganizationTrustRootRotationRecord(
+        organization=organization,
+        rotation=rotation,
+        rotated_at=rotated_at,
+        reason=reason,
+        from_public_key=from_public_key,
+        from_fingerprint=from_fingerprint,
+        to_public_key=to_public_key,
+        to_fingerprint=to_fingerprint,
+        bundle_sequence=bundle_sequence,
+        bundle_sha256=bundle_sha256,
+        previous_rotation_sha256=previous_rotation_sha256,
+        old_signature=old_signature,
+        new_signature=new_signature,
+        sha256=checksum,
+        path=path,
+    )
+
+
+def organization_trust_root_rotation_payload(
+    *,
+    organization: str,
+    rotation: int,
+    rotated_at: str,
+    reason: str,
+    from_public_key: str,
+    from_fingerprint: str,
+    to_public_key: str,
+    to_fingerprint: str,
+    bundle_sequence: int,
+    bundle_sha256: str | None,
+    previous_rotation_sha256: str | None,
+) -> bytes:
+    statement = {
+        "schema": ORGANIZATION_TRUST_ROOT_ROTATION_SIGNATURE_SCHEMA,
+        "organization": organization,
+        "rotation": rotation,
+        "rotated-at": rotated_at,
+        "reason": reason,
+        "from-public-key": from_public_key,
+        "from-fingerprint": from_fingerprint,
+        "to-public-key": to_public_key,
+        "to-fingerprint": to_fingerprint,
+        "bundle-sequence": bundle_sequence,
+        "bundle-sha256": bundle_sha256,
+        "previous-rotation-sha256": previous_rotation_sha256,
+    }
+    return (
+        json.dumps(statement, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+
+
+def render_organization_trust_root_rotation(
+    *,
+    organization: str,
+    rotation: int,
+    rotated_at: str,
+    reason: str,
+    from_public_key: str,
+    from_fingerprint: str,
+    to_public_key: str,
+    to_fingerprint: str,
+    bundle_sequence: int,
+    bundle_sha256: str | None,
+    previous_rotation_sha256: str | None,
+    old_signature: str,
+    new_signature: str,
+) -> str:
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": ORGANIZATION_TRUST_ROOT_ROTATION_SCHEMA,
+                "organization": organization,
+                "rotation": rotation,
+                "rotated-at": rotated_at,
+                "reason": reason,
+                "from-public-key": from_public_key,
+                "from-fingerprint": from_fingerprint,
+                "to-public-key": to_public_key,
+                "to-fingerprint": to_fingerprint,
+                "bundle-sequence": bundle_sequence,
+                "bundle-sha256": bundle_sha256,
+                "previous-rotation-sha256": previous_rotation_sha256,
+                "old-signature": old_signature,
+                "new-signature": new_signature,
+            },
+            body=(
+                f"# Organization trust root rotation {organization}/{rotation}\n\n"
+                "Both the outgoing and incoming public roots sign this transition."
+            ),
+        )
+    )
+
+
 def read_organization_trust_source(source: str, *, allow_insecure_http: bool) -> tuple[bytes, str]:
     parsed = urlparse(source)
     if parsed.scheme in {"http", "https"}:
@@ -264,13 +486,15 @@ def read_organization_trust_source(source: str, *, allow_insecure_http: bool) ->
                     raise ValueError("Remote organization trust source must use HTTPS")
                 declared = response.headers.get("Content-Length")
                 if declared is not None and int(declared) > MAXIMUM_BUNDLE_BYTES:
-                    raise ValueError("Organization trust bundle exceeds maximum size")
+                    raise ValueError("Organization trust document exceeds maximum size")
                 data = response.read(MAXIMUM_BUNDLE_BYTES + 1)
                 if len(data) > MAXIMUM_BUNDLE_BYTES:
-                    raise ValueError("Organization trust bundle exceeds maximum size")
+                    raise ValueError("Organization trust document exceeds maximum size")
                 return data, resolved
         except (HTTPError, URLError) as error:
-            raise RuntimeError(f"Could not download organization trust bundle: {error}") from error
+            raise RuntimeError(
+                f"Could not download organization trust document: {error}"
+            ) from error
     if parsed.scheme == "file":
         path = Path(unquote(parsed.path)).resolve()
     elif not parsed.scheme:
@@ -278,9 +502,9 @@ def read_organization_trust_source(source: str, *, allow_insecure_http: bool) ->
     else:
         raise ValueError(f"Unsupported organization trust source scheme: {parsed.scheme}")
     if not path.is_file():
-        raise FileNotFoundError(f"Organization trust bundle not found: {path}")
+        raise FileNotFoundError(f"Organization trust document not found: {path}")
     if path.stat().st_size > MAXIMUM_BUNDLE_BYTES:
-        raise ValueError("Organization trust bundle exceeds maximum size")
+        raise ValueError("Organization trust document exceeds maximum size")
     return path.read_bytes(), path.as_uri()
 
 

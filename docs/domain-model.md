@@ -303,6 +303,11 @@ A registry trust key authorizes one Ed25519 public key id for one registry. Its 
 fingerprint, active or revoked status, and optional replacement are durable Markdown. Rotation adds a
 new identity before revoking the previous identity; it never overwrites key history.
 
+An organization trust root verifies a sequential feed of registry trust keys and revocations. A
+root rotation is an immutable, dual-signed transition that binds both public roots to the current
+feed checksum and previous rotation. `ROOT.md` retains the initial public anchor plus current state;
+archived rotations reconstruct the root epoch required to verify each historical bundle.
+
 A registry update is a forward-only transition between immutable semantic releases. Preview state is
 ephemeral; each applied transition persists its previous and target versions, checksums, index,
 signature result, and timestamp under the installed registry. Updating the catalog does not update a

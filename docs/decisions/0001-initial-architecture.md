@@ -38,8 +38,9 @@ validation, so front matter preserves structured metadata and gates remain execu
 
 ## Future work
 
-- Organization root rotation, threshold signatures, and third-party transparency-log proofs for
-  remote registry releases. Signed sequential trust and revocation feeds are implemented.
+- Threshold signatures and third-party transparency-log proofs for remote registry releases.
+  Signed sequential trust and revocation feeds plus dual-signed organization root rotation are
+  implemented.
 - Automatic installed-pack updates and in-process background scheduling. Aggregate authenticated
   registry and pack notifications can be invoked and recorded by an external scheduler. Reviewed
   pack audits can be applied explicitly as one precondition-bound transaction. Release checks are

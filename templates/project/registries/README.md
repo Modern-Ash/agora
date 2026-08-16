@@ -13,3 +13,6 @@ application.
 
 Apply only an explicitly reviewed and unchanged report with `agora pack apply-audit --id <audit>`.
 Agora binds the transaction to the audit checksum, current pack trees, and dependency plans.
+
+Organization trust roots rotate only through a declaration signed by both roots and bound to the
+current feed position. Preview it with `agora trust organization rotate` before passing `--apply`.

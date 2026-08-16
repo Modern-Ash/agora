@@ -449,6 +449,8 @@ class OrganizationTrustRootRecord:
     algorithm: Literal["ed25519"]
     public_key: str
     fingerprint: str
+    initial_public_key: str
+    initial_fingerprint: str
     scope: Literal["user", "project"]
     path: str
     created_at: str
@@ -474,6 +476,40 @@ class OrganizationTrustSyncResult:
     applied: bool
     source: str
     steps: list[OrganizationTrustSyncStep]
+    history_path: str | None = None
+
+
+@dataclass(frozen=True)
+class OrganizationTrustRootRotationRecord:
+    organization: str
+    rotation: int
+    rotated_at: str
+    reason: str
+    from_public_key: str
+    from_fingerprint: str
+    to_public_key: str
+    to_fingerprint: str
+    bundle_sequence: int
+    bundle_sha256: str | None
+    previous_rotation_sha256: str | None
+    old_signature: str
+    new_signature: str
+    sha256: str
+    path: str
+
+
+@dataclass(frozen=True)
+class OrganizationTrustRootRotationResult:
+    organization: str
+    scope: Literal["user", "project"]
+    rotation: int
+    from_fingerprint: str
+    to_fingerprint: str
+    bundle_sequence: int
+    sha256: str
+    signature_verified: bool
+    applied: bool
+    source: str
     history_path: str | None = None
 
 
@@ -926,6 +962,15 @@ class SyncOrganizationTrustInput:
     id: str
     scope: Literal["user", "project"]
     source: str | None = None
+    apply: bool = False
+    allow_insecure_http: bool = False
+
+
+@dataclass(frozen=True)
+class RotateOrganizationTrustRootInput:
+    id: str
+    scope: Literal["user", "project"]
+    source: str
     apply: bool = False
     allow_insecure_http: bool = False
 

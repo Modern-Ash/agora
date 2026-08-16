@@ -191,9 +191,51 @@ release automation.
 the pinned root. The history is therefore a locally auditable transparency trail, while Git can
 provide review and replication for project scope.
 
+## Rotate an organization root
+
+The external organization publisher creates an
+`agora/organization-trust-root-rotation/v1` Markdown declaration. It binds the outgoing and incoming
+public keys to the exact applied `bundle-sequence`, `bundle-sha256`, and previous rotation checksum.
+Both roots sign the same canonical
+`agora/organization-trust-root-rotation-signature/v1` payload, proving authorization by the current
+root and possession of the replacement private key.
+
+Preview the declaration without changing trust:
+
+```bash
+agora trust organization rotate \
+  --id example-org \
+  --source ./ROOT-ROTATION.md \
+  --scope project
+```
+
+Apply it only after review:
+
+```bash
+agora trust organization rotate \
+  --id example-org \
+  --source ./ROOT-ROTATION.md \
+  --scope project \
+  --apply
+```
+
+Agora rejects invalid signatures, skipped rotations, a changed current root, a stale feed position,
+or a broken previous-rotation checksum. Application transactionally replaces only the active public
+root and archives the exact signed declaration under:
+
+```text
+<project>/.agora/trust/organizations/example-org/rotations/00000000000000000001.md
+```
+
+The bundle sequence continues across rotation. Validation reconstructs every root epoch from the
+dual-signed chain, verifies old bundles with their historical root, verifies later bundles with the
+replacement, requires the first transition to match the immutable initial public anchor retained in
+`ROOT.md`, and requires the final transition to equal its active root. Private keys and signing
+remain outside Agora.
+
 ## Current boundary
 
-Agora supports a single pinned Ed25519 organization root and sequential snapshot feeds. Root-key
-rotation, threshold signatures, third-party transparency-log inclusion proofs, and automatic
-background synchronization are not implemented. Feed application remains an explicit reviewed
-operation.
+Agora supports one active Ed25519 organization root, dual-signed sequential root rotation, and
+sequential snapshot feeds. Threshold signatures, third-party transparency-log inclusion proofs, and
+automatic background synchronization are not implemented. Feed and rotation application remain
+explicit reviewed operations.

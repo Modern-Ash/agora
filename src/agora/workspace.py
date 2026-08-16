@@ -125,6 +125,8 @@ from agora.model import (
     MethodContract,
     MethodPackRecord,
     OrganizationTrustRootRecord,
+    OrganizationTrustRootRotationRecord,
+    OrganizationTrustRootRotationResult,
     OrganizationTrustSyncResult,
     OrganizationTrustSyncStep,
     PackKind,
@@ -176,6 +178,7 @@ from agora.model import (
     RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
     RotateActorKeyInput,
+    RotateOrganizationTrustRootInput,
     SessionAuthorizationRecord,
     SessionRecord,
     SetActorRuntimeInput,
@@ -209,6 +212,7 @@ from agora.organization_trust import (
     advance_organization_trust_root,
     load_organization_trust_bundle,
     load_organization_trust_root,
+    load_organization_trust_root_rotation,
     organization_trust_root_from_pem,
     read_organization_trust_source,
     render_organization_trust_root,
@@ -1103,6 +1107,101 @@ class AgoraWorkspace:
         if not path.is_file():
             raise FileNotFoundError(f"Organization trust root not found: {path}")
         return load_organization_trust_root(path, scope)
+
+    @_locked_mutation("scoped")
+    def rotate_organization_trust_root(
+        self, data: RotateOrganizationTrustRootInput
+    ) -> OrganizationTrustRootRotationResult:
+        root_record = self.get_organization_trust_root(data.id, data.scope)
+        contents, resolved_source = read_organization_trust_source(
+            data.source, allow_insecure_http=data.allow_insecure_http
+        )
+        scope_root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        organization_root = scope_root / "trust" / "organizations" / data.id
+        rotation_paths = sorted((organization_root / "rotations").glob("*.md"))
+        previous = (
+            load_organization_trust_root_rotation(
+                rotation_paths[-1].read_bytes(), scope=data.scope, path=str(rotation_paths[-1])
+            )
+            if rotation_paths
+            else None
+        )
+        rotation = load_organization_trust_root_rotation(contents, scope=data.scope)
+        expected_rotation = 1 if previous is None else previous.rotation + 1
+        expected_previous = None if previous is None else previous.sha256
+        if rotation.organization != data.id:
+            raise ValueError(
+                f"Organization trust root rotation belongs to {rotation.organization}, "
+                f"expected {data.id}"
+            )
+        if rotation.rotation != expected_rotation:
+            raise ValueError(
+                f"Organization trust root rotation must be {expected_rotation}, "
+                f"got {rotation.rotation}"
+            )
+        if rotation.previous_rotation_sha256 != expected_previous:
+            raise ValueError("Organization trust root rotation does not continue its history")
+        if (
+            rotation.from_public_key != root_record.public_key
+            or rotation.from_fingerprint != root_record.fingerprint
+        ):
+            raise ValueError("Organization trust root rotation does not start at the active root")
+        if (
+            rotation.bundle_sequence != root_record.last_sequence
+            or rotation.bundle_sha256 != root_record.last_sha256
+        ):
+            raise ValueError(
+                "Organization trust root rotation does not bind the current feed state"
+            )
+
+        history_path = organization_root / "rotations" / f"{rotation.rotation:020d}.md"
+        result = OrganizationTrustRootRotationResult(
+            organization=data.id,
+            scope=data.scope,
+            rotation=rotation.rotation,
+            from_fingerprint=rotation.from_fingerprint,
+            to_fingerprint=rotation.to_fingerprint,
+            bundle_sequence=rotation.bundle_sequence,
+            sha256=rotation.sha256,
+            signature_verified=True,
+            applied=data.apply,
+            source=resolved_source,
+            history_path=str(history_path) if data.apply else None,
+        )
+        if not data.apply:
+            return result
+        if history_path.exists():
+            raise FileExistsError(
+                f"Organization trust root rotation already exists: {history_path}"
+            )
+
+        trust_root = scope_root / "trust"
+        with tempfile.TemporaryDirectory(prefix=".trust-stage-", dir=scope_root) as temporary:
+            staged = Path(temporary) / "trust"
+            copy_template_tree(trust_root, staged, {}, False)
+            staged_organization = staged / "organizations" / data.id
+            staged_history = staged_organization / "rotations" / history_path.name
+            atomic_write(staged_history, contents.decode("utf-8"))
+            updated_root = replace(
+                root_record,
+                public_key=rotation.to_public_key,
+                fingerprint=rotation.to_fingerprint,
+                created_at=rotation.rotated_at,
+            )
+            atomic_write(
+                staged_organization / "ROOT.md", render_organization_trust_root(updated_root)
+            )
+            backup = scope_root / ".trust-backup"
+            if backup.exists():
+                raise FileExistsError(f"Organization trust backup already exists: {backup}")
+            trust_root.replace(backup)
+            try:
+                staged.replace(trust_root)
+            except Exception:
+                backup.replace(trust_root)
+                raise
+            shutil.rmtree(backup)
+        return result
 
     @_locked_mutation("scoped")
     def sync_organization_trust(
@@ -6794,6 +6893,7 @@ class AgoraWorkspace:
             "trust-keys": 0,
             "organization-trust-roots": 0,
             "organization-trust-bundles": 0,
+            "organization-trust-root-rotations": 0,
             "pack-sources": 0,
             "pack-histories": 0,
             "pack-locks": 0,
@@ -6995,13 +7095,101 @@ class AgoraWorkspace:
                     f"Organization trust id {organization_root.id} does not match directory "
                     f"{directory.name}",
                 )
+            rotations: list[OrganizationTrustRootRotationRecord] = []
+            expected_rotation = 1
+            previous_rotation_sha256: str | None = None
+            previous_to_fingerprint: str | None = None
+            previous_bundle_sequence = 0
+            for rotation_path in sorted((directory / "rotations").glob("*.md")):
+                rotation = inspect(
+                    "organization-trust-root-rotations",
+                    "organization-trust-root-rotation.invalid",
+                    rotation_path,
+                    lambda rotation_path=rotation_path: load_organization_trust_root_rotation(
+                        rotation_path.read_bytes(), scope="project", path=str(rotation_path)
+                    ),
+                )
+                if not isinstance(rotation, OrganizationTrustRootRotationRecord):
+                    continue
+                rotations.append(rotation)
+                if rotation_path.stem != f"{rotation.rotation:020d}":
+                    issue(
+                        "organization-trust-root-rotation.filename-mismatch",
+                        rotation_path,
+                        f"Root rotation {rotation.rotation} does not match {rotation_path.name}",
+                    )
+                if (
+                    rotation.organization != organization_root.id
+                    or rotation.rotation != expected_rotation
+                    or rotation.previous_rotation_sha256 != previous_rotation_sha256
+                    or (
+                        previous_to_fingerprint is not None
+                        and rotation.from_fingerprint != previous_to_fingerprint
+                    )
+                    or rotation.bundle_sequence < previous_bundle_sequence
+                ):
+                    issue(
+                        "organization-trust-root-rotation.history-gap",
+                        rotation_path,
+                        "Organization trust root rotation history is not continuous",
+                    )
+                expected_rotation = rotation.rotation + 1
+                previous_rotation_sha256 = rotation.sha256
+                previous_to_fingerprint = rotation.to_fingerprint
+                previous_bundle_sequence = rotation.bundle_sequence
+
+            bundle_root = organization_root
+            if rotations:
+                first = rotations[0]
+                if (
+                    first.from_public_key != organization_root.initial_public_key
+                    or first.from_fingerprint != organization_root.initial_fingerprint
+                ):
+                    issue(
+                        "organization-trust-root-rotation.anchor-mismatch",
+                        Path(first.path),
+                        "First root rotation does not start at the pinned initial root",
+                    )
+                bundle_root = replace(
+                    organization_root,
+                    public_key=first.from_public_key,
+                    fingerprint=first.from_fingerprint,
+                )
+                last = rotations[-1]
+                if (
+                    last.to_public_key != organization_root.public_key
+                    or last.to_fingerprint != organization_root.fingerprint
+                ):
+                    issue(
+                        "organization-trust-root-rotation.active-root-mismatch",
+                        root_path,
+                        "Active organization root does not match the final rotation",
+                    )
+            elif (
+                organization_root.public_key != organization_root.initial_public_key
+                or organization_root.fingerprint != organization_root.initial_fingerprint
+            ):
+                issue(
+                    "organization-trust-root.anchor-mismatch",
+                    root_path,
+                    "Active organization root differs from its anchor without rotation history",
+                )
+
             expected_sequence = 1
             previous_sha256: str | None = None
+            bundle_checksums: dict[int, str] = {}
             managed_keys: dict[str, RegistryTrustKeyRecord] = {}
             for history_path in sorted((directory / "history").glob("*.md")):
+                for rotation in rotations:
+                    if rotation.bundle_sequence < expected_sequence:
+                        bundle_root = replace(
+                            bundle_root,
+                            public_key=rotation.to_public_key,
+                            fingerprint=rotation.to_fingerprint,
+                        )
                 try:
                     sequence, previous, bundle_keys, checksum, _ = load_organization_trust_bundle(
-                        history_path.read_bytes(), root=organization_root
+                        history_path.read_bytes(), root=bundle_root
                     )
                 except Exception as error:
                     issue("organization-trust-bundle.invalid", history_path, str(error))
@@ -7021,7 +7209,20 @@ class AgoraWorkspace:
                     )
                 expected_sequence = sequence + 1
                 previous_sha256 = checksum
+                bundle_checksums[sequence] = checksum
                 managed_keys.update((item.id, item) for item in bundle_keys)
+            for rotation in rotations:
+                expected_bundle_sha256 = (
+                    None
+                    if rotation.bundle_sequence == 0
+                    else bundle_checksums.get(rotation.bundle_sequence)
+                )
+                if rotation.bundle_sha256 != expected_bundle_sha256:
+                    issue(
+                        "organization-trust-root-rotation.bundle-mismatch",
+                        Path(rotation.path),
+                        "Root rotation does not match its persisted bundle boundary",
+                    )
             if (
                 organization_root.last_sequence != expected_sequence - 1
                 or organization_root.last_sha256 != previous_sha256

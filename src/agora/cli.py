@@ -67,6 +67,7 @@ from agora.model import (
     RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
     RotateActorKeyInput,
+    RotateOrganizationTrustRootInput,
     SetActorRuntimeInput,
     StartSessionInput,
     SyncOrganizationTrustInput,
@@ -280,6 +281,14 @@ def _build_parser() -> argparse.ArgumentParser:
     organization_sync.add_argument("--source")
     organization_sync.add_argument("--apply", action="store_true")
     organization_sync.add_argument("--allow-insecure-http", action="store_true")
+    organization_rotate = trust_organization.add_parser(
+        "rotate", help="Preview or apply a dual-signed organization root rotation"
+    )
+    organization_rotate.add_argument("--id", required=True)
+    organization_rotate.add_argument("--scope", choices=("user", "project"), default="user")
+    organization_rotate.add_argument("--source", required=True)
+    organization_rotate.add_argument("--apply", action="store_true")
+    organization_rotate.add_argument("--allow-insecure-http", action="store_true")
 
     pack = commands.add_parser("pack", help="Manage installed and catalog packs").add_subparsers(
         dest="pack_command", required=True
@@ -1072,6 +1081,16 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
         if args.organization_trust_command == "sync":
             return workspace.sync_organization_trust(
                 SyncOrganizationTrustInput(
+                    id=args.id,
+                    scope=args.scope,
+                    source=args.source,
+                    apply=args.apply,
+                    allow_insecure_http=args.allow_insecure_http,
+                )
+            )
+        if args.organization_trust_command == "rotate":
+            return workspace.rotate_organization_trust_root(
+                RotateOrganizationTrustRootInput(
                     id=args.id,
                     scope=args.scope,
                     source=args.source,

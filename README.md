@@ -185,6 +185,8 @@ agora trust organization add --id example-org \
 agora trust organization sync --id example-org \
   --source https://trust.example.com/agora/BUNDLE.md --scope project
 agora trust organization sync --id example-org --scope project --apply
+agora trust organization rotate --id example-org \
+  --source ./ROOT-ROTATION.md --scope project --apply
 agora registry install --source https://catalog.example.com/INDEX.md \
   --version 1.0.0 --require-signature --scope user
 agora registry update --id team-catalog
@@ -221,6 +223,8 @@ Trusted public keys, rotations, and revocations can be persisted at user or proj
 [registry trust guide](docs/guides/registry-trust.md).
 Signed organization feeds synchronize those keys and revocations through preview-first,
 sequence-bound updates with a durable local history.
+Organization roots rotate through an explicitly applied declaration signed by both the outgoing and
+incoming roots and bound to the current feed position.
 Registry updates are preview-only unless `--apply` is passed, preserve provenance and history, and
 never update installed packs implicitly. See the
 [registry update guide](docs/guides/registry-updates.md).
@@ -766,9 +770,9 @@ mutation in a structured external lease while retaining the local operating-syst
   explicit update checks, transactional application, and dependency-aware installation are
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Signed organization trust synchronization and a locally verified feed history are implemented.
-  Root rotation, threshold signatures, third-party transparency proofs, and automatic background
-  pack updates are not. Aggregate update notifications and explicit audited batch application are
-  available for external schedulers.
+  Dual-signed organization root rotation is implemented. Threshold signatures, third-party
+  transparency proofs, and automatic background pack updates are not. Aggregate update
+  notifications and explicit audited batch application are available for external schedulers.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,

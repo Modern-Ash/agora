@@ -1,8 +1,9 @@
 # Organization trust sample
 
 This sample simulates an external organization publisher, pins only its Ed25519 public root in an
-Agora project, previews a signed trust bundle, and applies it. The resulting registry release key
-and exact bundle history are ordinary Markdown files.
+Agora project, applies a signed trust bundle, and rotates the organization root through a declaration
+signed by both roots. The resulting registry release key, bundle, and rotation history are ordinary
+Markdown files.
 
 Run it from the repository root:
 

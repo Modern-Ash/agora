@@ -10,11 +10,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from agora.model import (
     AddOrganizationTrustRootInput,
     InitInput,
+    RotateOrganizationTrustRootInput,
     SyncOrganizationTrustInput,
 )
 from agora.organization_trust import (
+    organization_trust_root_rotation_payload,
     organization_trust_signature_payload,
     render_organization_trust_bundle,
+    render_organization_trust_root_rotation,
 )
 from agora.workspace import AgoraWorkspace
 
@@ -93,11 +96,53 @@ def main() -> None:
             id="example-org", scope="project", source=str(bundle), apply=True
         )
     )
+    replacement_key = Ed25519PrivateKey.generate()
+    outgoing_public = organization_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    incoming_public = replacement_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    rotation_values = {
+        "organization": "example-org",
+        "rotation": 1,
+        "rotated_at": "2026-08-15T12:02:00Z",
+        "reason": "Scheduled root rotation",
+        "from_public_key": base64.b64encode(outgoing_public).decode(),
+        "from_fingerprint": hashlib.sha256(outgoing_public).hexdigest(),
+        "to_public_key": base64.b64encode(incoming_public).decode(),
+        "to_fingerprint": hashlib.sha256(incoming_public).hexdigest(),
+        "bundle_sequence": applied.sequence,
+        "bundle_sha256": applied.sha256,
+        "previous_rotation_sha256": None,
+    }
+    rotation_payload = organization_trust_root_rotation_payload(**rotation_values)
+    rotation_source = publisher / "ROOT-ROTATION.md"
+    rotation_source.write_text(
+        render_organization_trust_root_rotation(
+            **rotation_values,
+            old_signature=base64.b64encode(organization_key.sign(rotation_payload)).decode(),
+            new_signature=base64.b64encode(replacement_key.sign(rotation_payload)).decode(),
+        ),
+        encoding="utf-8",
+    )
+    rotation = agora.rotate_organization_trust_root(
+        RotateOrganizationTrustRootInput(
+            id="example-org",
+            scope="project",
+            source=str(rotation_source),
+            apply=True,
+        )
+    )
     assert agora.validate().ok
     print(f"Project: {project}")
     print(f"Preview: {preview.steps[0].action} {preview.steps[0].id}")
     print(f"Applied bundle: {applied.organization}/{applied.sequence}")
     print(f"History: {applied.history_path}")
+    print(f"Applied root rotation: {rotation.organization}/{rotation.rotation}")
+    print(f"Rotation history: {rotation.history_path}")
 
 
 if __name__ == "__main__":

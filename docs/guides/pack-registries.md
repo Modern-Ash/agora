@@ -117,8 +117,8 @@ Agora also accepts versioned remote indexes with mandatory checksums and optiona
 Ed25519 signatures. See [Remote registry releases](remote-registries.md). Dependency resolution is
 implemented for explicit pack installation; installed packs are never refreshed by a registry
 update. Signed organization trust and revocation feeds plus externally schedulable aggregate update
-notifications are implemented; root rotation, threshold trust, third-party transparency proofs, and
-automatic installed-pack updates remain future work. Local and project trust stores are described
-in [Registry trust stores](registry-trust.md).
+notifications and dual-signed root rotation are implemented; threshold trust, third-party
+transparency proofs, and automatic installed-pack updates remain future work. Local and project
+trust stores are described in [Registry trust stores](registry-trust.md).
 Explicit release checks and transactional application are described in
 [Registry updates](registry-updates.md).
