@@ -5,6 +5,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
 
 ## Start here
 
+- [Quickstart](guides/quickstart.md): initialize a project, create human and AI actors, and form a
+  method-derived swarm in one command, with optional external Ed25519 keys.
 - [Installation and customization](guides/installation-and-customization.md): install the CLI and
   tailor user, project, lifecycle, actor, template, and agent-environment scopes.
 - [Project upgrades](guides/project-upgrades.md): preview, apply, audit, and recover protocol

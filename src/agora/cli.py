@@ -58,6 +58,7 @@ from agora.model import (
     PrepareSessionInput,
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
+    QuickstartInput,
     RefreshPackLockInput,
     RemovePackInput,
     RevokeActorKeyInput,
@@ -137,6 +138,28 @@ def _build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--default-method", metavar="METHOD_ID")
     initialize.add_argument("--max-delegation-depth", type=int)
     initialize.add_argument("--force", action="store_true")
+
+    quickstart = commands.add_parser(
+        "quickstart",
+        help="Scaffold a runnable project: init, a human and an AI actor, a swarm, and roles",
+    )
+    quickstart.add_argument("--path")
+    quickstart.add_argument("--id", default="quickstart", help="Swarm id (default: quickstart)")
+    quickstart.add_argument("--objective", default="Deliver the objective")
+    quickstart.add_argument("--method", metavar="METHOD_ID")
+    quickstart.add_argument(
+        "--secure",
+        action="store_true",
+        help=(
+            "Require signed authentication for the created actors. Generates a local "
+            "Ed25519 keypair per actor for quickstart use; see docs/guides/"
+            "actor-authentication.md before relying on this for production actors."
+        ),
+    )
+    quickstart.add_argument(
+        "--key-dir",
+        help="External directory for quickstart keypairs (secure mode only)",
+    )
 
     commands.add_parser("doctor", help="Check environment prerequisites")
     commands.add_parser("status", help="Summarize operational project state")
@@ -944,6 +967,17 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 default_method=args.default_method,
                 max_delegation_depth=args.max_delegation_depth,
                 force=args.force,
+            )
+        )
+    if args.command == "quickstart":
+        return workspace.quickstart(
+            QuickstartInput(
+                swarm_id=args.id,
+                objective=args.objective,
+                method=args.method,
+                secure=args.secure,
+                path=args.path,
+                key_directory=args.key_dir,
             )
         )
     if args.command == "doctor":

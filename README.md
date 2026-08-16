@@ -81,7 +81,36 @@ Run the development checkout without a global installation:
 uv run agora --help
 ```
 
+## Quickstart
+
+Scaffold a runnable project in one command: it initializes `.agora`, registers a human
+actor and an AI actor, creates a swarm with the default method, and assigns every
+required role between the two.
+
+```bash
+cd my-project
+agora quickstart --objective "Ship the MVP"
+```
+
+By default the created actors are unauthenticated: no keys and no signing. Add `--secure` to require
+signed authentication for both actors. Quickstart then generates a local Ed25519 keypair per actor
+for exploration, keeping private keys outside `.agora`. Production actors should manage their own
+keys instead; see the
+[actor authentication guide](docs/guides/actor-authentication.md).
+
+```bash
+agora quickstart --objective "Ship the MVP" --secure
+agora quickstart --objective "Ship the MVP" --secure --key-dir ~/.my-team/dev-keys
+```
+
+Without `--key-dir`, the external key directory is
+`~/.config/agora-quickstart-keys/<project-hash>/`. The command reports its exact path. See the
+[quickstart guide](docs/guides/quickstart.md) for rerun, custom Method Pack, and security behavior.
+
 ## Configure and initialize
+
+The commands above are what `quickstart` runs for you. Use them directly for full control
+over integration, provider, actors, and roles:
 
 ```bash
 agora configure \

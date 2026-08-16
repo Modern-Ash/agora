@@ -15,6 +15,12 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+
 from agora.coordination import (
     ExternalLease,
     LeaseRunner,
@@ -150,6 +156,8 @@ from agora.model import (
     PrepareToolAuthorizationInput,
     PrepareWorkTransitionInput,
     ProjectConfiguration,
+    QuickstartInput,
+    QuickstartResult,
     RefreshPackLockInput,
     RegistryRecord,
     RegistrySourceRecord,
@@ -11343,6 +11351,156 @@ class AgoraWorkspace:
 
     def _timestamp(self) -> str:
         return self._now().astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+    def quickstart(self, data: QuickstartInput) -> QuickstartResult:
+        target = (self.cwd / (data.path or ".")).resolve()
+        project_path = target / ".agora" / "project.md"
+        if project_path.is_file():
+            project = self._load_project_configuration(target)
+        else:
+            project = self.initialize(InitInput(target=data.path, default_method=data.method))
+        self.cwd = target
+
+        method = data.method or project.default_method
+        root = target
+        contract = load_method_contract(root / ".agora" / "methods" / method)
+        assert_slug(data.swarm_id, "Swarm id")
+        if not data.objective.strip():
+            raise ValueError("Quickstart objective cannot be empty")
+
+        human_id = "owner"
+        ai_id = "agent"
+        reserved_paths = (
+            root / ".agora" / "actors" / f"{human_id}.md",
+            root / ".agora" / "actors" / f"{ai_id}.md",
+            root / ".agora" / "swarms" / data.swarm_id,
+        )
+        existing = next((path for path in reserved_paths if path.exists()), None)
+        if existing is not None:
+            raise FileExistsError(f"Quickstart target already exists: {existing}")
+        # First required role goes to the human actor; every other role goes to the
+        # AI actor, so the pair covers the whole method out of the box.
+        human_roles = contract.required_roles[:1]
+        ai_roles = contract.required_roles[1:] or contract.required_roles
+
+        def _role_capabilities(role_ids: list[str]) -> list[str]:
+            capabilities: list[str] = []
+            for role_id in role_ids:
+                attributes = read_markdown(
+                    root / ".agora" / "methods" / method / "roles" / f"{role_id}.md"
+                ).attributes
+                for capability in strings_attribute(attributes, "required-capabilities"):
+                    if capability not in capabilities:
+                        capabilities.append(capability)
+            return capabilities
+
+        human_key = ai_key = None
+        keys_dir: Path | None = None
+        if data.key_directory is not None and not data.secure:
+            raise ValueError("--key-dir requires secure quickstart mode")
+        if data.secure:
+            keys_dir = self._quickstart_key_directory(root, data.key_directory)
+            human_key = self._generate_quickstart_keypair(keys_dir, human_id)
+            ai_key = self._generate_quickstart_keypair(keys_dir, ai_id)
+
+        self.add_actor(
+            AddActorInput(
+                id=human_id,
+                name="Owner",
+                kind="human",
+                capabilities=_role_capabilities(human_roles),
+                scope="project",
+                public_key=human_key,
+                require_authentication=data.secure,
+            )
+        )
+        self.add_actor(
+            AddActorInput(
+                id=ai_id,
+                name="Agent",
+                kind="ai-agent",
+                capabilities=_role_capabilities(ai_roles),
+                scope="project",
+                public_key=ai_key,
+                require_authentication=data.secure,
+            )
+        )
+
+        swarm = self.create_swarm(
+            CreateSwarmInput(id=data.swarm_id, objective=data.objective, method=method)
+        )
+
+        assignments: dict[str, str] = {}
+        for role_id in contract.required_roles:
+            actor_id = human_id if role_id in human_roles else ai_id
+            swarm = self.assign_actor(
+                AssignActorInput(swarm_id=swarm.id, role_id=role_id, actor_id=actor_id)
+            )
+            assignments[role_id] = actor_id
+
+        return QuickstartResult(
+            project=project,
+            swarm=swarm,
+            human_actor=human_id,
+            ai_actor=ai_id,
+            assignments=assignments,
+            secure=data.secure,
+            key_directory=str(keys_dir) if keys_dir is not None else None,
+        )
+
+    @staticmethod
+    def _quickstart_key_directory(root: Path, configured: str | None) -> Path:
+        if configured is not None:
+            return Path(configured).expanduser().resolve()
+        project_digest = hashlib.sha256(str(root).encode()).hexdigest()[:16]
+        return Path.home() / ".config" / "agora-quickstart-keys" / project_digest
+
+    @staticmethod
+    def _generate_quickstart_keypair(keys_dir: Path, actor_id: str) -> str:
+        keys_dir.mkdir(parents=True, exist_ok=True)
+        keys_dir.chmod(0o700)
+        private_path = keys_dir / f"{actor_id}-private.pem"
+        public_path = keys_dir / f"{actor_id}-public.pem"
+        if private_path.exists() != public_path.exists():
+            raise FileExistsError(
+                f"Quickstart keypair is incomplete for actor {actor_id}: {keys_dir}"
+            )
+        if private_path.exists():
+            loaded_private = serialization.load_pem_private_key(
+                private_path.read_bytes(), password=None
+            )
+            loaded_public = serialization.load_pem_public_key(public_path.read_bytes())
+            if not isinstance(loaded_private, Ed25519PrivateKey) or not isinstance(
+                loaded_public, Ed25519PublicKey
+            ):
+                raise ValueError(f"Quickstart keypair must use Ed25519: {keys_dir}")
+            expected_public = loaded_private.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            actual_public = loaded_public.public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            if expected_public != actual_public:
+                raise ValueError(f"Quickstart keypair does not match for actor {actor_id}")
+            return str(public_path)
+        private_key = Ed25519PrivateKey.generate()
+        private_path.write_bytes(
+            private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        private_path.chmod(0o600)
+        public_path.write_bytes(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        return str(public_path)
 
 
 def _extract_section(body: str, heading: str) -> str:

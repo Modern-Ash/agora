@@ -1039,6 +1039,27 @@ class AssignActorInput:
 
 
 @dataclass(frozen=True)
+class QuickstartInput:
+    swarm_id: str = "quickstart"
+    objective: str = "Deliver the objective"
+    method: Method | None = None
+    secure: bool = False
+    path: str | None = None
+    key_directory: str | None = None
+
+
+@dataclass(frozen=True)
+class QuickstartResult:
+    project: ProjectConfiguration
+    swarm: SwarmRecord
+    human_actor: str
+    ai_actor: str
+    assignments: dict[str, str]
+    secure: bool
+    key_directory: str | None = None
+
+
+@dataclass(frozen=True)
 class PrepareActorAssignmentInput:
     action_id: str
     assignment: AssignActorInput

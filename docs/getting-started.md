@@ -19,6 +19,19 @@ agora --help
 
 During development, replace `agora` with `uv run agora` to execute the checkout directly.
 
+For a ready swarm using the selected Method Pack, the short path is:
+
+```bash
+mkdir payment-service
+cd payment-service
+agora quickstart --objective "Deliver the first governed increment"
+agora validate
+```
+
+This creates project-local `owner` and `agent` actors and assigns every required method role. Use
+`--secure` only for local authenticated exploration, or continue below for explicit production
+identity and runtime configuration. See [Quickstart](guides/quickstart.md).
+
 ## 2. Choose an agent environment and lifecycle
 
 Configure defaults once in `~/.agora/config.md`:
