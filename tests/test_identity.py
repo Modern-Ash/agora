@@ -77,6 +77,10 @@ def _authenticated_project(
 ) -> tuple[Path, AgoraWorkspace, Ed25519PrivateKey, list[list[str]]]:
     root = tmp_path / "project"
     root.mkdir()
+    for relative in ("delivery/signed-materials.md", "signed-specialists/result.md"):
+        artifact = root / relative
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("verified signed fixture\n", encoding="utf-8")
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(
         "agora.workspace.shutil.which",
@@ -1406,6 +1410,17 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
         )
     )
     sign_and_apply("approve-signed-child")
+    workspace.prepare_add_artifact(
+        PrepareArtifactInput(
+            id="add-parent-review-artifact",
+            swarm_id="signed-parent",
+            work_id="parent-contract",
+            actor_id="signed-specialist-swarm",
+            kind="review-record",
+            uri="agora://swarms/signed-parent/work/parent-contract/review",
+        )
+    )
+    sign_and_apply("add-parent-review-artifact")
     workspace.prepare_work_transition(
         PrepareWorkTransitionInput(
             id="complete-signed-child",
@@ -1438,6 +1453,7 @@ def test_signs_delegation_creation_acceptance_and_collection(tmp_path: Path, mon
             actor_id="facilitator",
             type="review",
             result="success",
+            artifact_refs=["agora://swarms/signed-parent/work/parent-contract/review"],
         )
     )
     sign_and_apply("change-parent-evidence")

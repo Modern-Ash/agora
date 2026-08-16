@@ -126,6 +126,25 @@ cd my-project
 agora quickstart --objective "Ship the MVP"
 ```
 
+For a non-empty repository, preflight it before creating any state, then bind quickstart to the
+expected base branch:
+
+```bash
+cd existing-service
+agora adopt --check --id payment-idempotency --base main
+agora quickstart \
+  --id payment-idempotency \
+  --base main \
+  --objective "Deliver payment idempotency"
+```
+
+The preflight is read-only. It rejects a dirty tree, detached or unexpected base branch, an existing
+`agora/<id>` branch, partial Agora state, reserved actor identities, an unavailable configured
+runtime, or Git ignore rules that would prevent `.agora` and the selected integration adapter from
+being persisted. Quickstart creates the feature branch before writing and rolls back its branch,
+generated files, actor state, and newly generated keys if any later step fails. Use `--allow-dirty`
+only after reviewing the reported changes.
+
 By default the created actors are unauthenticated: no keys and no signing. Add `--secure` to require
 signed authentication for both actors. Quickstart then generates a local Ed25519 keypair per actor
 for exploration, keeping private keys outside `.agora`. Production actors should manage their own
@@ -140,6 +159,8 @@ agora quickstart --objective "Ship the MVP" --secure --key-dir ~/.my-team/dev-ke
 Without `--key-dir`, the external key directory is
 `~/.config/agora-quickstart-keys/<project-hash>/`. The command reports its exact path. See the
 [quickstart guide](docs/guides/quickstart.md) for rerun, custom Method Pack, and security behavior.
+The fully executable [existing codebase feature pilot](samples/existing-codebase-feature/README.md)
+proves the preflight-to-completion path without an LLM or network account.
 
 Inspect the next role-authorized action, run non-human actors until Agora reaches human authority,
 then inspect the human inbox:

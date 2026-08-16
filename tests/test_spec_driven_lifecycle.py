@@ -20,6 +20,9 @@ from agora.workspace import AgoraWorkspace
 
 def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    specification = tmp_path / "docs" / "specs" / "increment.md"
+    specification.parent.mkdir(parents=True)
+    specification.write_text("# Increment specification\n", encoding="utf-8")
     workspace = AgoraWorkspace(cwd=tmp_path)
     workspace.configure(
         ConfigureInput(

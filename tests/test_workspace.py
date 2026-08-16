@@ -1,9 +1,12 @@
+import io
+import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from agora.cli import main
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
@@ -43,6 +46,10 @@ TIMESTAMP = datetime(2026, 8, 14, 12, tzinfo=UTC)
 def project(tmp_path: Path, monkeypatch) -> tuple[Path, AgoraWorkspace]:
     root = tmp_path / "project"
     root.mkdir()
+    for relative in ("src/agora/workspace.py", "specialists/result.md"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("verified fixture\n", encoding="utf-8")
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     return root, AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
 
@@ -83,6 +90,25 @@ def test_supports_filesystem_only_environments(
     git_check = next(item for item in workspace.doctor() if item.name == "git")
     assert git_check.ok is False
     assert git_check.detail == "filesystem-only mode"
+
+
+def test_doctor_fails_when_git_ignores_governance_state(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = tmp_path / "project"
+    root.mkdir()
+    subprocess.run(["git", "init", "--initial-branch", "main"], cwd=root, check=True)
+    (root / ".gitignore").write_text(".agora/\n", encoding="utf-8")
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    output = io.StringIO()
+
+    exit_code = main(["doctor"], cwd=root, stdout=output, stderr=io.StringIO())
+
+    assert exit_code == 1
+    report = json.loads(output.getvalue())
+    persistence = next(check for check in report["checks"] if check["name"] == "git-persistence")
+    assert persistence["ok"] is False
+    assert persistence["detail"].startswith("ignored: .agora/")
 
 
 def test_doctor_reports_native_runtime_availability(tmp_path: Path, monkeypatch) -> None:
@@ -415,6 +441,7 @@ def test_governs_human_ai_and_nested_swarm_actors(
     )
 
     assert completed.state == "completed"
+    assert workspace.validate().ok
     assert workspace.show_swarm("first-slice").status == "completed"
     work_root = root / ".agora" / "swarms" / "first-slice" / "work" / "bootstrap"
     assert "- [x] **installable:**" in (work_root / "WORK.md").read_text()
@@ -2088,6 +2115,15 @@ def test_enforces_environment_capabilities_role_scope_approvals_and_evidence(
     )
     with pytest.raises(PermissionError, match="requires successful work evidence"):
         workspace.invoke_tool(invocation)
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="developer",
+            kind="test-report",
+            uri="ci://builds/release/tests",
+        )
+    )
     workspace.add_evidence(
         AddEvidenceInput(
             swarm_id="delivery",
@@ -2095,6 +2131,7 @@ def test_enforces_environment_capabilities_role_scope_approvals_and_evidence(
             actor_id="facilitator",
             type="test-run",
             result="success",
+            artifact_refs=["ci://builds/release/tests"],
         )
     )
     prepared = workspace.invoke_tool(invocation)
@@ -3229,6 +3266,15 @@ def test_decomposes_work_and_requires_children_to_close(
             reason="The child is no longer required",
         )
     )
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="parent-work",
+            actor_id="developer",
+            kind="review-record",
+            uri="agora://swarms/delivery/work/child-work/review",
+        )
+    )
     workspace.add_evidence(
         AddEvidenceInput(
             swarm_id="delivery",
@@ -3236,6 +3282,7 @@ def test_decomposes_work_and_requires_children_to_close(
             actor_id="facilitator",
             type="review",
             result="success",
+            artifact_refs=["agora://swarms/delivery/work/child-work/review"],
         )
     )
     workspace.add_approval(
@@ -3257,7 +3304,81 @@ def test_decomposes_work_and_requires_children_to_close(
     )
 
     assert completed.state == "completed"
-    assert workspace.validate().ok
+
+
+def test_verifies_local_artifacts_and_binds_successful_evidence(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="verified-feature",
+            title="Verify repository evidence",
+            actor_id="owner",
+        )
+    )
+
+    with pytest.raises(FileNotFoundError, match="Repository artifact does not exist"):
+        workspace.add_artifact(
+            AddArtifactInput(
+                swarm_id="delivery",
+                work_id="verified-feature",
+                actor_id="developer",
+                kind="source-code",
+                uri="repo://src/missing.py",
+            )
+        )
+
+    artifact = root / "src" / "feature.py"
+    artifact.write_text("FEATURE = True\n", encoding="utf-8")
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="verified-feature",
+            actor_id="developer",
+            kind="source-code",
+            uri="repo://src/feature.py",
+        )
+    )
+    with pytest.raises(ValueError, match="requires at least one artifact"):
+        workspace.add_evidence(
+            AddEvidenceInput(
+                swarm_id="delivery",
+                work_id="verified-feature",
+                actor_id="facilitator",
+                type="test-run",
+                result="success",
+            )
+        )
+    with pytest.raises(ValueError, match="unregistered work artifacts"):
+        workspace.add_evidence(
+            AddEvidenceInput(
+                swarm_id="delivery",
+                work_id="verified-feature",
+                actor_id="facilitator",
+                type="test-run",
+                result="success",
+                artifact_refs=["ci://builds/unregistered/tests"],
+            )
+        )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="verified-feature",
+            actor_id="facilitator",
+            type="test-run",
+            result="success",
+            artifact_refs=["repo://src/feature.py"],
+        )
+    )
+    assert workspace.validate().ok is True
+
+    artifact.unlink()
+    report = workspace.validate()
+    assert report.ok is False
+    assert any(issue.code == "artifact.reference-invalid" for issue in report.issues)
 
 
 def _prepare_scrum_team(workspace: AgoraWorkspace) -> None:

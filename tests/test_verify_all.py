@@ -35,6 +35,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: distributed-coordination",
         "sample: environment-permissions",
         "sample: execution-boundaries",
+        "sample: existing-codebase-feature",
         "sample: gate-waivers",
         "sample: github-actions-cli",
         "sample: github-end-to-end",

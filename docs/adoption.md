@@ -8,16 +8,17 @@ reference.
 
 ```mermaid
 flowchart LR
-    A[Install Agora] --> B[Choose an agent integration]
-    B --> C[Configure user defaults]
-    C --> D[Initialize or quickstart a project]
-    D --> E[Review generated protocol]
-    E --> F[Run governed work]
-    F --> G[Validate and commit Markdown state]
-    G --> H[Add team policy and integrations]
+    A[Install Agora] --> B[Run the zero-config self-test]
+    B --> C[Choose an agent integration]
+    C --> D[Configure user defaults]
+    D --> E[Initialize or quickstart a project]
+    E --> F[Review generated protocol]
+    F --> G[Run governed work]
+    G --> H[Validate and commit Markdown state]
+    H --> I[Add team policy and integrations]
 ```
 
-You can complete the first seven steps locally. Jira, CI/CD, cloud, documentation systems, and
+You can complete the first eight steps locally. Jira, CI/CD, cloud, documentation systems, and
 remote registries remain optional adapters around the same filesystem protocol.
 
 ## 1. Install
@@ -36,7 +37,33 @@ Use `uv sync --extra dev` and prefix commands with `uv run` when contributing to
 [Installation and customization](guides/installation-and-customization.md) for editable installs,
 wheels, virtual environments, upgrades, and removal.
 
-## 2. Choose the execution environment
+## 2. Verify the installation
+
+Before selecting an LLM, configuring an integration, or creating a project, run:
+
+```bash
+agora self-test
+```
+
+```mermaid
+flowchart LR
+    S[agora self-test] --> M[3 bundled methods]
+    S --> A[Human, AI agent, and swarm]
+    M --> C[9 complete lifecycle cases]
+    A --> C
+    C --> V[24 valid role assignments]
+    C --> R[24 forbidden assignments rejected]
+    V --> OK[Installation confidence]
+    R --> OK
+```
+
+The command runs in temporary workspaces and needs no project, LLM, provider account, key, or
+repository. A successful JSON report and exit status `0` confirm that the installed distribution can
+govern all bundled roles through terminal work states. See the
+[Role conformance test harness](guides/self-test.md) for the complete visual walkthrough, CI usage,
+and assurance boundary.
+
+## 3. Choose the execution environment
 
 The integration controls where Agora places agent instructions. Provider and model remain opaque
 configuration labels; the Agora kernel does not import an LLM SDK.
@@ -79,7 +106,7 @@ Choose the initial Method Pack by the shape of the work:
 All three are replaceable examples. A custom Method Pack can define different roles, transitions,
 gates, and required artifacts without changing Agora's kernel.
 
-## 3. Start a project
+## 4. Start a project
 
 For the fastest useful workspace:
 
@@ -92,13 +119,49 @@ agora doctor
 agora validate
 ```
 
-Quickstart creates a project, one human actor, one AI actor, one swarm actor, a method-compatible
-swarm, and its assignments. The default mode stores no private keys. Add `--secure` when every actor
-should use an external Ed25519 identity from the beginning.
+Quickstart creates a project, one human actor, one AI actor, a method-compatible swarm, and its
+assignments. The default mode stores no private keys. Add `--secure` when every actor should use an
+external Ed25519 identity from the beginning.
 
 Use `agora init` instead when you want to register actors and form the swarm step by step.
 
-## 4. Review what Agora created
+### Adopt an existing codebase
+
+Start from the clean base branch that will receive the feature:
+
+```bash
+git status --short
+agora adopt --check --id payment-idempotency --base main
+agora quickstart \
+  --id payment-idempotency \
+  --base main \
+  --objective "Deliver payment idempotency"
+```
+
+```mermaid
+flowchart TD
+    A[Existing repository] --> B[Read-only adoption preflight]
+    B -->|fail| C[No files or branches changed]
+    B -->|pass| D[Create agora/id branch]
+    D --> E[Initialize project and actors]
+    E --> F[Create swarm and assign roles]
+    F -->|success| G[Persist reviewable Agora state]
+    E -->|failure| H[Restore files and external quickstart keys]
+    F -->|failure| H
+    H --> I[Return to original branch]
+    I --> J[Delete failed feature branch]
+```
+
+The preflight stops when `.agora` or the selected Codex/Claude projection is ignored, because work
+that cannot enter Git cannot provide durable collaboration history. It also catches dirty state,
+detached or unexpected branches, a colliding `agora/<id>` branch, partial initialization, reserved
+quickstart identities, and a missing configured runtime. `--allow-dirty` is an explicit exception
+for reviewed local changes; it does not bypass any other check.
+
+Run the [existing codebase feature pilot](../samples/existing-codebase-feature/README.md) to exercise
+this entire path against a non-empty repository without an LLM, network, or provider credentials.
+
+## 5. Review what Agora created
 
 ```mermaid
 flowchart TD
@@ -123,7 +186,7 @@ work. The files are reviewable project state, not generated cache.
 The complete distinction between documentation, templates, agent adapters, durable Agora records,
 and external work products is in [Documentation and artifact locations](reference/artifact-locations.md).
 
-## 5. Run the first governed work item
+## 6. Run the first governed work item
 
 The exact roles and state names come from the active Method Pack. A typical execution loop is:
 
@@ -156,7 +219,7 @@ agora start \
 Without `--launch`, this only writes `SESSION.md` and `CONTEXT.md`. With `--launch`, Agora delegates
 execution to the configured local runner while keeping lifecycle authority in the filesystem.
 
-## 6. Validate and share
+## 7. Validate and share
 
 ```bash
 agora status
@@ -212,6 +275,7 @@ flowchart LR
 | --- | --- |
 | Understand every generated directory | [Documentation and artifact locations](reference/artifact-locations.md) |
 | Customize installation and scopes | [Installation and customization](guides/installation-and-customization.md) |
+| Verify human, AI-agent, and swarm role conformance | [Role conformance test harness](guides/self-test.md) |
 | Run the complete manual first workflow | [Getting started](getting-started.md) |
 | Compare Codex, Claude, and generic runtimes | [LLM environments](guides/llm-environments.md) |
 | Deliver with Scrum roles and gates | [Scrum delivery](guides/scrum-delivery.md) |

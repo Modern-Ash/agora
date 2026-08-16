@@ -37,7 +37,42 @@ adapter is an error. An adapter without a portable command is reported as a warn
 environment packaging separate without allowing the governing instructions to diverge silently.
 
 `agora doctor` performs the faster availability check and reports the installed adapter count, for
-example `codex: 8/8 commands available`.
+example `codex: 8/8 commands available`. In a Git repository it also fails when ignore rules would
+prevent generated governance state from being committed.
+
+## Artifact and evidence integrity
+
+Successful evidence must reference at least one artifact already registered on the same work item.
+Agora rejects missing or duplicate references. A `repo://path/to/file` URI has stronger local
+semantics: it must be a portable path to a regular file inside the project both when registered and
+when evidence is recorded.
+
+```mermaid
+flowchart LR
+    A[Produce file or external result] --> B[Register artifact URI]
+    B --> C{URI scheme}
+    C -->|repo| D[Resolve inside project and require file]
+    C -->|ci, https, provider URI| E[Keep opaque provider reference]
+    D --> F[Record successful evidence]
+    E --> F
+    F --> G[Require reference registered on same work]
+    G --> H[validate rechecks local repository files]
+```
+
+For example:
+
+```bash
+agora artifact add \
+  --swarm delivery --work feature --by agent \
+  --kind test-report --uri repo://reports/feature-tests.txt
+agora evidence add \
+  --swarm delivery --work feature --by agent \
+  --type test-run --result success \
+  --artifact repo://reports/feature-tests.txt
+```
+
+External references remain provider-neutral because Agora does not dereference them. Their Tool Run,
+signature, approval, or provider snapshot supplies the stronger proof when policy requires it.
 
 ## Verify the complete repository
 
@@ -54,7 +89,7 @@ The runner continues through independent failures and returns status `1` if any 
 2. Python linting.
 3. The complete test suite.
 4. Local Markdown link validation.
-5. The bundled human, AI-agent, and swarm role conformance self-test.
+5. The bundled human, AI-agent, and swarm [role conformance test harness](self-test.md).
 6. Every `samples/*/run.py` scenario.
 7. Source and wheel distribution builds.
 

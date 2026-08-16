@@ -211,6 +211,9 @@ def main() -> None:
         )
     )
     sign_and_apply(criterion.id, "owner")
+    result_artifact = project / "specialists" / "result.md"
+    result_artifact.parent.mkdir(parents=True, exist_ok=True)
+    result_artifact.write_text("# Verified delegated result\n", encoding="utf-8")
     agora.add_artifact(
         AddArtifactInput(
             swarm_id="specialists",

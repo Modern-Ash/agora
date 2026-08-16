@@ -37,7 +37,17 @@ from agora.filesystem import (
     template_root,
     write_new,
 )
-from agora.git import create_branch, current_branch, is_git_repository
+from agora.git import (
+    create_branch,
+    current_branch,
+    delete_branch,
+    ignored_paths,
+    is_git_repository,
+    ref_exists,
+    repository_root,
+    switch_branch,
+    working_tree_changes,
+)
 from agora.identity import (
     actor_identity_from_pem,
     actor_key_from_actor,
@@ -89,6 +99,8 @@ from agora.model import (
     AddRegistryTrustKeyInput,
     AddTransparencyTrustKeyInput,
     AddUsageInput,
+    AdoptionInput,
+    AdoptionReport,
     ApplyLifecycleActionInput,
     ApplyPackUpdateAuditInput,
     ApprovalDelegationRecord,
@@ -471,6 +483,170 @@ class AgoraWorkspace:
             ),
         )
         return configuration
+
+    def check_adoption(self, data: AdoptionInput) -> AdoptionReport:
+        assert_slug(data.swarm_id, "Swarm id")
+        target = (self.cwd / (data.path or ".")).resolve()
+        initialized = (target / ".agora" / "project.md").is_file()
+        user = self._load_user_configuration()
+        if initialized:
+            configuration = self._load_project_configuration(target)
+            integration = configuration.integration
+            model = configuration.model
+        else:
+            integration = user.integration if user is not None else "generic"
+            model = user.model if user is not None else "configured-by-integration"
+
+        checks = [
+            DoctorCheck("target-exists", target.is_dir(), str(target)),
+            DoctorCheck(
+                "target-writable",
+                target.is_dir() and os.access(target, os.W_OK),
+                str(target),
+            ),
+        ]
+        partial_state = (target / ".agora").exists() and not initialized
+        checks.append(
+            DoctorCheck(
+                "partial-agora-state",
+                not partial_state,
+                "none" if not partial_state else str(target / ".agora"),
+            )
+        )
+
+        reserved_paths = [
+            target / ".agora" / "actors" / "owner.md",
+            target / ".agora" / "actors" / "agent.md",
+            target / ".agora" / "swarms" / data.swarm_id,
+        ]
+        collisions = [str(path.relative_to(target)) for path in reserved_paths if path.exists()]
+        checks.append(
+            DoctorCheck(
+                "reserved-identities",
+                not collisions,
+                "available" if not collisions else ", ".join(collisions),
+            )
+        )
+
+        git_enabled = is_git_repository(target) if target.is_dir() else False
+        branch = current_branch(target) if git_enabled else None
+        if git_enabled:
+            root = repository_root(target)
+            changes = working_tree_changes(target)
+            checks.extend(
+                [
+                    DoctorCheck("git-repository", True, str(root)),
+                    DoctorCheck("git-branch", branch != "detached", branch or "detached"),
+                    DoctorCheck(
+                        "git-base",
+                        data.base_branch is None or branch == data.base_branch,
+                        (
+                            branch
+                            if data.base_branch is None
+                            else f"expected={data.base_branch} actual={branch}"
+                        ),
+                    ),
+                    DoctorCheck(
+                        "git-clean",
+                        data.allow_dirty or not changes,
+                        "clean" if not changes else f"{len(changes)} change(s)",
+                    ),
+                ]
+            )
+            branch_name = f"agora/{data.swarm_id}"
+            branch_exists = ref_exists(target, f"refs/heads/{branch_name}") or ref_exists(
+                target, f"refs/remotes/origin/{branch_name}"
+            )
+            checks.append(
+                DoctorCheck(
+                    "git-target-branch",
+                    not branch_exists,
+                    "available" if not branch_exists else f"already exists: {branch_name}",
+                )
+            )
+            generated_paths = self._adoption_generated_paths(
+                target,
+                integration,
+                data.swarm_id,
+            )
+            ignored_relatives = ignored_paths(target, generated_paths)
+            ignored = [
+                str(path.relative_to(root))
+                for path in generated_paths
+                if str(path.relative_to(root)) in ignored_relatives
+            ]
+            checks.append(
+                DoctorCheck(
+                    "git-persistence",
+                    not ignored,
+                    (
+                        "generated state is trackable"
+                        if not ignored
+                        else self._ignored_paths_detail(ignored)
+                    ),
+                )
+            )
+        else:
+            checks.append(DoctorCheck("git-repository", False, "not a Git work tree"))
+
+        runtime_command = self._runtime_command(integration, None, model)
+        runtime_path = shutil.which(runtime_command[0]) if runtime_command else None
+        checks.append(
+            DoctorCheck(
+                "runtime",
+                not runtime_command or runtime_path is not None,
+                (
+                    "generic integration: provide --runner when launching"
+                    if not runtime_command
+                    else runtime_path or f"{runtime_command[0]} not found on PATH"
+                ),
+            )
+        )
+        return AdoptionReport(
+            ok=all(check.ok for check in checks),
+            target=str(target),
+            initialized=initialized,
+            git_repository=git_enabled,
+            branch=branch,
+            checks=checks,
+        )
+
+    def _adoption_generated_paths(
+        self,
+        target: Path,
+        integration: Integration,
+        swarm_id: str,
+    ) -> list[Path]:
+        root = template_root()
+        paths = {
+            target / ".agora" / "project.md",
+            target / ".agora" / "actors" / "owner.md",
+            target / ".agora" / "actors" / "agent.md",
+            target / ".agora" / "swarms" / swarm_id / "SWARM.md",
+        }
+        for source, destination in (
+            (root / "project", target / ".agora"),
+            (root / "methods", target / ".agora" / "methods"),
+            (root / "tools", target / ".agora" / "tools"),
+            (root / "commands", target / ".agora" / "commands"),
+        ):
+            paths.update(
+                destination / path.relative_to(source)
+                for path in source.rglob("*")
+                if path.is_file()
+            )
+        if integration != "generic":
+            paths.update(
+                self._integration_command_path(target, integration, path.stem)
+                for path in (root / "commands").glob("*.md")
+            )
+        return sorted(paths)
+
+    @staticmethod
+    def _ignored_paths_detail(paths: list[str]) -> str:
+        visible = ", ".join(paths[:5])
+        remaining = len(paths) - 5
+        return f"ignored: {visible}" + (f" (+{remaining} more)" if remaining else "")
 
     @_locked_mutation("project")
     def upgrade(self, data: UpgradeInput) -> UpgradeResult:
@@ -3871,6 +4047,9 @@ class AgoraWorkspace:
     def _validate_add_artifact(
         self, root: Path, data: AddArtifactInput
     ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
+        if not data.kind.strip():
+            raise ValueError("Artifact kind cannot be empty")
+        self._assert_artifact_reference(root, data.uri)
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "artifact.add")
         work = self._load_work(swarm, data.work_id)
@@ -3940,11 +4119,98 @@ class AgoraWorkspace:
     def _validate_add_evidence(
         self, root: Path, data: AddEvidenceInput
     ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
+        if not data.type.strip():
+            raise ValueError("Evidence type cannot be empty")
+        if data.result not in {"success", "failure"}:
+            raise ValueError(f"Unsupported evidence result: {data.result}")
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "evidence.add")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        references = [item.strip() for item in data.artifact_refs]
+        if any(not item for item in references):
+            raise ValueError("Evidence artifact references cannot be empty")
+        if len(references) != len(set(references)):
+            raise ValueError("Evidence artifact references must be unique")
+        if data.result == "success" and not references:
+            raise ValueError("Successful evidence requires at least one artifact reference")
+        registered = self._work_artifact_references(work)
+        missing = sorted(set(references) - registered)
+        if missing:
+            raise ValueError(
+                "Evidence references unregistered work artifacts: " + ", ".join(missing)
+            )
+        for reference in references:
+            self._assert_artifact_reference(root, reference)
         return swarm, actor, work
+
+    @staticmethod
+    def _work_artifact_references(work: WorkRecord) -> set[str]:
+        document = read_markdown(Path(work.path) / "artifacts.md")
+        rows = AgoraWorkspace._markdown_table_rows(
+            document.body,
+            ("Kind", "URI", "Produced by", "Timestamp"),
+        )
+        return {row[1] for row in rows}
+
+    @staticmethod
+    def _work_evidence_rows(work: WorkRecord) -> list[tuple[str, str, list[str]]]:
+        document = read_markdown(Path(work.path) / "evidence.md")
+        rows = AgoraWorkspace._markdown_table_rows(
+            document.body,
+            ("Type", "Result", "Artifact references", "Produced by", "Timestamp"),
+        )
+        return [
+            (
+                row[0],
+                row[1],
+                [] if row[2] == "none" else [item.strip() for item in row[2].split(", ")],
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _markdown_table_rows(body: str, headers: tuple[str, ...]) -> list[list[str]]:
+        lines = body.splitlines()
+        expected = [*headers]
+        for index, line in enumerate(lines):
+            columns = [item.strip() for item in line.strip().strip("|").split("|")]
+            if columns != expected:
+                continue
+            rows: list[list[str]] = []
+            for row in lines[index + 2 :]:
+                if not row.strip().startswith("|"):
+                    break
+                values = [item.strip() for item in row.strip().strip("|").split("|")]
+                if len(values) != len(headers):
+                    raise ValueError("Malformed canonical Markdown table row")
+                rows.append(values)
+            return rows
+        raise ValueError("Canonical Markdown table header is missing")
+
+    @staticmethod
+    def _assert_artifact_reference(root: Path, uri: str) -> None:
+        if not uri.strip():
+            raise ValueError("Artifact URI cannot be empty")
+        if not uri.startswith("repo://"):
+            return
+        value = uri.removeprefix("repo://")
+        if (
+            not value
+            or value.startswith("/")
+            or "\\" in value
+            or "?" in value
+            or "#" in value
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+        ):
+            raise ValueError(f"Repository artifact URI is not a portable file path: {uri}")
+        path = (root / value).resolve()
+        try:
+            path.relative_to(root.resolve())
+        except ValueError as error:
+            raise ValueError(f"Repository artifact escapes the project: {uri}") from error
+        if not path.is_file():
+            raise FileNotFoundError(f"Repository artifact does not exist: {uri} ({path})")
 
     def _apply_add_evidence(
         self,
@@ -8840,6 +9106,38 @@ class AgoraWorkspace:
                         path,
                         f"Satisfied criteria are not declared: {', '.join(unknown_criteria)}",
                     )
+                artifact_path = Path(work.path) / "artifacts.md"
+                evidence_path = Path(work.path) / "evidence.md"
+                try:
+                    artifact_references = self._work_artifact_references(work)
+                except ValueError as error:
+                    artifact_references = set()
+                    issue("artifact.table-invalid", artifact_path, str(error))
+                for reference in sorted(artifact_references):
+                    try:
+                        self._assert_artifact_reference(root, reference)
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("artifact.reference-invalid", artifact_path, str(error))
+                try:
+                    evidence_rows = self._work_evidence_rows(work)
+                except ValueError as error:
+                    evidence_rows = []
+                    issue("evidence.table-invalid", evidence_path, str(error))
+                for _, result, references in evidence_rows:
+                    if result == "success" and not references:
+                        issue(
+                            "evidence.reference-missing",
+                            evidence_path,
+                            "Successful evidence has no artifact reference",
+                        )
+                    missing_references = sorted(set(references) - artifact_references)
+                    if missing_references:
+                        issue(
+                            "evidence.artifact-unregistered",
+                            evidence_path,
+                            "Evidence references unregistered work artifacts: "
+                            + ", ".join(missing_references),
+                        )
                 if work.operational_status != "cancelled":
                     state_counts[work.state] = state_counts.get(work.state, 0) + 1
                 usage_totals: dict[str, int] = {}
@@ -10412,6 +10710,33 @@ class AgoraWorkspace:
                 True,
                 "generic integration: provide a structured --runner when launching",
             )
+        generated_paths = [path for path in agora.rglob("*") if path.is_file()]
+        if configuration.integration != "generic":
+            generated_paths.extend(self._integration_command_paths(root, configuration.integration))
+        git_root = repository_root(root) if git_enabled else None
+        ignored_relatives = ignored_paths(root, generated_paths) if git_enabled else set()
+        ignored_project_paths = (
+            [
+                str(path.relative_to(git_root))
+                for path in generated_paths
+                if str(path.relative_to(git_root)) in ignored_relatives
+            ]
+            if git_enabled
+            else []
+        )
+        persistence_check = DoctorCheck(
+            "git-persistence",
+            not ignored_project_paths,
+            (
+                "filesystem-only mode"
+                if not git_enabled
+                else (
+                    "generated state is trackable"
+                    if not ignored_project_paths
+                    else self._ignored_paths_detail(ignored_project_paths)
+                )
+            ),
+        )
         return [
             DoctorCheck("project", True, str(root)),
             DoctorCheck(
@@ -10446,6 +10771,7 @@ class AgoraWorkspace:
                 True,
                 f"maximum={configuration.max_delegation_depth}",
             ),
+            persistence_check,
             DoctorCheck(
                 "git",
                 git_enabled,
@@ -13110,20 +13436,112 @@ class AgoraWorkspace:
         return self._now().astimezone(UTC).isoformat().replace("+00:00", "Z")
 
     def quickstart(self, data: QuickstartInput) -> QuickstartResult:
+        original_cwd = self.cwd
         target = (self.cwd / (data.path or ".")).resolve()
-        project_path = target / ".agora" / "project.md"
-        if project_path.is_file():
-            project = self._load_project_configuration(target)
-        else:
-            project = self.initialize(InitInput(target=data.path, default_method=data.method))
-        self.cwd = target
-
-        method = data.method or project.default_method
-        root = target
-        contract = load_method_contract(root / ".agora" / "methods" / method)
+        target_existed = target.exists()
         assert_slug(data.swarm_id, "Swarm id")
         if not data.objective.strip():
             raise ValueError("Quickstart objective cannot be empty")
+        if data.key_directory is not None and not data.secure:
+            raise ValueError("--key-dir requires secure quickstart mode")
+
+        project_path = target / ".agora" / "project.md"
+        initialized = project_path.is_file()
+        git_enabled = target.is_dir() and is_git_repository(target)
+        previous_branch = current_branch(target) if git_enabled else None
+        branch = f"agora/{data.swarm_id}"
+        if git_enabled:
+            report = self.check_adoption(
+                AdoptionInput(
+                    path=data.path,
+                    swarm_id=data.swarm_id,
+                    base_branch=data.base_branch,
+                    allow_dirty=data.allow_dirty,
+                )
+            )
+            failed = [check for check in report.checks if not check.ok]
+            if failed:
+                detail = "; ".join(f"{check.name}: {check.detail}" for check in failed)
+                raise ValueError(f"Quickstart preflight failed: {detail}")
+
+        user = self._load_user_configuration()
+        integration = (
+            self._load_project_configuration(target).integration
+            if initialized
+            else (user.integration if user is not None else "generic")
+        )
+        generated_paths = self._quickstart_generated_paths(target, integration)
+        original_generated = {path for path in generated_paths if path.exists()}
+        keys_dir = (
+            self._quickstart_key_directory(target, data.key_directory) if data.secure else None
+        )
+        keys_dir_existed = keys_dir is not None and keys_dir.exists()
+        original_key_paths = (
+            {
+                path
+                for actor_id in ("owner", "agent")
+                for path in (
+                    keys_dir / f"{actor_id}-private.pem",
+                    keys_dir / f"{actor_id}-public.pem",
+                )
+                if path.exists()
+            }
+            if keys_dir is not None
+            else set()
+        )
+
+        with tempfile.TemporaryDirectory(prefix="agora-quickstart-") as temporary:
+            snapshot = Path(temporary) / ".agora"
+            if initialized:
+                shutil.copytree(target / ".agora", snapshot)
+            branch_created = False
+            try:
+                if git_enabled:
+                    create_branch(target, branch)
+                    branch_created = True
+                if initialized:
+                    project = self._load_project_configuration(target)
+                else:
+                    project = self.initialize(
+                        InitInput(target=data.path, default_method=data.method)
+                    )
+                self.cwd = target
+                return self._complete_quickstart(
+                    data,
+                    project,
+                    branch=branch,
+                    keys_dir=keys_dir,
+                )
+            except Exception:
+                self._rollback_quickstart_files(
+                    target,
+                    snapshot=snapshot if initialized else None,
+                    generated_paths=generated_paths,
+                    original_generated=original_generated,
+                    keys_dir=keys_dir,
+                    keys_dir_existed=keys_dir_existed,
+                    original_key_paths=original_key_paths,
+                )
+                if branch_created and previous_branch is not None:
+                    switch_branch(target, previous_branch)
+                    delete_branch(target, branch)
+                if not target_existed and target.exists():
+                    target.rmdir()
+                self.cwd = original_cwd
+                raise
+
+    def _complete_quickstart(
+        self,
+        data: QuickstartInput,
+        project: ProjectConfiguration,
+        *,
+        branch: str,
+        keys_dir: Path | None,
+    ) -> QuickstartResult:
+        root = self.cwd
+
+        method = data.method or project.default_method
+        contract = load_method_contract(root / ".agora" / "methods" / method)
 
         human_id = "owner"
         ai_id = "agent"
@@ -13152,11 +13570,8 @@ class AgoraWorkspace:
             return capabilities
 
         human_key = ai_key = None
-        keys_dir: Path | None = None
-        if data.key_directory is not None and not data.secure:
-            raise ValueError("--key-dir requires secure quickstart mode")
         if data.secure:
-            keys_dir = self._quickstart_key_directory(root, data.key_directory)
+            assert keys_dir is not None
             human_key = self._generate_quickstart_keypair(keys_dir, human_id)
             ai_key = self._generate_quickstart_keypair(keys_dir, ai_id)
 
@@ -13184,7 +13599,13 @@ class AgoraWorkspace:
         )
 
         swarm = self.create_swarm(
-            CreateSwarmInput(id=data.swarm_id, objective=data.objective, method=method)
+            CreateSwarmInput(
+                id=data.swarm_id,
+                objective=data.objective,
+                method=method,
+                branch=branch,
+                create_branch=False,
+            )
         )
 
         assignments: dict[str, str] = {}
@@ -13204,6 +13625,56 @@ class AgoraWorkspace:
             secure=data.secure,
             key_directory=str(keys_dir) if keys_dir is not None else None,
         )
+
+    def _quickstart_generated_paths(self, root: Path, integration: Integration) -> list[Path]:
+        paths = [root / ".agora"]
+        if integration != "generic":
+            paths.extend(
+                self._integration_command_path(root, integration, path.stem)
+                for path in (template_root() / "commands").glob("*.md")
+            )
+        return paths
+
+    @staticmethod
+    def _rollback_quickstart_files(
+        root: Path,
+        *,
+        snapshot: Path | None,
+        generated_paths: list[Path],
+        original_generated: set[Path],
+        keys_dir: Path | None,
+        keys_dir_existed: bool,
+        original_key_paths: set[Path],
+    ) -> None:
+        agora = root / ".agora"
+        if agora.exists():
+            shutil.rmtree(agora)
+        if snapshot is not None:
+            shutil.copytree(snapshot, agora)
+        for path in generated_paths:
+            if path == agora or path in original_generated or not path.exists():
+                continue
+            path.unlink()
+            AgoraWorkspace._remove_empty_parents(path.parent, root)
+        if keys_dir is not None:
+            for actor_id in ("owner", "agent"):
+                for path in (
+                    keys_dir / f"{actor_id}-private.pem",
+                    keys_dir / f"{actor_id}-public.pem",
+                ):
+                    if path not in original_key_paths and path.exists():
+                        path.unlink()
+            if not keys_dir_existed:
+                AgoraWorkspace._remove_empty_parents(keys_dir, keys_dir.parent)
+
+    @staticmethod
+    def _remove_empty_parents(path: Path, stop: Path) -> None:
+        while path != stop and path.exists():
+            try:
+                path.rmdir()
+            except OSError:
+                break
+            path = path.parent
 
     @staticmethod
     def _quickstart_key_directory(root: Path, configured: str | None) -> Path:

@@ -160,6 +160,9 @@ def _run_case(root: Path, method_id: str, actor_kind: str) -> dict[str, object]:
     work_actor = WorkActorInput(swarm_id=swarm.id, work_id=work.id, actor_id=actor_id)
     workspace.satisfy_criterion(work_actor, "verified")
     artifact_uri = "repo://self-test/spec.md"
+    artifact_path = project / "self-test" / "spec.md"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("# Verified self-test artifact\n", encoding="utf-8")
     workspace.add_artifact(
         AddArtifactInput(
             swarm_id=swarm.id,

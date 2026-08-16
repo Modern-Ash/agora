@@ -7,7 +7,7 @@ AI actor, creates a swarm, and assigns every required role declared by the selec
 ```mermaid
 flowchart TD
     Q[agora quickstart] --> I[Initialize project protocol]
-    I --> A[Create human, AI, and swarm actors]
+    I --> A[Create human and AI actors]
     A --> R[Read roles from active Method Pack]
     R --> S[Assign compatible actors]
     S --> V[Validate ready swarm]
@@ -83,10 +83,40 @@ sign, and verify governed operations.
 
 ## Existing projects and reruns
 
-Quickstart can use an initialized project when the reserved actor and swarm ids remain unused. It
-does not overwrite or silently reuse `owner`, `agent`, or the requested swarm. A collision fails
-before creating actors, so an existing identity cannot accidentally change security mode or inherit
-new capabilities.
+Run the read-only preflight before adopting a non-empty Git repository:
+
+```bash
+agora adopt --check --id delivery --base main
+agora quickstart \
+  --id delivery \
+  --base main \
+  --objective "Deliver the first governed feature"
+```
+
+The preflight reports every check as JSON and returns status `1` when the repository is not ready.
+It checks the current and target branches, working tree, partial state, reserved ids, configured
+runtime, and whether Git can persist `.agora` plus the selected integration projection.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Preflight
+    Preflight --> Unchanged: any check fails
+    Preflight --> FeatureBranch: all checks pass
+    FeatureBranch --> Materialize: create agora/id
+    Materialize --> Ready: actors, swarm, and assignments succeed
+    Materialize --> Rollback: any step fails
+    Rollback --> OriginalBranch
+    OriginalBranch --> Unchanged
+```
+
+Quickstart can also use an initialized project when the reserved actor and swarm ids remain unused.
+It does not overwrite or silently reuse `owner`, `agent`, or the requested swarm. On any failure it
+restores the prior `.agora` tree, removes only newly generated integration files and quickstart keys,
+switches back to the original branch, and deletes the failed branch. Existing product files and
+pre-existing external keys remain untouched.
+
+The default requires a clean working tree. `--allow-dirty` accepts reviewed local changes but does
+not bypass branch, persistence, identity, runtime, or partial-state checks.
 
 Use explicit commands when the project needs different actor ids, more actors, custom role
 allocation, user-scoped identities, runtime configuration, or production keys:
