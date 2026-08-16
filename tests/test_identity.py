@@ -14,6 +14,7 @@ from agora.model import (
     AddArtifactInput,
     AddEnvironmentInput,
     AddEvidenceInput,
+    AddUsageInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
@@ -47,6 +48,7 @@ from agora.model import (
     PrepareSessionAuthorizationInput,
     PrepareSessionInput,
     PrepareToolAuthorizationInput,
+    PrepareUsageInput,
     PrepareWorkTransitionInput,
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
@@ -2202,3 +2204,47 @@ def test_signs_session_launch_and_binds_its_materialized_context(
     report = workspace.validate()
     assert not report.ok
     assert any(issue.code == "session.invalid" for issue in report.issues)
+
+
+def test_signs_evidence_backed_usage_against_current_work_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    _create_authenticated_work(workspace, private_key, tmp_path)
+    usage = AddUsageInput(
+        id="model-call-1",
+        swarm_id="delivery",
+        work_id="signed-work",
+        actor_id="developer",
+        amounts={"tokens": 1200, "cost-cents": 8},
+        evidence_refs=["telemetry://provider/request-1"],
+    )
+
+    with pytest.raises(PermissionError, match="prepare usage.add"):
+        workspace.add_usage(usage)
+
+    action = workspace.prepare_add_usage(
+        PrepareUsageInput(action_id="record-model-usage", usage=usage)
+    )
+    assert action.action == "usage.add"
+    assert json.loads(action.parameters["amounts"]) == {
+        "cost-cents": 8,
+        "tokens": 1200,
+    }
+    payload = tmp_path / "record-model-usage.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(action_id=action.id, output=str(payload))
+    )
+    signature = tmp_path / "record-model-usage.sig"
+    signature.write_bytes(private_key.sign(payload.read_bytes()))
+
+    applied = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=action.id, signature=str(signature))
+    )
+    records = workspace.list_usage("delivery", "signed-work")
+
+    assert applied.status == "applied"
+    assert len(records) == 1
+    assert records[0].action_id == action.id
+    assert records[0].evidence_refs == ["telemetry://provider/request-1"]
+    assert workspace.validate().ok

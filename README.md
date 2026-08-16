@@ -52,7 +52,7 @@ Agora distribution
   tools/                Policy and installed Tool Packs
   artifacts/            Artifact catalog
   delegations/          Parent-to-child work contracts and collection state
-  swarms/               Durable work state
+  swarms/               Durable work state and evidence-backed usage ledgers
   actions/              Prepared and applied lifecycle mutation intents
   sessions/             Resolved runtimes and compiled execution context
   tool-runs/             Governed external invocations and results
@@ -825,9 +825,10 @@ mutation in a structured external lease while retaining the local operating-syst
   Terraform CLI adapters, plus partial AWS and Google Cloud inventory adapters.
 - Governed same-swarm work decomposition and provider-neutral delegation budgets are implemented;
   the selected human, agent, or swarm remains responsible for proposing useful child contracts and
-  external runtimes remain responsible for usage metering. Opt-in typed child artifact promotion is
-  implemented as a reference to the authoritative child record; Agora deliberately does not copy
-  opaque external bytes. Granular, evidence-backed Gate Waivers and single-use, work-scoped
+  external runtimes remain responsible for measuring usage. Agora provides an append-only,
+  evidence-backed usage ledger with cumulative budget enforcement. Opt-in typed child artifact
+  promotion is implemented as a reference to the authoritative child record; Agora deliberately
+  does not copy opaque external bytes. Granular, evidence-backed Gate Waivers and single-use, work-scoped
   Approval Delegation are implemented. Distributed coordination is available through an optional
   reviewed lease CLI; remote scheduling remains external. Local cross-process writer locks,
   explicit child work acceptance, interruption,

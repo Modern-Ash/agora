@@ -64,8 +64,10 @@ authoritative in the child and parent completion gates remain independent.
 
 A Delegation may carry provider-neutral integer budget limits. Acceptance copies those limits to
 the child work. Nested delegations may allocate only inherited dimensions, and non-rejected sibling
-allocations cannot exceed the parent work limit. Agora validates declared capacity; consumption
-evidence remains the responsibility of the selected runtime or external adapter.
+allocations cannot exceed the parent work limit. A Usage record attributes externally measured
+positive integer amounts to an actor and work item and cites authoritative evidence. Agora
+accumulates the append-only ledger against inherited limits; the selected runtime or reviewed
+adapter remains responsible for producing the measurement.
 
 The delegation contract may also map required child artifact kinds to parent kinds. Collection
 materializes typed `agora://` references to those child records. The reference is copied into parent
@@ -122,10 +124,10 @@ SHA-256 precondition. Supported kinds cover planned actor key rotations, indepen
 revocation and recovery, actor runtime updates, work transitions, work interruptions, approvals,
 handoffs, work creation, same-swarm decomposition and material records, session preparation, the
 complete delegation lifecycle, Approval Delegation, and granular Gate Waivers. Existing-work
-mutations cover the work projection, artifacts, evidence, approvals, and scoped approval authority
-on which the mutation
+mutations cover the work projection, artifacts, evidence, usage, approvals, and scoped approval
+authority on which the mutation
 depends. Work creation instead covers the swarm projection and binds the complete initial work
-definition. Criterion, artifact, and evidence parameters bind their exact durable values.
+definition. Criterion, artifact, evidence, and usage parameters bind their exact durable values.
 Interruption reasons are signed and successful actions link exactly to their `STATUS.md`. Approval
 parameters bind both the asserted role and durable note. A handoff instead covers the swarm
 assignment projection and optional referenced work while binding both actor identities, the role,

@@ -2424,6 +2424,7 @@ def test_lists_and_summarizes_operational_workspace_state(
         "delegations": 0,
         "sessions": 1,
         "tool-runs": 1,
+        "usage": 0,
     }
     assert status.swarm_statuses == {"ready": 1}
     assert status.work_states == {"specified": 1}

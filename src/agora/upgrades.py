@@ -330,7 +330,8 @@ def _migrate_0_2_0_to_0_3_0(
     mutations: list[_Mutation] = []
     warnings = [
         "Existing Method Pack roles and portable commands are preserved; review and adopt new "
-        "operational-loop and code-review capabilities explicitly where local policy requires it.",
+        "operational-loop, usage-accounting, and code-review capabilities explicitly where local "
+        "policy requires it.",
         "The code-review Tool Pack is not installed implicitly; use `agora pack install --kind "
         "tool --id code-review --scope project` after reviewing its capabilities.",
     ]

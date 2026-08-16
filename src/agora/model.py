@@ -204,6 +204,19 @@ class WorkRecord:
 
 
 @dataclass(frozen=True)
+class UsageRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    actor: str
+    amounts: dict[str, int]
+    evidence_refs: list[str]
+    created_at: str
+    path: str
+    action_id: str | None = None
+
+
+@dataclass(frozen=True)
 class GateWaiverRecord:
     id: str
     swarm_id: str
@@ -1511,6 +1524,19 @@ class PrepareArtifactInput(AddArtifactInput):
 @dataclass(frozen=True)
 class PrepareEvidenceInput(AddEvidenceInput):
     id: str = ""
+
+
+@dataclass(frozen=True)
+class AddUsageInput(WorkActorInput):
+    id: str
+    amounts: dict[str, int] = field(default_factory=dict)
+    evidence_refs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PrepareUsageInput:
+    action_id: str
+    usage: AddUsageInput
 
 
 @dataclass(frozen=True)

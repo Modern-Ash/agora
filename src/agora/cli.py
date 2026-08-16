@@ -18,6 +18,7 @@ from agora.model import (
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
     AddTransparencyTrustKeyInput,
+    AddUsageInput,
     ApplyLifecycleActionInput,
     ApplyPackUpdateAuditInput,
     AssignActorInput,
@@ -62,6 +63,7 @@ from agora.model import (
     PrepareSessionAuthorizationInput,
     PrepareSessionInput,
     PrepareToolAuthorizationInput,
+    PrepareUsageInput,
     PrepareWorkTransitionInput,
     QuickstartInput,
     RefreshPackLockInput,
@@ -980,6 +982,28 @@ def _build_parser() -> argparse.ArgumentParser:
     evidence_prepare.add_argument("--by", required=True)
     evidence_prepare.add_argument("--artifact", action="append", default=[])
 
+    usage = commands.add_parser(
+        "usage", help="Manage externally measured work usage"
+    ).add_subparsers(dest="usage_command", required=True)
+    usage_add = usage.add_parser("add", help="Append an evidence-backed usage record")
+    usage_add.add_argument("--id", required=True)
+    usage_add.add_argument("--swarm", required=True)
+    usage_add.add_argument("--work", required=True)
+    usage_add.add_argument("--by", required=True)
+    usage_add.add_argument("--amount", action="append", default=[], metavar="DIMENSION=VALUE")
+    usage_add.add_argument("--evidence", action="append", default=[])
+    usage_prepare = usage.add_parser("prepare", help="Prepare a signed usage intent")
+    usage_prepare.add_argument("--action-id", required=True)
+    usage_prepare.add_argument("--id", required=True)
+    usage_prepare.add_argument("--swarm", required=True)
+    usage_prepare.add_argument("--work", required=True)
+    usage_prepare.add_argument("--by", required=True)
+    usage_prepare.add_argument("--amount", action="append", default=[], metavar="DIMENSION=VALUE")
+    usage_prepare.add_argument("--evidence", action="append", default=[])
+    usage_list = usage.add_parser("list", help="List durable usage records")
+    usage_list.add_argument("--swarm", required=True)
+    usage_list.add_argument("--work", required=True)
+
     approval = commands.add_parser(
         "approval", help="Manage explicit work approvals"
     ).add_subparsers(dest="approval_command", required=True)
@@ -1896,6 +1920,22 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 artifact_refs=args.artifact,
             )
         )
+    if args.command == "usage" and args.usage_command in {"add", "prepare"}:
+        usage_input = AddUsageInput(
+            id=args.id,
+            swarm_id=args.swarm,
+            work_id=args.work,
+            actor_id=args.by,
+            amounts=_parse_usage_amounts(args.amount),
+            evidence_refs=args.evidence,
+        )
+        if args.usage_command == "prepare":
+            return workspace.prepare_add_usage(
+                PrepareUsageInput(action_id=args.action_id, usage=usage_input)
+            )
+        return workspace.add_usage(usage_input)
+    if args.command == "usage" and args.usage_command == "list":
+        return workspace.list_usage(args.swarm, args.work)
     if args.command == "approval" and args.approval_command == "add":
         return workspace.add_approval(
             AddApprovalInput(
@@ -2017,6 +2057,26 @@ def _parse_budget_limits(values: list[str]) -> dict[str, int] | None:
             raise ValueError(f'Delegation budget limit cannot be negative: "{value}"')
         limits[dimension] = limit
     return limits
+
+
+def _parse_usage_amounts(values: list[str]) -> dict[str, int]:
+    amounts: dict[str, int] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f'Invalid usage amount "{value}"; expected dimension=value')
+        dimension, raw_amount = value.split("=", 1)
+        if not dimension or not raw_amount:
+            raise ValueError(f'Invalid usage amount "{value}"; expected dimension=value')
+        if dimension in amounts:
+            raise ValueError(f"Duplicate usage dimension: {dimension}")
+        try:
+            amount = int(raw_amount)
+        except ValueError as error:
+            raise ValueError(f'Usage amount must be an integer: "{value}"') from error
+        if amount <= 0:
+            raise ValueError(f'Usage amount must be positive: "{value}"')
+        amounts[dimension] = amount
+    return amounts
 
 
 def _parse_artifact_promotions(values: list[str]) -> dict[str, str]:

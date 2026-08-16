@@ -78,7 +78,8 @@ do not exist as one static agent file in this repository.
 - [Governed handoffs](guides/handoffs.md): move a role between human, AI, service, or swarm actors.
 - [Recursive swarms](guides/recursive-swarms.md): link child swarms with cycle and depth limits.
 - [Delegated work](guides/delegated-work.md): propose, accept, execute, and collect child work.
-- [Delegation budgets](guides/delegation-budgets.md): propagate bounded provider-neutral limits.
+- [Delegation budgets](guides/delegation-budgets.md): propagate limits and record evidence-backed
+  provider-neutral usage.
 - [Delegated artifact promotion](guides/delegated-artifacts.md): promote typed child references
   without copying opaque product bytes.
 - [Work decomposition](guides/work-decomposition.md): create same-swarm child contracts and enforce

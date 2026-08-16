@@ -52,4 +52,6 @@
 - Treat Scrum and Kanban as bundled examples, never as privileged core workflows.
 - Preserve recursive swarm cycle checks and configured delegation depth.
 - Preserve explicit child-work acceptance and reference-based result collection across swarms.
+- Keep usage accounting provider-neutral, append-only, evidence-backed, and bounded by inherited
+  work budgets; external runtimes measure consumption and Agora validates submitted amounts.
 - Prefer small, reviewable changes and abstractions backed by a concrete lifecycle requirement.
