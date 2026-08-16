@@ -83,6 +83,7 @@ from agora.model import (
     AddEvidenceInput,
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
+    AddTransparencyTrustKeyInput,
     ApplyLifecycleActionInput,
     ApplyPackUpdateAuditInput,
     ApprovalDelegationRecord,
@@ -177,6 +178,7 @@ from agora.model import (
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
+    RevokeTransparencyTrustKeyInput,
     RotateActorKeyInput,
     RotateOrganizationTrustRootInput,
     SessionAuthorizationRecord,
@@ -194,6 +196,7 @@ from agora.model import (
     ToolRunRecord,
     ToolRuntimeProbe,
     TransitionWorkInput,
+    TransparencyTrustKeyRecord,
     UpdateCatalogPackInput,
     UpdateRegistryInput,
     UpgradeInput,
@@ -261,6 +264,12 @@ from agora.tools import (
     probe_tool_runtime,
     validate_operation_inputs,
     validate_tool_adapter_contract,
+)
+from agora.transparency import (
+    load_transparency_key,
+    render_transparency_key,
+    revoke_transparency_key,
+    transparency_key_from_pem,
 )
 from agora.trust import load_trust_key, render_trust_key, revoke_trust_key, trust_key_from_pem
 from agora.upgrades import (
@@ -1118,6 +1127,74 @@ class AgoraWorkspace:
         )
         atomic_write(path, render_trust_key(revoked))
         return load_trust_key(path, data.scope)
+
+    @_locked_mutation("scoped")
+    def add_transparency_trust_key(
+        self, data: AddTransparencyTrustKeyInput
+    ) -> TransparencyTrustKeyRecord:
+        assert_slug(data.id, "Transparency trust key id")
+        assert_slug(data.log, "Transparency log id")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        destination = root / "trust" / "transparency" / f"{data.id}.md"
+        if destination.exists():
+            raise FileExistsError(
+                f"Transparency trust key already exists: {destination}. Rotate with a new key id."
+            )
+        record = transparency_key_from_pem(
+            id_=data.id,
+            log=data.log,
+            public_key_path=Path(data.public_key).expanduser().resolve(),
+            scope=data.scope,
+            path=destination,
+            created_at=self._timestamp(),
+        )
+        atomic_write(destination, render_transparency_key(record))
+        return load_transparency_key(destination, data.scope)
+
+    def list_transparency_trust_keys(
+        self, log: str | None = None
+    ) -> list[TransparencyTrustKeyRecord]:
+        if log is not None:
+            assert_slug(log, "Transparency log id")
+        records: list[TransparencyTrustKeyRecord] = []
+        project = self._optional_project_root()
+        if project is not None:
+            records.extend(
+                self._transparency_keys_at(project / ".agora" / "trust" / "transparency", "project")
+            )
+        records.extend(self._transparency_keys_at(agora_home() / "trust" / "transparency", "user"))
+        return [item for item in records if log is None or item.log == log]
+
+    @_locked_mutation("scoped")
+    def revoke_transparency_trust_key(
+        self, data: RevokeTransparencyTrustKeyInput
+    ) -> TransparencyTrustKeyRecord:
+        assert_slug(data.id, "Transparency trust key id")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        path = root / "trust" / "transparency" / f"{data.id}.md"
+        if not path.is_file():
+            raise FileNotFoundError(f"Transparency trust key not found: {path}")
+        record = load_transparency_key(path, data.scope)
+        if data.replaced_by is not None:
+            assert_slug(data.replaced_by, "Replacement transparency trust key id")
+            replacement_path = path.with_name(f"{data.replaced_by}.md")
+            if not replacement_path.is_file():
+                raise FileNotFoundError(
+                    f"Replacement transparency trust key not found: {replacement_path}"
+                )
+            replacement = load_transparency_key(replacement_path, data.scope)
+            if replacement.log != record.log or replacement.status != "active":
+                raise ValueError(
+                    "Replacement transparency trust key must be active for the same log"
+                )
+        revoked = revoke_transparency_key(
+            record,
+            revoked_at=self._timestamp(),
+            reason=data.reason,
+            replaced_by=data.replaced_by,
+        )
+        atomic_write(path, render_transparency_key(revoked))
+        return load_transparency_key(path, data.scope)
 
     @_locked_mutation("scoped")
     def add_organization_trust_root(
@@ -6929,6 +7006,7 @@ class AgoraWorkspace:
             "pack-update-audits": 0,
             "pack-update-audit-applications": 0,
             "trust-keys": 0,
+            "transparency-trust-keys": 0,
             "organization-trust-roots": 0,
             "organization-trust-bundles": 0,
             "organization-trust-root-rotations": 0,
@@ -7115,6 +7193,39 @@ class AgoraWorkspace:
                     "trust-key.replacement-invalid",
                     Path(record.path),
                     "Replacement registry trust key must be active for the same registry",
+                )
+        transparency_keys: dict[str, TransparencyTrustKeyRecord] = {}
+        for path in sorted((root / ".agora" / "trust" / "transparency").glob("*.md")):
+            record = inspect(
+                "transparency-trust-keys",
+                "transparency-trust-key.invalid",
+                path,
+                lambda path=path: load_transparency_key(path, "project"),
+            )
+            if not isinstance(record, TransparencyTrustKeyRecord):
+                continue
+            transparency_keys[record.id] = record
+            if record.id != path.stem:
+                issue(
+                    "transparency-trust-key.id-mismatch",
+                    path,
+                    f"Transparency trust key id {record.id} does not match file {path.name}",
+                )
+        for record in transparency_keys.values():
+            if record.replaced_by is None:
+                continue
+            replacement = transparency_keys.get(record.replaced_by)
+            if replacement is None:
+                issue(
+                    "transparency-trust-key.replacement-missing",
+                    Path(record.path),
+                    f"Replacement transparency trust key does not exist: {record.replaced_by}",
+                )
+            elif replacement.log != record.log or replacement.status != "active":
+                issue(
+                    "transparency-trust-key.replacement-invalid",
+                    Path(record.path),
+                    "Replacement transparency trust key must be active for the same log",
                 )
         for directory in _child_directories(root / ".agora" / "trust" / "organizations"):
             root_path = directory / "ROOT.md"
@@ -9522,6 +9633,12 @@ class AgoraWorkspace:
         if not root.exists():
             return []
         return [load_trust_key(path, scope) for path in sorted(root.glob("*.md"))]
+
+    @staticmethod
+    def _transparency_keys_at(root: Path, scope: str) -> list[TransparencyTrustKeyRecord]:
+        if not root.exists():
+            return []
+        return [load_transparency_key(path, scope) for path in sorted(root.glob("*.md"))]
 
     def _load_user_configuration(self) -> UserConfiguration | None:
         path = agora_home() / "config.md"

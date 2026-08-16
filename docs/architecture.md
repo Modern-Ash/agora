@@ -94,6 +94,9 @@ outgoing and incoming roots, bound to the applied bundle position and previous r
 Historical bundles remain verified against their active root epoch. Private root keys remain
 external.
 
+Transparency log checkpoint keys live in a separate public-only trust store with independent
+rotation and revocation history. Their authority cannot satisfy a registry release signature.
+
 Registry updates are read-only plans unless application is explicit. Update staging carries forward
 installer-owned history, adds the next transition record, validates the complete candidate, and only
 then replaces the installed snapshot. Registry updates never mutate separately installed packs.

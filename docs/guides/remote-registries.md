@@ -153,7 +153,8 @@ directory. Removed files do not leak from an older release into a newer verified
 Agora manages local and project trust keys, rotations, revocations, and signed sequential
 organization trust feeds. Organization roots rotate through dual-signed, feed-bound declarations.
 Agora enforces distinct-key signature thresholds for registry releases. It does not yet verify
-third-party transparency-log proofs. The index is a distribution convenience; installed filesystem
+third-party transparency-log proofs, although their checkpoint authorities now have a separate
+rotatable and revocable trust store. The index is a distribution convenience; installed filesystem
 state remains the governed operational record.
 
 Use [Registry updates](registry-updates.md) to check and apply later releases without replacing packs

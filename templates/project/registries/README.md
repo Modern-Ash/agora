@@ -19,3 +19,6 @@ Agora binds the transaction to the audit checksum, current pack trees, and depen
 
 Organization trust roots rotate only through a declaration signed by both roots and bound to the
 current feed position. Preview it with `agora trust organization rotate` before passing `--apply`.
+
+Transparency checkpoint keys belong under `../trust/transparency/`, separate from registry release
+keys. Manage them with `agora trust transparency` so rotation and revocation remain auditable.

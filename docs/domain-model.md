@@ -304,6 +304,10 @@ A registry trust key authorizes one Ed25519 public key id for one registry. Its 
 fingerprint, active or revoked status, and optional replacement are durable Markdown. Rotation adds a
 new identity before revoking the previous identity; it never overwrites key history.
 
+A transparency trust key authorizes only signed checkpoints for one external log. It has the same
+scoped, append-by-new-id rotation and durable revocation properties as release trust, but resides in
+a separate namespace and grants no registry release authority.
+
 An organization trust root verifies a sequential feed of registry trust keys and revocations. A
 root rotation is an immutable, dual-signed transition that binds both public roots to the current
 feed checksum and previous rotation. `ROOT.md` retains the initial public anchor plus current state;

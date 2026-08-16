@@ -187,6 +187,8 @@ agora trust organization sync --id example-org \
 agora trust organization sync --id example-org --scope project --apply
 agora trust organization rotate --id example-org \
   --source ./ROOT-ROTATION.md --scope project --apply
+agora trust transparency add --id rekor-2026 --log rekor-public \
+  --public-key ./rekor-public.pem --scope project
 agora registry install --source https://catalog.example.com/INDEX.md \
   --version 1.0.0 --signature-threshold 2 --scope user
 agora registry update --id team-catalog
@@ -221,6 +223,8 @@ Agora persists their signer evidence and policy beside the installed snapshot. S
 [remote registry guide](docs/guides/remote-registries.md).
 Trusted public keys, rotations, and revocations can be persisted at user or project scope. See the
 [registry trust guide](docs/guides/registry-trust.md).
+Transparency checkpoint keys use a separate scoped trust store, so they cannot authorize registry
+releases.
 Signed organization feeds synchronize those keys and revocations through preview-first,
 sequence-bound updates with a durable local history.
 Organization roots rotate through an explicitly applied declaration signed by both the outgoing and

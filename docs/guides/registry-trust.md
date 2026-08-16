@@ -233,6 +233,24 @@ replacement, requires the first transition to match the immutable initial public
 `ROOT.md`, and requires the final transition to equal its active root. Private keys and signing
 remain outside Agora.
 
+## Transparency log authorities
+
+Pin checkpoint keys independently from registry release signers:
+
+```bash
+agora trust transparency add \
+  --id rekor-2026 \
+  --log rekor-public \
+  --public-key ./rekor-public.pem \
+  --scope project
+```
+
+Use `trust transparency list --log rekor-public` to inspect them. Rotation adds the replacement
+first, then revokes the previous id with `trust transparency revoke --replaced-by <id>`. Agora
+requires the replacement to be active for the same log. Project validation checks fingerprints,
+locations, status, and replacement continuity. These keys are stored under
+`.agora/trust/transparency/` and cannot verify registry release signatures.
+
 ## Current boundary
 
 Agora supports one active Ed25519 organization root, dual-signed sequential root rotation, and

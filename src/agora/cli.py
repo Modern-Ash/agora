@@ -15,6 +15,7 @@ from agora.model import (
     AddEvidenceInput,
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
+    AddTransparencyTrustKeyInput,
     ApplyLifecycleActionInput,
     ApplyPackUpdateAuditInput,
     AssignActorInput,
@@ -66,6 +67,7 @@ from agora.model import (
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
+    RevokeTransparencyTrustKeyInput,
     RotateActorKeyInput,
     RotateOrganizationTrustRootInput,
     SetActorRuntimeInput,
@@ -270,6 +272,25 @@ def _build_parser() -> argparse.ArgumentParser:
     trust_revoke.add_argument("--scope", choices=("user", "project"), default="user")
     trust_revoke.add_argument("--reason", required=True)
     trust_revoke.add_argument("--replaced-by")
+    trust_transparency = trust.add_parser(
+        "transparency", help="Manage independent transparency log checkpoint keys"
+    ).add_subparsers(dest="transparency_trust_command", required=True)
+    transparency_add = trust_transparency.add_parser(
+        "add", help="Trust an Ed25519 transparency log checkpoint key"
+    )
+    transparency_add.add_argument("--id", required=True)
+    transparency_add.add_argument("--log", required=True)
+    transparency_add.add_argument("--public-key", required=True)
+    transparency_add.add_argument("--scope", choices=("user", "project"), default="user")
+    transparency_list = trust_transparency.add_parser("list", help="List transparency log keys")
+    transparency_list.add_argument("--log")
+    transparency_revoke = trust_transparency.add_parser(
+        "revoke", help="Revoke a transparency log checkpoint key"
+    )
+    transparency_revoke.add_argument("--id", required=True)
+    transparency_revoke.add_argument("--scope", choices=("user", "project"), default="user")
+    transparency_revoke.add_argument("--reason", required=True)
+    transparency_revoke.add_argument("--replaced-by")
     trust_organization = trust.add_parser(
         "organization", help="Manage signed organization trust feeds"
     ).add_subparsers(dest="organization_trust_command", required=True)
@@ -1080,6 +1101,27 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 replaced_by=args.replaced_by,
             )
         )
+    if args.command == "trust" and args.trust_command == "transparency":
+        if args.transparency_trust_command == "add":
+            return workspace.add_transparency_trust_key(
+                AddTransparencyTrustKeyInput(
+                    id=args.id,
+                    log=args.log,
+                    public_key=args.public_key,
+                    scope=args.scope,
+                )
+            )
+        if args.transparency_trust_command == "list":
+            return workspace.list_transparency_trust_keys(args.log)
+        if args.transparency_trust_command == "revoke":
+            return workspace.revoke_transparency_trust_key(
+                RevokeTransparencyTrustKeyInput(
+                    id=args.id,
+                    scope=args.scope,
+                    reason=args.reason,
+                    replaced_by=args.replaced_by,
+                )
+            )
     if args.command == "trust" and args.trust_command == "organization":
         if args.organization_trust_command == "add":
             return workspace.add_organization_trust_root(

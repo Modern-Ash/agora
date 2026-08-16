@@ -455,6 +455,22 @@ class RegistryTrustKeyRecord:
 
 
 @dataclass(frozen=True)
+class TransparencyTrustKeyRecord:
+    id: str
+    log: str
+    algorithm: Literal["ed25519"]
+    public_key: str
+    fingerprint: str
+    status: Literal["active", "revoked"]
+    scope: Literal["user", "project"]
+    path: str
+    created_at: str
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
+    replaced_by: str | None = None
+
+
+@dataclass(frozen=True)
 class OrganizationTrustRootRecord:
     id: str
     algorithm: Literal["ed25519"]
@@ -954,6 +970,22 @@ class AddRegistryTrustKeyInput:
     registry_id: str
     public_key: str
     scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class AddTransparencyTrustKeyInput:
+    id: str
+    log: str
+    public_key: str
+    scope: Literal["user", "project"]
+
+
+@dataclass(frozen=True)
+class RevokeTransparencyTrustKeyInput:
+    id: str
+    scope: Literal["user", "project"]
+    reason: str
+    replaced_by: str | None = None
 
 
 @dataclass(frozen=True)
