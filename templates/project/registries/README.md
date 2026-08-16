@@ -7,6 +7,9 @@ Use `agora registry audit --scope project` for an authenticated aggregate update
 `--record` to persist a reviewable notification under `../notifications/registry-updates/`; audits
 never apply registry or installed-pack updates.
 
+For production catalogs, `--signature-threshold N` requires N distinct active trusted public-key
+fingerprints. Agora persists that minimum and will not allow later updates to lower it.
+
 After updating a registry snapshot, use `agora pack audit --scope project` to inspect every managed
 pack. Its optional report lives under `../notifications/pack-updates/` and never authorizes
 application.

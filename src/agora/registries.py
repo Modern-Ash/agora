@@ -74,12 +74,18 @@ def load_registry(root: Path, scope: str) -> RegistryRecord:
             raise ValueError(f"Registry update version history is discontinuous: {current.path}")
         if previous.to_sha256 != current.from_sha256:
             raise ValueError(f"Registry update checksum history is discontinuous: {current.path}")
+        if current.signature_threshold < previous.signature_threshold:
+            raise ValueError(f"Registry update signature threshold decreased: {current.path}")
     if updates:
         if provenance is None or version is None:
             raise ValueError(f"Registry update history requires remote provenance: {root}")
         latest = updates[-1]
         if latest.to_version != version or latest.to_sha256 != provenance.sha256:
             raise ValueError(f"Registry update history does not match current provenance: {root}")
+        if latest.signature_threshold != provenance.signature_threshold:
+            raise ValueError(
+                f"Registry update signature threshold does not match provenance: {root}"
+            )
     return _registry_record(
         id_=id_,
         name=name,
@@ -111,6 +117,32 @@ def read_registry_source(path: Path) -> RegistrySourceRecord:
         raise ValueError(f"Verified registry source requires key-id: {path}")
     if key_id is not None:
         assert_slug(key_id, "Registry source key id")
+    raw_verified_key_ids = attributes.get("verified-key-ids")
+    if raw_verified_key_ids is None:
+        verified_key_ids = [key_id] if verified and key_id is not None else []
+    elif not isinstance(raw_verified_key_ids, list) or any(
+        not isinstance(item, str) for item in raw_verified_key_ids
+    ):
+        raise ValueError(f"Registry source verified-key-ids must be an array: {path}")
+    else:
+        verified_key_ids = raw_verified_key_ids
+    if len(verified_key_ids) != len(set(verified_key_ids)):
+        raise ValueError(f"Registry source verified-key-ids contains duplicates: {path}")
+    for verified_key_id in verified_key_ids:
+        assert_slug(verified_key_id, "Registry source verified key id")
+    signature_threshold = attributes.get("signature-threshold")
+    if signature_threshold is None:
+        signature_threshold = 1 if verified else 0
+    if (
+        not isinstance(signature_threshold, int)
+        or isinstance(signature_threshold, bool)
+        or signature_threshold < 0
+        or (raw_verified_key_ids is not None and signature_threshold > len(verified_key_ids))
+        or verified != bool(verified_key_ids)
+        or (verified and signature_threshold < 1)
+        or (not verified and signature_threshold != 0)
+    ):
+        raise ValueError(f"Registry source signature threshold is invalid: {path}")
     installed_at = string_attribute(attributes, "installed-at")
     return RegistrySourceRecord(
         registry=registry,
@@ -121,6 +153,8 @@ def read_registry_source(path: Path) -> RegistrySourceRecord:
         signature_verified=verified,
         key_id=key_id,
         installed_at=installed_at,
+        verified_key_ids=verified_key_ids,
+        signature_threshold=signature_threshold,
     )
 
 
@@ -136,6 +170,8 @@ def render_registry_source(record: RegistrySourceRecord) -> str:
                 "sha256": record.sha256,
                 "signature-verified": record.signature_verified,
                 "key-id": record.key_id,
+                "verified-key-ids": record.verified_key_ids,
+                "signature-threshold": record.signature_threshold,
                 "installed-at": record.installed_at,
             },
             body=(
@@ -169,6 +205,31 @@ def read_registry_update(path: Path) -> RegistryUpdateRecord:
     if not isinstance(signature_verified, bool):
         raise ValueError(f"Registry update signature-verified must be boolean: {path}")
     applied_at = string_attribute(attributes, "applied-at")
+    raw_verified_key_ids = attributes.get("verified-key-ids")
+    if raw_verified_key_ids is None:
+        verified_key_ids: list[str] = []
+        signature_threshold = 1 if signature_verified else 0
+    elif not isinstance(raw_verified_key_ids, list) or any(
+        not isinstance(item, str) for item in raw_verified_key_ids
+    ):
+        raise ValueError(f"Registry update verified-key-ids must be an array: {path}")
+    else:
+        verified_key_ids = raw_verified_key_ids
+        signature_threshold = attributes.get("signature-threshold")
+    if len(verified_key_ids) != len(set(verified_key_ids)):
+        raise ValueError(f"Registry update verified-key-ids contains duplicates: {path}")
+    for verified_key_id in verified_key_ids:
+        assert_slug(verified_key_id, "Registry update verified key id")
+    if (
+        not isinstance(signature_threshold, int)
+        or isinstance(signature_threshold, bool)
+        or signature_threshold < 0
+        or (raw_verified_key_ids is not None and signature_threshold > len(verified_key_ids))
+        or (raw_verified_key_ids is not None and signature_verified != bool(verified_key_ids))
+        or (signature_verified and signature_threshold < 1)
+        or (not signature_verified and signature_threshold != 0)
+    ):
+        raise ValueError(f"Registry update signature threshold is invalid: {path}")
     return RegistryUpdateRecord(
         id=id_,
         registry=registry,
@@ -180,6 +241,8 @@ def read_registry_update(path: Path) -> RegistryUpdateRecord:
         signature_verified=signature_verified,
         applied_at=applied_at,
         path=str(path),
+        verified_key_ids=verified_key_ids,
+        signature_threshold=signature_threshold,
     )
 
 
@@ -196,6 +259,8 @@ def render_registry_update(record: RegistryUpdateRecord) -> str:
                 "to-sha256": record.to_sha256,
                 "index": record.index,
                 "signature-verified": record.signature_verified,
+                "verified-key-ids": record.verified_key_ids,
+                "signature-threshold": record.signature_threshold,
                 "applied-at": record.applied_at,
             },
             body=(
@@ -387,6 +452,8 @@ def _registry_record(
         source=provenance.index if provenance else None,
         checksum=provenance.sha256 if provenance else None,
         signature_verified=provenance.signature_verified if provenance else False,
+        verified_key_ids=provenance.verified_key_ids if provenance else [],
+        signature_threshold=provenance.signature_threshold if provenance else 0,
     )
 
 

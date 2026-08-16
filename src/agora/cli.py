@@ -221,6 +221,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Reject a remote release unless its Ed25519 signature verifies",
     )
     registry_install.add_argument(
+        "--signature-threshold",
+        type=int,
+        default=0,
+        help="Require this many distinct trusted release signatures",
+    )
+    registry_install.add_argument(
         "--allow-insecure-http",
         action="store_true",
         help="Permit HTTP for an explicitly trusted development registry",
@@ -234,6 +240,11 @@ def _build_parser() -> argparse.ArgumentParser:
     registry_update.add_argument("--version", help="Target release version (default: latest)")
     registry_update.add_argument("--public-key", help="Explicit trusted Ed25519 public key")
     registry_update.add_argument("--require-signature", action="store_true")
+    registry_update.add_argument(
+        "--signature-threshold",
+        type=int,
+        help="Raise the persisted minimum number of trusted release signatures",
+    )
     registry_update.add_argument("--allow-insecure-http", action="store_true")
     registry_update.add_argument("--apply", action="store_true")
     registry_audit = registry.add_parser(
@@ -1022,6 +1033,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 version=args.version,
                 public_key=args.public_key,
                 require_signature=args.require_signature,
+                signature_threshold=args.signature_threshold,
                 allow_insecure_http=args.allow_insecure_http,
             )
         )
@@ -1034,6 +1046,7 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 apply=args.apply,
                 public_key=args.public_key,
                 require_signature=args.require_signature,
+                signature_threshold=args.signature_threshold,
                 allow_insecure_http=args.allow_insecure_http,
             )
         )

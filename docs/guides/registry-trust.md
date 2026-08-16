@@ -236,6 +236,7 @@ remain outside Agora.
 ## Current boundary
 
 Agora supports one active Ed25519 organization root, dual-signed sequential root rotation, and
-sequential snapshot feeds. Threshold signatures, third-party transparency-log inclusion proofs, and
-automatic background synchronization are not implemented. Feed and rotation application remain
-explicit reviewed operations.
+sequential snapshot feeds. Registry releases support distinct-key signature thresholds, but
+organization feed bundles do not yet use a threshold root policy. Third-party transparency-log
+inclusion proofs and automatic background synchronization are not implemented. Feed and rotation
+application remain explicit reviewed operations.

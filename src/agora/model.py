@@ -395,6 +395,14 @@ class RegistryRecord:
     source: str | None = None
     checksum: str | None = None
     signature_verified: bool = False
+    verified_key_ids: list[str] = field(default_factory=list)
+    signature_threshold: int = 0
+
+
+@dataclass(frozen=True)
+class RegistryReleaseSignatureRecord:
+    key_id: str
+    signature: str
 
 
 @dataclass(frozen=True)
@@ -405,6 +413,7 @@ class RegistryReleaseRecord:
     sha256: str
     signature: str | None = None
     key_id: str | None = None
+    signatures: list[RegistryReleaseSignatureRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -425,6 +434,8 @@ class RegistrySourceRecord:
     signature_verified: bool
     key_id: str | None
     installed_at: str
+    verified_key_ids: list[str] = field(default_factory=list)
+    signature_threshold: int = 0
 
 
 @dataclass(frozen=True)
@@ -525,6 +536,8 @@ class RegistryUpdateRecord:
     signature_verified: bool
     applied_at: str
     path: str
+    verified_key_ids: list[str] = field(default_factory=list)
+    signature_threshold: int = 0
 
 
 @dataclass(frozen=True)
@@ -931,6 +944,7 @@ class InstallRegistryInput:
     version: str | None = None
     public_key: str | None = None
     require_signature: bool = False
+    signature_threshold: int = 0
     allow_insecure_http: bool = False
 
 
@@ -983,6 +997,7 @@ class UpdateRegistryInput:
     apply: bool = False
     public_key: str | None = None
     require_signature: bool = False
+    signature_threshold: int | None = None
     allow_insecure_http: bool = False
 
 

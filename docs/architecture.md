@@ -80,6 +80,10 @@ A remote registry index is a distribution mechanism, not runtime state. Agora ve
 archive and persists a complete local snapshot plus `SOURCE.md`. Governed work never depends on the
 index remaining available.
 
+Remote releases may require a threshold of distinct active Ed25519 trust keys. Multiple signer ids
+sharing one fingerprint count once. The installed threshold and verified ids persist in `SOURCE.md`,
+cannot be lowered by an update, and are repeated in immutable update history.
+
 Registry trust uses the same scope rule: project keys precede user keys. Verification binds a key id
 to one registry id, and a matching revocation blocks both automatic resolution and an explicit PEM.
 Organizations may distribute those public keys and revocations through a signed Markdown snapshot.

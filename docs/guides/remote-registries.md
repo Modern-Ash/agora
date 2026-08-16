@@ -60,6 +60,29 @@ The archive value is the literal value declared in `INDEX.md`, before relative U
 the private signing key outside the registry and publishing repository. Distribute the public key
 through an independently trusted channel.
 
+## Threshold signatures
+
+A release may carry a `signatures` array instead of the legacy `signature` and `key-id` pair:
+
+```json
+{"version":"1.0.0","archive":"team-catalog-1.0.0.tar.gz","sha256":"<sha256>","signatures":[{"key-id":"release-a","signature":"<base64>"},{"key-id":"release-b","signature":"<base64>"}]}
+```
+
+Every signer signs the same canonical payload above. Signer ids must be unique, and distinct ids
+backed by the same public-key fingerprint count only once. Require a quorum of independently trusted
+and active release keys with:
+
+```bash
+agora registry install \
+  --source https://catalog.example.com/agora/INDEX.md \
+  --signature-threshold 2 \
+  --scope project
+```
+
+An explicit PEM can satisfy at most one signature. Threshold verification therefore uses persisted
+user or project trust keys for values above one. A signature made by a persistently revoked key
+blocks the release even when other signatures would otherwise satisfy the threshold.
+
 ## Install a release
 
 Checksum verification is always mandatory:
@@ -97,7 +120,7 @@ Agora generates `SOURCE.md` inside a remotely installed registry. It records:
 
 - the final index and archive locations;
 - the selected version and archive SHA-256;
-- whether the Ed25519 signature was verified and its key id;
+- the verified Ed25519 signer ids and required signature threshold;
 - the installation timestamp.
 
 `agora registry list` exposes the version, source, checksum, and signature status. `agora validate`
@@ -111,9 +134,9 @@ path-length, individual-size, and expanded-size limits. Absolute paths, parent t
 paths, links, devices, pipes, and other non-file archive entries are rejected. Extraction happens in
 a new temporary directory, followed by normal registry and pack validation.
 
-The checksum authenticates bytes only against the index. A signature authenticates the release
-against the public key selected by the user or organization. An unsigned release may be installed
-when signature enforcement is not enabled, and its provenance explicitly reports that it was not
+The checksum authenticates bytes only against the index. Signatures authenticate the release
+against public keys selected by the user or organization. An unsigned release may be installed when
+signature enforcement is not enabled, and its provenance explicitly reports that it was not
 verified.
 
 When signature verification is requested, Agora verifies the signed index payload before following
@@ -129,8 +152,9 @@ directory. Removed files do not leak from an older release into a newer verified
 
 Agora manages local and project trust keys, rotations, revocations, and signed sequential
 organization trust feeds. Organization roots rotate through dual-signed, feed-bound declarations.
-Agora does not yet use threshold signatures or verify third-party transparency-log proofs. The index
-is a distribution convenience; installed filesystem state remains the governed operational record.
+Agora enforces distinct-key signature thresholds for registry releases. It does not yet verify
+third-party transparency-log proofs. The index is a distribution convenience; installed filesystem
+state remains the governed operational record.
 
 Use [Registry updates](registry-updates.md) to check and apply later releases without replacing packs
 that were already installed from the catalog.

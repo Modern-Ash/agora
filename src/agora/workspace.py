@@ -240,6 +240,7 @@ from agora.registries import (
     bundled_registry,
     discover_registry_packs,
     load_registry,
+    read_registry_source,
     read_registry_update_audit,
     render_registry_source,
     render_registry_update,
@@ -746,12 +747,20 @@ class AgoraWorkspace:
 
     @_locked_mutation("scoped")
     def install_registry(self, data: InstallRegistryInput) -> RegistryRecord:
+        if (
+            not isinstance(data.signature_threshold, int)
+            or isinstance(data.signature_threshold, bool)
+            or data.signature_threshold < 0
+        ):
+            raise ValueError("Registry signature threshold must be a non-negative integer")
+        required_threshold = max(data.signature_threshold, 1 if data.require_signature else 0)
         source = Path(data.source).expanduser().resolve()
         if source.is_dir():
             if (
                 data.version
                 or data.public_key
                 or data.require_signature
+                or data.signature_threshold
                 or data.allow_insecure_http
             ):
                 raise ValueError("Remote registry options cannot be used with a local directory")
@@ -763,9 +772,10 @@ class AgoraWorkspace:
             version=data.version,
             public_key=data.public_key,
             require_signature=data.require_signature,
+            signature_threshold=required_threshold,
             allow_insecure_http=data.allow_insecure_http,
             trusted_keys=self.list_registry_trust_keys(),
-        ) as (registry_root, index, release, signature_verified, archive):
+        ) as (registry_root, index, release, verified_key_ids, archive):
             if (registry_root / "SOURCE.md").exists() or (registry_root / "updates").exists():
                 raise ValueError(
                     "Remote registry archives must not contain installer-owned SOURCE.md or updates"
@@ -786,9 +796,13 @@ class AgoraWorkspace:
                 index=index.source,
                 archive=archive,
                 sha256=release.sha256,
-                signature_verified=signature_verified,
-                key_id=release.key_id if signature_verified else None,
+                signature_verified=bool(verified_key_ids),
+                key_id=verified_key_ids[0] if verified_key_ids else None,
                 installed_at=self._timestamp(),
+                verified_key_ids=verified_key_ids,
+                signature_threshold=(
+                    required_threshold if required_threshold > 0 else (1 if verified_key_ids else 0)
+                ),
             )
             return self._install_registry_snapshot(
                 registry_root,
@@ -851,13 +865,32 @@ class AgoraWorkspace:
         current, scope = self._installed_registry_for_update(data.id, data.scope)
         if current.source is None or current.version is None or current.checksum is None:
             raise ValueError(f"Registry is not a remotely installed release: {data.id}")
-        signature_required = current.signature_verified or data.require_signature
+        provenance = read_registry_source(Path(current.path) / "SOURCE.md")
+        requested_threshold = (
+            provenance.signature_threshold
+            if data.signature_threshold is None
+            else data.signature_threshold
+        )
+        if (
+            not isinstance(requested_threshold, int)
+            or isinstance(requested_threshold, bool)
+            or requested_threshold < 0
+        ):
+            raise ValueError("Registry signature threshold must be a non-negative integer")
+        requested_threshold = max(requested_threshold, 1 if data.require_signature else 0)
+        if requested_threshold < provenance.signature_threshold:
+            raise ValueError(
+                "Registry update cannot lower the persisted signature threshold from "
+                f"{provenance.signature_threshold} to {requested_threshold}"
+            )
+        signature_required = requested_threshold > 0
         trusted_keys = self.list_registry_trust_keys()
-        index, release, signature_verified = inspect_registry_release(
+        index, release, verified_key_ids = inspect_registry_release(
             current.source,
             version=data.version,
             public_key=data.public_key,
             require_signature=signature_required,
+            signature_threshold=requested_threshold,
             allow_insecure_http=data.allow_insecure_http,
             trusted_keys=trusted_keys,
         )
@@ -883,7 +916,7 @@ class AgoraWorkspace:
                 applied=False,
                 index=index.source,
                 checksum=release.sha256,
-                signature_verified=signature_verified,
+                signature_verified=bool(verified_key_ids),
             )
         preview = RegistryUpdateResult(
             registry=current.id,
@@ -894,7 +927,7 @@ class AgoraWorkspace:
             applied=False,
             index=index.source,
             checksum=release.sha256,
-            signature_verified=signature_verified,
+            signature_verified=bool(verified_key_ids),
         )
         if not data.apply:
             return preview
@@ -903,9 +936,10 @@ class AgoraWorkspace:
             version=release.version,
             public_key=data.public_key,
             require_signature=signature_required,
+            signature_threshold=requested_threshold,
             allow_insecure_http=data.allow_insecure_http,
             trusted_keys=trusted_keys,
-        ) as (registry_root, applied_index, applied_release, applied_signature, archive):
+        ) as (registry_root, applied_index, applied_release, applied_key_ids, archive):
             if applied_release != release:
                 raise RuntimeError("Registry index changed while applying the selected release")
             if (registry_root / "SOURCE.md").exists() or (registry_root / "updates").exists():
@@ -931,9 +965,11 @@ class AgoraWorkspace:
                 from_sha256=current.checksum,
                 to_sha256=release.sha256,
                 index=applied_index.source,
-                signature_verified=applied_signature,
+                signature_verified=bool(applied_key_ids),
                 applied_at=applied_at,
                 path=str(record_path),
+                verified_key_ids=applied_key_ids,
+                signature_threshold=requested_threshold,
             )
             provenance = RegistrySourceRecord(
                 registry=current.id,
@@ -941,9 +977,11 @@ class AgoraWorkspace:
                 index=applied_index.source,
                 archive=archive,
                 sha256=release.sha256,
-                signature_verified=applied_signature,
-                key_id=release.key_id if applied_signature else None,
+                signature_verified=bool(applied_key_ids),
+                key_id=applied_key_ids[0] if applied_key_ids else None,
                 installed_at=applied_at,
+                verified_key_ids=applied_key_ids,
+                signature_threshold=requested_threshold,
             )
             self._install_registry_snapshot(
                 registry_root,
@@ -961,7 +999,7 @@ class AgoraWorkspace:
             applied=True,
             index=applied_index.source,
             checksum=release.sha256,
-            signature_verified=applied_signature,
+            signature_verified=bool(applied_key_ids),
             record_path=str(record_path),
         )
 

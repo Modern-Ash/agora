@@ -42,9 +42,10 @@ Application repeats index authentication, downloads the selected archive, verifi
 checks the registry id and version, validates every pack, prepares provenance and history, and swaps
 the complete staged directory with rollback protection.
 
-If the installed release was signature-verified, every update must also verify a signature. This
-policy cannot be downgraded through CLI flags. Add a rotated key to the trust store before applying a
-release signed by its new `key-id`.
+If the installed release required a signature threshold, every update must satisfy at least that
+same number of distinct trusted public-key fingerprints. This policy cannot be downgraded through
+CLI flags. `--signature-threshold` may raise it for the selected update and all later releases. Add
+rotated keys to the trust store before applying a release signed by their new ids.
 
 HTTP remains disabled unless the original development registry is explicitly accessed with:
 
@@ -61,9 +62,10 @@ Each successful version change creates:
 ```
 
 The record contains the registry id, previous and target versions and checksums, final index URL,
-signature status, and application timestamp. Existing update records are copied into staging before
-replacement, so subsequent updates preserve the full chain. `agora validate` checks the schemas,
-identities, forward-only version movement, checksums, and registry ownership of every record.
+verified signer ids, required threshold, and application timestamp. Existing update records are
+copied into staging before replacement, so subsequent updates preserve the full chain. `agora
+validate` checks the schemas, identities, forward-only version movement, checksums, and registry
+ownership of every record.
 It also requires adjacent version and checksum continuity and requires the last update to match the
 current `SOURCE.md` provenance.
 

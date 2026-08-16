@@ -188,7 +188,7 @@ agora trust organization sync --id example-org --scope project --apply
 agora trust organization rotate --id example-org \
   --source ./ROOT-ROTATION.md --scope project --apply
 agora registry install --source https://catalog.example.com/INDEX.md \
-  --version 1.0.0 --require-signature --scope user
+  --version 1.0.0 --signature-threshold 2 --scope user
 agora registry update --id team-catalog
 agora registry update --id team-catalog --apply
 agora registry audit --scope project --record
@@ -216,8 +216,8 @@ Aggregate pack audits can record update and local-modification notifications wit
 installed composition.
 An explicitly selected, unchanged audit can then apply its bound dependency plans as one
 transaction and persist an application record.
-Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
-provenance beside the installed snapshot. See the
+Remote releases are checksum-pinned and may require a threshold of distinct Ed25519 signatures;
+Agora persists their signer evidence and policy beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
 Trusted public keys, rotations, and revocations can be persisted at user or project scope. See the
 [registry trust guide](docs/guides/registry-trust.md).
@@ -770,8 +770,8 @@ mutation in a structured external lease while retaining the local operating-syst
   explicit update checks, transactional application, and dependency-aware installation are
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Signed organization trust synchronization and a locally verified feed history are implemented.
-  Dual-signed organization root rotation is implemented. Threshold signatures, third-party
-  transparency proofs, and automatic background pack updates are not. Aggregate update
+  Dual-signed organization root rotation and registry release signature thresholds are implemented.
+  Third-party transparency proofs and automatic background pack updates are not. Aggregate update
   notifications and explicit audited batch application are available for external schedulers.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
