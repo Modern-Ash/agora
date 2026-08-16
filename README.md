@@ -1,5 +1,9 @@
 # Agora
 
+<p align="center">
+  <img src="agora-logo.png" alt="Agora logo" width="760">
+</p>
+
 **Agents, Governance, Orchestration, Roles & Artifacts**
 
 Agora is a local, Markdown-first, Git-native lifecycle customization framework. It lets teams define
