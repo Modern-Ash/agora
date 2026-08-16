@@ -544,6 +544,7 @@ class PackUpdateStep:
     from_version: str | None
     to_version: str
     registry: str
+    registry_scope: Literal["bundled", "user", "project"]
     sha256: str
 
 
@@ -567,10 +568,13 @@ class PackUpdateAuditEntry:
     id: str
     scope: Literal["user", "project"]
     registry: str
+    registry_scope: Literal["bundled", "user", "project"]
     from_version: str
     to_version: str
     update_available: bool
     modified: bool
+    current_sha256: str
+    plan_sha256: str
 
 
 @dataclass(frozen=True)
@@ -580,6 +584,25 @@ class PackUpdateAuditRecord:
     checked_at: str
     entries: list[PackUpdateAuditEntry]
     path: str | None = None
+
+
+@dataclass(frozen=True)
+class ApplyPackUpdateAuditInput:
+    id: str
+    scope: Literal["user", "project"]
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class PackUpdateAuditApplicationRecord:
+    id: str
+    scope: Literal["user", "project"]
+    audit_sha256: str
+    applied_at: str
+    force: bool
+    packs: list[PackUpdateStep]
+    history_paths: list[str]
+    path: str
 
 
 @dataclass(frozen=True)

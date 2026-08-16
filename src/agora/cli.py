@@ -16,6 +16,7 @@ from agora.model import (
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
+    ApplyPackUpdateAuditInput,
     AssignActorInput,
     AuditPackUpdatesInput,
     AuditRegistryUpdatesInput,
@@ -305,6 +306,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pack_audit.add_argument("--scope", choices=("user", "project"), default="project")
     pack_audit.add_argument("--record", action="store_true")
+    pack_apply_audit = pack.add_parser(
+        "apply-audit", help="Apply one unchanged, reviewed pack update audit transactionally"
+    )
+    pack_apply_audit.add_argument("--id", required=True)
+    pack_apply_audit.add_argument("--scope", choices=("user", "project"), default="project")
+    pack_apply_audit.add_argument("--force", action="store_true")
     pack_lock = pack.add_parser("lock", help="Refresh the installed pack composition lock")
     pack_lock.add_argument("--scope", choices=("user", "project"), default="project")
     pack_remove = pack.add_parser("remove", help="Preview or apply a safe pack removal")
@@ -1098,6 +1105,10 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
     if args.command == "pack" and args.pack_command == "audit":
         return workspace.audit_pack_updates(
             AuditPackUpdatesInput(scope=args.scope, record=args.record)
+        )
+    if args.command == "pack" and args.pack_command == "apply-audit":
+        return workspace.apply_pack_update_audit(
+            ApplyPackUpdateAuditInput(id=args.id, scope=args.scope, force=args.force)
         )
     if args.command == "pack" and args.pack_command == "lock":
         return workspace.refresh_pack_lock(RefreshPackLockInput(scope=args.scope))

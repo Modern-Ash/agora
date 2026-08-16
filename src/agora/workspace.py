@@ -84,6 +84,7 @@ from agora.model import (
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
+    ApplyPackUpdateAuditInput,
     ApprovalDelegationRecord,
     AssignActorInput,
     AuditPackUpdatesInput,
@@ -133,6 +134,7 @@ from agora.model import (
     PackRemovalResult,
     PackRemovalStep,
     PackSourceRecord,
+    PackUpdateAuditApplicationRecord,
     PackUpdateAuditEntry,
     PackUpdateAuditRecord,
     PackUpdateHistoryRecord,
@@ -216,15 +218,18 @@ from agora.packs import (
     load_pack_update_history,
     pack_reference,
     pack_tree_sha256,
+    pack_update_plan_sha256,
     read_pack_lock,
     read_pack_removal,
     read_pack_source,
     read_pack_update_audit,
+    read_pack_update_audit_application,
     render_pack_lock,
     render_pack_removal,
     render_pack_source,
     render_pack_update,
     render_pack_update_audit,
+    render_pack_update_audit_application,
     version_satisfies,
 )
 from agora.registries import (
@@ -1443,6 +1448,7 @@ class AgoraWorkspace:
                     from_version=existing.version if existing is not None else None,
                     to_version=pack.version,
                     registry=pack.registry,
+                    registry_scope=pack.registry_scope,
                     sha256=pack_tree_sha256(Path(pack.path)),
                 )
             )
@@ -1501,10 +1507,13 @@ class AgoraWorkspace:
                     id=pack_id,
                     scope=data.scope,
                     registry=source.registry,
+                    registry_scope=source.registry_scope,
                     from_version=result.from_version,
                     to_version=result.to_version,
                     update_available=result.update_available,
                     modified=result.modified,
+                    current_sha256=pack_tree_sha256(root / f"{kind}s" / pack_id),
+                    plan_sha256=pack_update_plan_sha256(result.packs),
                 )
             )
         audit_id = self._now().astimezone(UTC).strftime("audit-%Y%m%dt%H%M%S%fz")
@@ -1530,6 +1539,137 @@ class AgoraWorkspace:
             raise FileExistsError(f"Pack update audit already exists: {path}")
         atomic_write(path, render_pack_update_audit(record))
         return read_pack_update_audit(path)
+
+    @_locked_mutation("pack-update")
+    def apply_pack_update_audit(
+        self, data: ApplyPackUpdateAuditInput
+    ) -> PackUpdateAuditApplicationRecord:
+        assert_slug(data.id, "Pack update audit id")
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported pack update audit scope: {data.scope}")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        audit_path = root / "notifications" / "pack-updates" / data.id / "AUDIT.md"
+        if not audit_path.is_file():
+            raise FileNotFoundError(f"Pack update audit not found: {audit_path}")
+        application_path = audit_path.with_name("APPLICATION.md")
+        if application_path.exists():
+            raise FileExistsError(f"Pack update audit was already applied: {application_path}")
+        audit = read_pack_update_audit(audit_path)
+        if audit.scope != data.scope or audit.id != data.id:
+            raise ValueError("Pack update audit identity does not match the requested application")
+        audit_sha256 = hashlib.sha256(audit_path.read_bytes()).hexdigest()
+
+        installed = self._installed_pack_contracts(data.scope)
+        managed = {
+            key for key in installed if (root / f"{key[0]}s" / key[1] / "SOURCE.md").is_file()
+        }
+        audited = {(item.kind, item.id) for item in audit.entries}
+        if managed != audited:
+            raise ValueError("Installed catalog pack set changed after the audit")
+
+        merged_plan: list[CatalogPackRecord] = []
+        planned: dict[tuple[str, str], CatalogPackRecord] = {}
+        merged_steps: list[PackUpdateStep] = []
+        step_keys: set[tuple[str, str]] = set()
+        for entry in audit.entries:
+            current, _ = self._installed_pack_for_update(entry.kind, entry.id, data.scope)
+            assert current.source is not None
+            if current.source.registry_scope != entry.registry_scope:
+                raise ValueError(f"Pack update audit is stale for {entry.kind}/{entry.id}")
+            result = self.update_catalog_pack(
+                UpdateCatalogPackInput(
+                    kind=entry.kind,
+                    pack_id=entry.id,
+                    scope=data.scope,
+                    registry_id=entry.registry,
+                )
+            )
+            current_sha256 = pack_tree_sha256(root / f"{entry.kind}s" / entry.id)
+            actual = (
+                result.from_version,
+                result.to_version,
+                result.update_available,
+                result.modified,
+                current_sha256,
+                pack_update_plan_sha256(result.packs),
+            )
+            expected = (
+                entry.from_version,
+                entry.to_version,
+                entry.update_available,
+                entry.modified,
+                entry.current_sha256,
+                entry.plan_sha256,
+            )
+            if actual != expected:
+                raise ValueError(f"Pack update audit is stale for {entry.kind}/{entry.id}")
+            if entry.modified and not data.force:
+                raise ValueError(
+                    f"Pack update audit contains local modifications for {entry.kind}/{entry.id}; "
+                    "pass --force after reviewing their replacement"
+                )
+            if not entry.update_available:
+                continue
+
+            matches = [
+                item
+                for item in self.search_catalog(entry.kind, registry_id=entry.registry)
+                if item.id == entry.id
+                and item.version == entry.to_version
+                and item.registry_scope == entry.registry_scope
+            ]
+            if not matches:
+                raise FileNotFoundError(
+                    f"Audited catalog target not found: {entry.kind}/{entry.id}@{entry.to_version}"
+                )
+            selected = matches[0]
+            for pack in self._resolve_catalog_install(selected, data.scope, True):
+                key = (pack.kind, pack.id)
+                existing = planned.get(key)
+                if existing is not None:
+                    if existing.version != pack.version or pack_tree_sha256(
+                        Path(existing.path)
+                    ) != pack_tree_sha256(Path(pack.path)):
+                        raise ValueError(f"Audited pack plans conflict for {pack.kind}/{pack.id}")
+                    continue
+                planned[key] = pack
+                merged_plan.append(pack)
+            for step in result.packs:
+                key = (step.kind, step.id)
+                if key not in step_keys:
+                    merged_steps.append(step)
+                    step_keys.add(key)
+
+        if not merged_plan:
+            raise ValueError("Pack update audit contains no applicable updates")
+        prospective = dict(installed)
+        for pack in merged_plan:
+            prospective[(pack.kind, pack.id)] = self._catalog_pack_contract(pack)
+        issues = self._pack_composition_issues(prospective)
+        if issues:
+            raise ValueError(issues[0][1])
+
+        applied_at = self._timestamp()
+        update_id = self._now().astimezone(UTC).strftime("update-%Y%m%dt%H%M%S%fz")
+        _, history_paths = self._apply_catalog_plan(
+            merged_plan,
+            data.scope,
+            update_id=update_id,
+            applied_at=applied_at,
+        )
+        self._write_pack_lock(data.scope)
+        record = PackUpdateAuditApplicationRecord(
+            id=data.id,
+            scope=data.scope,
+            audit_sha256=audit_sha256,
+            applied_at=applied_at,
+            force=data.force,
+            packs=merged_steps,
+            history_paths=[str(Path(path).relative_to(root)) for path in history_paths],
+            path=str(application_path),
+        )
+        atomic_write(application_path, render_pack_update_audit_application(record))
+        return read_pack_update_audit_application(application_path)
 
     @_locked_mutation("pack-update")
     def remove_pack(self, data: RemovePackInput) -> PackRemovalResult:
@@ -6650,6 +6790,7 @@ class AgoraWorkspace:
             "registries": 0,
             "registry-update-audits": 0,
             "pack-update-audits": 0,
+            "pack-update-audit-applications": 0,
             "trust-keys": 0,
             "organization-trust-roots": 0,
             "organization-trust-bundles": 0,
@@ -6765,6 +6906,45 @@ class AgoraWorkspace:
                     path,
                     f"Pack update audit id {audit.id} does not match directory {directory.name}",
                 )
+            application_path = directory / "APPLICATION.md"
+            if not application_path.is_file():
+                continue
+            application = inspect(
+                "pack-update-audit-applications",
+                "pack-update-audit-application.invalid",
+                application_path,
+                lambda application_path=application_path: read_pack_update_audit_application(
+                    application_path
+                ),
+            )
+            if not isinstance(application, PackUpdateAuditApplicationRecord):
+                continue
+            if application.id != directory.name or application.scope != "project":
+                issue(
+                    "pack-update-audit-application.identity-mismatch",
+                    application_path,
+                    "Pack update audit application identity does not match its location",
+                )
+            if application.audit_sha256 != hashlib.sha256(path.read_bytes()).hexdigest():
+                issue(
+                    "pack-update-audit-application.audit-mismatch",
+                    application_path,
+                    "Applied pack update audit changed after application",
+                )
+            for history in application.history_paths:
+                history_path = Path(history)
+                if history_path.is_absolute() or ".." in history_path.parts:
+                    issue(
+                        "pack-update-audit-application.history-path-invalid",
+                        application_path,
+                        f"Pack update history path is not portable: {history}",
+                    )
+                elif not (root / ".agora" / history_path).is_file():
+                    issue(
+                        "pack-update-audit-application.history-missing",
+                        application_path,
+                        f"Applied pack update history is missing: {history}",
+                    )
         trust_keys: dict[str, RegistryTrustKeyRecord] = {}
         for path in sorted((root / ".agora" / "trust" / "keys").glob("*.md")):
             record = inspect(

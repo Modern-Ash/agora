@@ -123,8 +123,51 @@ agora registry audit --scope project --record
 agora pack audit --scope project --record
 ```
 
-Registry application and each pack application remain separate, explicit commands. Agora does not
-interpret a recorded audit as approval and never turns a notification into an automatic update.
+Registry application and pack application remain separate, explicit commands. Agora never turns a
+notification into an automatic update.
+
+## Apply a reviewed audit
+
+After reviewing and versioning a recorded pack audit, apply its available updates as one batch:
+
+```bash
+agora pack apply-audit --id audit-20260815t120000z --scope project
+```
+
+Application is permitted only when all audited preconditions still match. Each entry binds:
+
+- the exact installed tree SHA-256;
+- installed and target versions;
+- update and local-modification flags;
+- the SHA-256 of the complete dependency-first update plan;
+- the registry selected by the installed provenance.
+
+Agora also requires the current set of catalog-managed packs to equal the audited set. A new or
+removed managed pack, changed local file, republished catalog plan, changed dependency, or second
+application makes the audit stale and blocks mutation.
+
+All compatible audited plans are merged, checked as one prospective composition, staged, and
+swapped transactionally. One update id is shared by every affected pack, the composition lock is
+refreshed, and the audit directory receives:
+
+```text
+.agora/notifications/pack-updates/<audit-id>/APPLICATION.md
+```
+
+That record binds the application to the exact audit checksum and portable update-history paths.
+`agora validate` detects audit changes after application and missing histories.
+
+An audit that recorded local modifications still requires explicit replacement authority:
+
+```bash
+agora pack apply-audit \
+  --id audit-20260815t120000z \
+  --scope project \
+  --force
+```
+
+`--force` only acknowledges modifications already captured by the audit. Any change after the audit
+is stale and cannot be bypassed with `--force`.
 
 Run the end-to-end example:
 

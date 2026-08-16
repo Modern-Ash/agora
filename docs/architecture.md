@@ -105,6 +105,8 @@ reject downgrades and mutable versions, re-resolve the complete composition, and
 pack replacements. Local amendments remain valid but require explicit `--force` before replacement.
 Aggregate pack audits run those previews over every managed pack in a scope and may persist a
 Markdown notification. They omit direct installations and never apply a plan.
+Explicit audit application binds current trees and dependency plans to the reviewed audit checksum,
+rechecks the complete managed set, merges compatible plans, and performs one transactional swap.
 
 `PACKS.lock.md` is the deterministic current-state inventory for user or project scope. Managed pack
 mutations regenerate it; validation compares it with installed trees, while `agora pack lock` accepts

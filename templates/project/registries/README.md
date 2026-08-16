@@ -10,3 +10,6 @@ never apply registry or installed-pack updates.
 After updating a registry snapshot, use `agora pack audit --scope project` to inspect every managed
 pack. Its optional report lives under `../notifications/pack-updates/` and never authorizes
 application.
+
+Apply only an explicitly reviewed and unchanged report with `agora pack apply-audit --id <audit>`.
+Agora binds the transaction to the audit checksum, current pack trees, and dependency plans.

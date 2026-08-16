@@ -197,6 +197,7 @@ agora pack install --kind method --id release-flow \
 agora pack update --kind method --id release-flow
 agora pack update --kind method --id release-flow --apply
 agora pack audit --scope project --record
+agora pack apply-audit --id audit-20260815t120000z --scope project
 ```
 
 Project registries override user registries, which override the bundled catalog when the same pack id
@@ -211,6 +212,8 @@ Each catalog-installed pack persists its registry and checksum in `SOURCE.md`. E
 each applied transition; see the [pack lock guide](docs/guides/pack-locks.md).
 Aggregate pack audits can record update and local-modification notifications without changing the
 installed composition.
+An explicitly selected, unchanged audit can then apply its bound dependency plans as one
+transaction and persist an application record.
 Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
 provenance beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).
@@ -764,7 +767,8 @@ mutation in a structured external lease while retaining the local operating-syst
   implemented. Installed pack provenance and explicit dependency-aware updates are implemented.
   Signed organization trust synchronization and a locally verified feed history are implemented.
   Root rotation, threshold signatures, third-party transparency proofs, and automatic background
-  pack updates are not. Aggregate update notifications are available for external schedulers.
+  pack updates are not. Aggregate update notifications and explicit audited batch application are
+  available for external schedulers.
 - The Tool Pack kernel plus Git repository, provider-neutral work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, Jira, and Terraform CLI adapters,
