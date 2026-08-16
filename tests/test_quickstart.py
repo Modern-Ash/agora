@@ -119,3 +119,16 @@ def test_quickstart_refuses_to_reuse_existing_actor_identity(tmp_path: Path, mon
 
     with pytest.raises(FileExistsError, match="target already exists"):
         workspace.quickstart(QuickstartInput(objective="Second objective"))
+
+
+def test_quickstart_defaults_to_the_spec_driven_pack(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+
+    result = workspace.quickstart(
+        QuickstartInput(path="project", objective="Deliver the first increment")
+    )
+
+    assert result.project.default_method == "spec-driven"
+    assert set(result.assignments) == {"spec-owner", "developer"}
+    assert workspace.validate().ok is True
