@@ -1351,6 +1351,117 @@ def test_installs_and_governs_the_gitlab_issues_cli_adapter(
     assert workspace.validate().ok
 
 
+def test_installs_and_governs_the_gitlab_merge_request_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/glab" if executable == "glab" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="gitlab-merge-requests", scope="project")
+    )
+    assert installed.implements_operations == ["view", "create", "comment", "checks"]
+
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-view",
+            tool_id="gitlab-merge-requests",
+            operation_id="view",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"review": "42"},
+        )
+    )
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-create",
+            tool_id="gitlab-merge-requests",
+            operation_id="create",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={
+                "project": "example/agora",
+                "base": "main",
+                "head": "agora/governed-change",
+                "title": "feat: add governed review",
+                "description": "Implements the accepted work.",
+            },
+        )
+    )
+    commented = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-comment",
+            tool_id="gitlab-merge-requests",
+            operation_id="comment",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"review": "42", "body": "Verification evidence is attached."},
+        )
+    )
+    checks = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-checks",
+            tool_id="gitlab-merge-requests",
+            operation_id="checks",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"review": "42"},
+        )
+    )
+
+    assert viewed.command == ["glab", "mr", "view", "42", "--output", "json"]
+    assert created.command == [
+        "glab",
+        "mr",
+        "create",
+        "--repo",
+        "example/agora",
+        "--target-branch",
+        "main",
+        "--source-branch",
+        "agora/governed-change",
+        "--title",
+        "feat: add governed review",
+        "--description",
+        "Implements the accepted work.",
+        "--yes",
+    ]
+    assert commented.command == [
+        "glab",
+        "mr",
+        "note",
+        "--message",
+        "Verification evidence is attached.",
+        "42",
+    ]
+    assert checks.command == [
+        "glab",
+        "ci",
+        "get",
+        "--merge-request",
+        "42",
+        "--output",
+        "json",
+    ]
+    for operation in ("list", "approve", "request-changes", "merge"):
+        run_id = f"gitlab-mr-unsupported-{operation}"
+        with pytest.raises(FileNotFoundError, match=operation):
+            workspace.invoke_tool(
+                InvokeToolInput(
+                    id=run_id,
+                    tool_id="gitlab-merge-requests",
+                    operation_id=operation,
+                    actor_id="owner",
+                    swarm_id="delivery",
+                )
+            )
+        assert not (root / ".agora" / "tool-runs" / run_id).exists()
+    assert workspace.validate().ok
+
+
 def test_governs_partial_aws_and_gcp_inventory_adapters(
     project: tuple[Path, AgoraWorkspace], monkeypatch
 ) -> None:

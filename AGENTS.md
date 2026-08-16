@@ -20,6 +20,8 @@
   containers or runners as the isolation boundary for filesystem, network, syscalls, and resources.
 - Keep ecosystem Tool Pack capabilities provider-neutral; place Jira, CI/CD, documentation, and
   cloud translation in reviewed external adapters rather than the kernel.
+- Keep GitLab merge-request adapters on an exact native subset; do not discard review-decision bodies
+  or reinterpret conditional list and merge flags as neutral semantics.
 - Prefer a reviewed native provider CLI when it is installed and non-interactive; use a team wrapper
   for normalization and MCP only as an explicit alternative transport.
 - Give reviewed CLI adapters a structured local version command and a tested minimum version; never

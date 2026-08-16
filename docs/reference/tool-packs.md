@@ -244,6 +244,7 @@ agora tool adapter list --check
 agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id gitlab-issues --scope project
+agora tool adapter install --id gitlab-merge-requests --scope project
 agora tool adapter install --id terraform --scope project
 agora tool adapter install --id jira --scope project
 agora tool adapter install --id twg-confluence --scope project

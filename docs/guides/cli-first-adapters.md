@@ -158,6 +158,27 @@ the requested state in a subcommand position, so the manifest permits only `clos
 Create is omitted because the native command cannot preserve the neutral contract's required
 work-item `type`; Agora does not discard it or reinterpret it as a label.
 
+## GitLab Merge Requests through `glab`
+
+The `gitlab-merge-requests` adapter implements an explicit subset of `code-review` through GitLab
+CLI 1.109.0 or newer:
+
+```bash
+agora tool adapter install --id gitlab-merge-requests --scope project
+agora tool invoke \
+  --id inspect-gitlab-review \
+  --tool gitlab-merge-requests \
+  --operation checks \
+  --actor developer \
+  --swarm delivery \
+  --input review=42
+```
+
+View and checks request JSON, create supplies every field non-interactively without pushing, and
+comment uses a native message flag. List is omitted because neutral states map to different native
+flags. Approval cannot carry the required decision body, request-changes has no native decision,
+and merge strategies need conditional flags; a reviewed team wrapper can normalize those gaps.
+
 ## GitHub Pull Requests through `gh`
 
 The `github-pull-requests` adapter implements the provider-neutral `code-review` contract. It can

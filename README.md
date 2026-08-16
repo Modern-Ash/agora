@@ -484,6 +484,7 @@ agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id github-issues --scope project
 agora tool adapter install --id gitlab-issues --scope project
+agora tool adapter install --id gitlab-merge-requests --scope project
 agora tool adapter install --id jira --scope project
 agora tool adapter install --id twg-confluence --scope project
 agora tool adapter install --id terraform --scope project
@@ -563,7 +564,9 @@ the partial `gitlab-issues` adapter maps exact search, view, comment, and close/
 See the [work-management integration guide](docs/guides/work-management-integrations.md).
 
 The `code-review` pack separates review reads, review writing, review decisions, and merge authority.
-The `github-pull-requests` adapter maps it to the installed `gh` CLI. No bundled role receives
+The `github-pull-requests` adapter maps the full contract to the installed `gh` CLI. The partial
+`gitlab-merge-requests` adapter maps exact view, create, comment, and head-pipeline check operations
+to `glab` without weakening unsupported decisions or merge strategies. No bundled role receives
 `review.merge`; projects must opt in explicitly. See the
 [code-review integration guide](docs/guides/code-review-integrations.md).
 
@@ -756,6 +759,7 @@ uv run python samples/remote-registry/run.py
 uv run python samples/gate-waivers/run.py
 uv run python samples/approval-delegation/run.py
 uv run python samples/gitlab-issues-cli/run.py
+uv run python samples/gitlab-merge-requests-cli/run.py
 uv run python samples/distributed-coordination/run.py
 uv run python samples/environment-permissions/run.py
 uv run python samples/twg-confluence-cli/run.py
@@ -790,6 +794,8 @@ compatible Tool Pack before copying either catalog selection. The
 versioned registry snapshot without persisting a private key.
 The [GitLab Issues sample](samples/gitlab-issues-cli/README.md) prepares native issue reads and
 transitions while rejecting deletion and unsupported typed creation.
+The [GitLab Merge Requests sample](samples/gitlab-merge-requests-cli/README.md) prepares native
+review creation and head-pipeline inspection while rejecting unsupported merge translation.
 The [environment permissions sample](samples/environment-permissions/README.md) gates a production
 Tool Run on role scope, Product Owner approval, and successful work evidence.
 The [TWG Confluence sample](samples/twg-confluence-cli/README.md) prepares native page commands,

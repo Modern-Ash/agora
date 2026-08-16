@@ -1,8 +1,8 @@
 # Code-review integrations
 
-Agora's `code-review` Tool Pack governs provider-neutral change requests. GitHub Pull Requests are a
-reviewed CLI adapter, not a kernel dependency. GitLab merge requests, Gerrit changes, or internal
-review systems can implement the same operation contract.
+Agora's `code-review` Tool Pack governs provider-neutral change requests. GitHub Pull Requests and
+an exact GitLab Merge Requests subset are reviewed CLI adapters, not kernel dependencies. Gerrit
+changes or internal review systems can implement the same operation contract.
 
 ## Authority model
 
@@ -43,6 +43,28 @@ agora validate
 ```
 
 Installation does not contact GitHub, change the `gh` profile, or grant merge authority.
+
+## Install the GitLab adapter
+
+```bash
+glab auth status
+agora tool adapter install --id gitlab-merge-requests --scope project
+agora tool show --tool gitlab-merge-requests
+agora validate
+```
+
+The GitLab adapter exposes only `view`, `create`, `comment`, and `checks`. Its checks operation uses
+`glab ci get --merge-request` so the result is bound to the merge request's head pipeline rather
+than merely the latest source-branch pipeline. List, approval, request-changes, and merge remain
+absent when native commands cannot preserve the complete neutral input contract.
+
+```mermaid
+flowchart LR
+    Neutral[Agora code-review contract] --> Exact{Exact glab mapping?}
+    Exact -->|Yes| Native[view, create, comment, checks]
+    Exact -->|No| Omitted[list, approve, request-changes, merge]
+    Omitted --> Wrapper[Reviewed team wrapper]
+```
 
 ## Prepare or create a Pull Request
 

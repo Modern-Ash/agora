@@ -33,6 +33,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: github-actions-cli",
         "sample: github-issues-cli",
         "sample: gitlab-issues-cli",
+        "sample: gitlab-merge-requests-cli",
         "sample: handoffs",
         "sample: interruptions",
         "sample: jira-cli",
