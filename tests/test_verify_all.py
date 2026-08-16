@@ -13,7 +13,13 @@ def test_builds_a_python_only_full_verification_plan() -> None:
     names = [step.name for step in steps]
     executables = [Path(step.command[0]).name for step in steps]
 
-    assert names[:4] == ["format", "lint", "tests", "documentation links"]
+    assert names[:5] == [
+        "format",
+        "lint",
+        "tests",
+        "documentation links",
+        "role conformance self-test",
+    ]
     assert names[-1] == "distribution build"
     assert [name for name in names if name.startswith("sample: ")] == [
         "sample: actor-authentication",
@@ -70,6 +76,7 @@ def test_can_build_a_fast_verification_plan() -> None:
         "lint",
         "tests",
         "documentation links",
+        "role conformance self-test",
     ]
 
 
