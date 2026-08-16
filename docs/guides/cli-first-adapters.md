@@ -166,8 +166,39 @@ Jira still applies its own workflow permissions, conditions, and validators.
 The adapter is distributed even when ACLI is absent. In that case it appears in
 `agora tool adapter list` with `runtime_available: false`, is omitted by `--available`, and can still
 prepare durable commands without `--launch`. Agora never installs ACLI or initiates authentication.
-Confluence is not mapped to ACLI because its published command tree does not currently provide the
-complete knowledge-base contract; use a reviewed `docsctl` wrapper or an explicit future adapter.
+
+## Confluence through Atlassian TWG CLI
+
+The `twg-confluence` adapter implements an explicit page-lifecycle subset of `knowledge-base`
+through Atlassian Teamwork Graph CLI 1.2.5 or newer:
+
+```bash
+agora tool adapter install --id twg-confluence --scope project
+agora tool invoke \
+  --id inspect-runbook \
+  --tool twg-confluence \
+  --operation view \
+  --actor developer \
+  --swarm delivery \
+  --input document=12345
+```
+
+The full `view` result includes HTML, metadata, and an opaque snapshot token. Pass that token as
+`snapshot-token` when preparing an `update`; this preserves TWG's optimistic concurrency check and
+rejects a stale draft instead of overwriting a concurrent edit. Creates are page drafts. Publication
+and archival remain distinct `docs.publish` and `docs.archive` capabilities granted to no bundled
+role.
+
+The adapter deliberately omits `search`. TWG exposes natural-text search without a Confluence-space
+filter and CQL search where safe quoting requires a translation wrapper. Agora does not interpolate
+untrusted text into CQL or pretend that an Atlassian site is a Confluence space. Use the neutral
+`knowledge-base` pack with a reviewed `docsctl` wrapper when all six operations are required.
+
+Agora never installs `twg`, runs OAuth login, or changes its permissions. Installation and
+authentication follow Atlassian's official
+[TWG CLI setup](https://developer.atlassian.com/cloud/twg-cli/getting-started/installation/), while
+live launch still requires `agora tool doctor --tool twg-confluence` to confirm a compatible local
+version.
 
 ## Terraform through its native CLI
 

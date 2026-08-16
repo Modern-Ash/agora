@@ -245,6 +245,7 @@ agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id terraform --scope project
 agora tool adapter install --id jira --scope project
+agora tool adapter install --id twg-confluence --scope project
 ```
 
 See [CLI-first ecosystem adapters](../guides/cli-first-adapters.md) for transport selection,

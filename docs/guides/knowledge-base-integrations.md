@@ -112,6 +112,25 @@ because it can remove discoverability or access.
 
 ## Adapt Confluence or another provider
 
+Install Agora's reviewed Atlassian Teamwork Graph CLI adapter when the required workflow fits its
+exact Confluence page subset:
+
+```bash
+agora tool adapter install --id twg-confluence --scope project
+agora tool doctor --tool twg-confluence
+```
+
+It implements `view`, `create`, `update`, `publish`, and `archive`. Create always produces a page
+draft from an HTML body. Update requires the opaque `snapshot-token` returned by the latest full
+view, preserving Confluence optimistic concurrency. Publish and archive remain separate opt-in
+capabilities. The adapter requires `twg` 1.2.5 or newer but never installs it, authenticates it, or
+stores its OAuth state.
+
+The adapter does not implement `search`: TWG's natural-text command cannot restrict a Confluence
+space, while its CQL command would require provider-aware value escaping that the generic Tool Pack
+cannot perform. This explicit subset prevents an unsafe or misleading translation. Use the neutral
+pack with a reviewed wrapper when space-scoped search is required.
+
 A reviewed `docsctl` wrapper should:
 
 1. accept only the declared `page` operations and flags;

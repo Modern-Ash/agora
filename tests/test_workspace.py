@@ -1591,6 +1591,96 @@ def test_governs_knowledge_base_capabilities_by_role(
     assert not (root / ".agora" / "tool-runs" / "archive-documentation").exists()
 
 
+def test_installs_and_governs_the_twg_confluence_adapter(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="twg-confluence", scope="project")
+    )
+
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="view-confluence-page",
+            tool_id="twg-confluence",
+            operation_id="view",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"document": "12345"},
+        )
+    )
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="create-confluence-draft",
+            tool_id="twg-confluence",
+            operation_id="create",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={
+                "space": "131073",
+                "parent": "12345",
+                "title": "Governed delivery",
+                "body": "<p>Reviewed content</p>",
+            },
+        )
+    )
+    updated = workspace.invoke_tool(
+        InvokeToolInput(
+            id="update-confluence-draft",
+            tool_id="twg-confluence",
+            operation_id="update",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={
+                "document": "67890",
+                "title": "Governed delivery",
+                "body": "<p>Updated reviewed content</p>",
+                "snapshot-token": "v:3",
+            },
+        )
+    )
+
+    assert viewed.command[:5] == ["twg", "confluence", "content", "get", "12345"]
+    assert created.command[:7] == [
+        "twg",
+        "confluence",
+        "content",
+        "create",
+        "--space-id",
+        "131073",
+        "--parent-id",
+    ]
+    assert updated.command[4:8] == ["67890", "--snapshot-token", "v:3", "--title"]
+    with pytest.raises(ValueError, match=r"missing=\[snapshot-token\]"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="unsafe-confluence-update",
+                tool_id="twg-confluence",
+                operation_id="update",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={
+                    "document": "67890",
+                    "title": "Unsafe update",
+                    "body": "<p>Missing concurrency token</p>",
+                },
+            )
+        )
+    with pytest.raises(FileNotFoundError, match="search"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="unsupported-confluence-search",
+                tool_id="twg-confluence",
+                operation_id="search",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"space": "131073", "query": "delivery"},
+            )
+        )
+    assert workspace.validate().ok
+
+
 def test_governs_cloud_infrastructure_capabilities_by_role(
     project: tuple[Path, AgoraWorkspace],
 ) -> None:

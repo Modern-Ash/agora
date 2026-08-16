@@ -484,6 +484,7 @@ agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id github-issues --scope project
 agora tool adapter install --id jira --scope project
+agora tool adapter install --id twg-confluence --scope project
 agora tool adapter install --id terraform --scope project
 agora tool adapter install --id aws-resource-inventory --scope project
 agora tool adapter install --id gcp-asset-inventory --scope project
@@ -571,7 +572,10 @@ developer's existing `gh` CLI. See the
 [CI/CD integration guide](docs/guides/ci-cd-integrations.md).
 
 The `knowledge-base` pack defines a stable `docsctl` interface for Confluence, Notion, and internal
-documentation. Draft access remains separate from publication and destructive archival. See the
+documentation. The independently installable `twg-confluence` adapter maps the exact Confluence
+page view, draft create/update, publish, and archive subset to Atlassian Teamwork Graph CLI, with
+optimistic concurrency tokens required for updates. Draft access remains separate from publication
+and destructive archival. See the
 [knowledge-base integration guide](docs/guides/knowledge-base-integrations.md).
 
 The `cloud-infrastructure` pack defines `cloudctl` for AWS, Azure, Google Cloud, infrastructure as
@@ -750,6 +754,7 @@ uv run python samples/gate-waivers/run.py
 uv run python samples/approval-delegation/run.py
 uv run python samples/distributed-coordination/run.py
 uv run python samples/environment-permissions/run.py
+uv run python samples/twg-confluence-cli/run.py
 ```
 
 The [basic swarm sample](samples/basic-swarm/README.md) creates a temporary repository, installs Agora
@@ -781,6 +786,8 @@ compatible Tool Pack before copying either catalog selection. The
 versioned registry snapshot without persisting a private key.
 The [environment permissions sample](samples/environment-permissions/README.md) gates a production
 Tool Run on role scope, Product Owner approval, and successful work evidence.
+The [TWG Confluence sample](samples/twg-confluence-cli/README.md) prepares native page commands,
+requires an optimistic-concurrency token for updates, and rejects unsupported search translation.
 The [distributed coordination sample](samples/distributed-coordination/README.md) wraps a project
 mutation in a structured external lease while retaining the local operating-system lock.
 
@@ -822,7 +829,8 @@ mutation in a structured external lease while retaining the local operating-syst
 - The Tool Pack kernel plus Git repository, provider-neutral code-review, work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, GitHub Pull Requests, Jira, and
-  Terraform CLI adapters, plus partial AWS and Google Cloud inventory adapters.
+  Terraform CLI adapters, a partial Atlassian TWG Confluence adapter, plus partial AWS and Google
+  Cloud inventory adapters.
 - Governed same-swarm work decomposition and provider-neutral delegation budgets are implemented;
   the selected human, agent, or swarm remains responsible for proposing useful child contracts and
   external runtimes remain responsible for measuring usage. Agora provides an append-only,

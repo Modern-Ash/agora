@@ -30,6 +30,8 @@
   explicit Method Pack policy, evidence, and operation approval requirements.
 - Keep documentation publication and archival opt-in; treat remote pages as external state and
   persist their identifiers as Agora artifacts or evidence when lifecycle gates require them.
+- Keep Confluence updates bound to native optimistic-concurrency tokens; expose only an explicit
+  adapter subset when space-scoped search cannot be translated without provider-aware escaping.
 - Keep cloud apply and destruction opt-in; require reviewed immutable plans, external workload
   identity, explicit approvals, and durable evidence appropriate to the target environment.
 - Keep incident resolution opt-in and distinct from recovery evidence; bound observability queries

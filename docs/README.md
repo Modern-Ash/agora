@@ -156,6 +156,8 @@ do not exist as one static agent file in this repository.
   and constrain dynamic transitions to close or reopen.
 - [Jira ACLI adapter](../samples/jira-cli/README.md): prepare bounded Jira searches and governed
   transitions while keeping ACLI installation and authentication external.
+- [Atlassian TWG Confluence adapter](../samples/twg-confluence-cli/README.md): prepare page lifecycle
+  commands, require optimistic concurrency, and reject unsupported search translation.
 - [CLI runtime compatibility](../samples/cli-runtime-compatibility/README.md): probe local adapter
   versions without accessing credentials or contacting providers.
 - [Terraform CLI adapter](../samples/terraform-cli/README.md): prepare state reads and a saved plan

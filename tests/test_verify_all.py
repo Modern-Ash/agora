@@ -49,6 +49,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: remote-registry",
         "sample: terraform-cli",
         "sample: tool-integration",
+        "sample: twg-confluence-cli",
         "sample: work-decomposition",
         "sample: work-management",
     ]
