@@ -103,6 +103,11 @@ PyPI Trusted Publishing. Checkout credentials remain disabled and every action i
 immutable SHA. The PyPI project must authorize this repository, workflow, and `pypi` environment as
 its trusted publisher before the first tag is released.
 
+After publication, a separate unprivileged Python 3.11 job installs the exact tagged version from
+the public PyPI index. It allows bounded retries for index propagation, then runs `agora quickstart`
+and `agora validate` in a temporary project and confirms the installed distribution version. This
+consumer smoke test has no publishing identity or repository write permission.
+
 ## Other CI systems
 
 ```bash
