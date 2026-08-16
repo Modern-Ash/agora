@@ -79,6 +79,17 @@ agora doctor
 Initialization creates `.agora/` and installs the selected environment adapter. With the Codex
 integration, the project also receives `.agents/skills/agora-*/SKILL.md` files.
 
+For an existing Git repository, perform the read-only readiness check first:
+
+```bash
+agora adopt --check --id first-feature --base main
+agora quickstart --id first-feature --base main --objective "Deliver the first feature"
+```
+
+This verifies that Agora state is trackable, the working tree and base branch are suitable, the
+feature branch is available, reserved identities do not collide, and the selected runtime is
+available. A failed quickstart restores the original filesystem and Git branch.
+
 Inspect the durable configuration before forming a team:
 
 ```text

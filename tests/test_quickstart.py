@@ -1,13 +1,35 @@
 import io
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from agora.cli import main
 from agora.markdown import read_markdown, strings_attribute
-from agora.model import QuickstartInput
+from agora.model import InitInput, QuickstartInput
 from agora.workspace import AgoraWorkspace
+
+
+def _git(root: Path, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", *arguments], cwd=root, check=False, capture_output=True, text=True
+    )
+    if check:
+        assert result.returncode == 0, result.stderr
+    return result
+
+
+def _existing_repository(tmp_path: Path) -> Path:
+    root = tmp_path / "project"
+    root.mkdir()
+    _git(root, "init", "--initial-branch", "main")
+    _git(root, "config", "user.name", "Agora Test")
+    _git(root, "config", "user.email", "agora@example.test")
+    (root / "existing.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(root, "add", "existing.py")
+    _git(root, "commit", "-m", "chore: initialize fixture")
+    return root
 
 
 def test_quickstart_creates_a_valid_simple_swarm_from_method_roles(
@@ -107,9 +129,8 @@ def test_secure_quickstart_rejects_an_incomplete_external_keypair(
             )
         )
 
-    project = AgoraWorkspace(cwd=tmp_path / "project")
-    assert project.list_actors() == []
-    assert project.list_swarms() == []
+    assert not (tmp_path / "project").exists()
+    assert (key_directory / "owner-private.pem").read_text(encoding="utf-8") == "incomplete"
 
 
 def test_quickstart_refuses_to_reuse_existing_actor_identity(tmp_path: Path, monkeypatch) -> None:
@@ -132,3 +153,149 @@ def test_quickstart_defaults_to_the_spec_driven_pack(tmp_path: Path, monkeypatch
     assert result.project.default_method == "spec-driven"
     assert set(result.assignments) == {"spec-owner", "developer"}
     assert workspace.validate().ok is True
+
+
+def test_quickstart_adopts_an_existing_repository_on_a_new_branch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = _existing_repository(tmp_path)
+
+    result = AgoraWorkspace(cwd=root).quickstart(
+        QuickstartInput(
+            swarm_id="feature",
+            objective="Add a feature to the existing package",
+            base_branch="main",
+        )
+    )
+
+    assert result.swarm.branch == "agora/feature"
+    assert _git(root, "branch", "--show-current").stdout.strip() == "agora/feature"
+    assert (root / "existing.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert AgoraWorkspace(cwd=root).validate().ok is True
+
+
+def test_quickstart_preflight_rejects_ignored_state_before_writing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = _existing_repository(tmp_path)
+    (root / ".gitignore").write_text(".agora/\n", encoding="utf-8")
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "-m", "chore: ignore Agora state")
+
+    with pytest.raises(ValueError, match="git-persistence"):
+        AgoraWorkspace(cwd=root).quickstart(
+            QuickstartInput(swarm_id="feature", objective="Adopt safely")
+        )
+
+    assert not (root / ".agora").exists()
+    assert _git(root, "branch", "--show-current").stdout.strip() == "main"
+    assert (
+        _git(root, "show-ref", "--verify", "refs/heads/agora/feature", check=False).returncode != 0
+    )
+
+
+def test_quickstart_rolls_back_files_and_branch_after_a_late_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = _existing_repository(tmp_path)
+    workspace = AgoraWorkspace(cwd=root)
+    add_actor = workspace.add_actor
+    calls = 0
+
+    def fail_on_second_actor(data):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected actor failure")
+        return add_actor(data)
+
+    monkeypatch.setattr(workspace, "add_actor", fail_on_second_actor)
+
+    with pytest.raises(RuntimeError, match="injected actor failure"):
+        workspace.quickstart(QuickstartInput(swarm_id="feature", objective="Exercise rollback"))
+
+    assert workspace.cwd == root
+    assert not (root / ".agora").exists()
+    assert (root / "existing.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert _git(root, "branch", "--show-current").stdout.strip() == "main"
+    assert (
+        _git(root, "show-ref", "--verify", "refs/heads/agora/feature", check=False).returncode != 0
+    )
+
+
+def test_quickstart_restores_an_initialized_project_after_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = _existing_repository(tmp_path)
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(InitInput(integration="generic"))
+    _git(root, "add", ".agora")
+    _git(root, "commit", "-m", "chore: initialize Agora")
+    before = {
+        path.relative_to(root / ".agora"): path.read_bytes()
+        for path in (root / ".agora").rglob("*")
+        if path.is_file()
+    }
+    add_actor = workspace.add_actor
+    calls = 0
+
+    def fail_on_second_actor(data):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected initialized-project failure")
+        return add_actor(data)
+
+    monkeypatch.setattr(workspace, "add_actor", fail_on_second_actor)
+
+    with pytest.raises(RuntimeError, match="initialized-project failure"):
+        workspace.quickstart(
+            QuickstartInput(swarm_id="feature", objective="Exercise snapshot rollback")
+        )
+
+    after = {
+        path.relative_to(root / ".agora"): path.read_bytes()
+        for path in (root / ".agora").rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert _git(root, "branch", "--show-current").stdout.strip() == "main"
+    assert (
+        _git(root, "show-ref", "--verify", "refs/heads/agora/feature", check=False).returncode != 0
+    )
+
+
+def test_secure_quickstart_removes_new_keys_when_the_transaction_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    key_directory = tmp_path / "quickstart-keys"
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    add_actor = workspace.add_actor
+    calls = 0
+
+    def fail_on_second_actor(data):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected secure failure")
+        return add_actor(data)
+
+    monkeypatch.setattr(workspace, "add_actor", fail_on_second_actor)
+
+    with pytest.raises(RuntimeError, match="injected secure failure"):
+        workspace.quickstart(
+            QuickstartInput(
+                path="project",
+                objective="Exercise secure rollback",
+                secure=True,
+                key_directory=str(key_directory),
+            )
+        )
+
+    assert not (tmp_path / "project").exists()
+    assert not key_directory.exists()
