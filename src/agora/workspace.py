@@ -86,6 +86,7 @@ from agora.model import (
     ApplyLifecycleActionInput,
     ApprovalDelegationRecord,
     AssignActorInput,
+    AuditPackUpdatesInput,
     AuditRegistryUpdatesInput,
     CatalogPackRecord,
     ChangeDelegationStatusInput,
@@ -132,6 +133,8 @@ from agora.model import (
     PackRemovalResult,
     PackRemovalStep,
     PackSourceRecord,
+    PackUpdateAuditEntry,
+    PackUpdateAuditRecord,
     PackUpdateHistoryRecord,
     PackUpdateResult,
     PackUpdateStep,
@@ -216,10 +219,12 @@ from agora.packs import (
     read_pack_lock,
     read_pack_removal,
     read_pack_source,
+    read_pack_update_audit,
     render_pack_lock,
     render_pack_removal,
     render_pack_source,
     render_pack_update,
+    render_pack_update_audit,
     version_satisfies,
 )
 from agora.registries import (
@@ -1471,6 +1476,60 @@ class AgoraWorkspace:
         return PackUpdateResult(
             **{**result.__dict__, "applied": True, "history_paths": history_paths}
         )
+
+    def audit_pack_updates(self, data: AuditPackUpdatesInput) -> PackUpdateAuditRecord:
+        if data.scope not in {"user", "project"}:
+            raise ValueError(f"Unsupported pack update audit scope: {data.scope}")
+        root = agora_home() if data.scope == "user" else self.project_root() / ".agora"
+        installed = self._installed_pack_contracts(data.scope)
+        entries: list[PackUpdateAuditEntry] = []
+        for (kind, pack_id), _ in sorted(installed.items()):
+            source_path = root / f"{kind}s" / pack_id / "SOURCE.md"
+            if not source_path.is_file():
+                continue
+            source = read_pack_source(source_path)
+            result = self.update_catalog_pack(
+                UpdateCatalogPackInput(
+                    kind=kind,  # type: ignore[arg-type]
+                    pack_id=pack_id,
+                    scope=data.scope,
+                )
+            )
+            entries.append(
+                PackUpdateAuditEntry(
+                    kind=kind,  # type: ignore[arg-type]
+                    id=pack_id,
+                    scope=data.scope,
+                    registry=source.registry,
+                    from_version=result.from_version,
+                    to_version=result.to_version,
+                    update_available=result.update_available,
+                    modified=result.modified,
+                )
+            )
+        audit_id = self._now().astimezone(UTC).strftime("audit-%Y%m%dt%H%M%S%fz")
+        path = root / "notifications" / "pack-updates" / audit_id / "AUDIT.md"
+        record = PackUpdateAuditRecord(
+            id=audit_id,
+            scope=data.scope,
+            checked_at=self._timestamp(),
+            entries=entries,
+            path=str(path) if data.record else None,
+        )
+        if not data.record:
+            return record
+        return self._record_pack_update_audit(data, record)
+
+    @_locked_mutation("scoped")
+    def _record_pack_update_audit(
+        self, data: AuditPackUpdatesInput, record: PackUpdateAuditRecord
+    ) -> PackUpdateAuditRecord:
+        assert record.path is not None
+        path = Path(record.path)
+        if path.exists():
+            raise FileExistsError(f"Pack update audit already exists: {path}")
+        atomic_write(path, render_pack_update_audit(record))
+        return read_pack_update_audit(path)
 
     @_locked_mutation("pack-update")
     def remove_pack(self, data: RemovePackInput) -> PackRemovalResult:
@@ -6590,6 +6649,7 @@ class AgoraWorkspace:
             "upgrades": 0,
             "registries": 0,
             "registry-update-audits": 0,
+            "pack-update-audits": 0,
             "trust-keys": 0,
             "organization-trust-roots": 0,
             "organization-trust-bundles": 0,
@@ -6690,6 +6750,20 @@ class AgoraWorkspace:
                     path,
                     f"Registry update audit id {audit.id} does not match directory "
                     f"{directory.name}",
+                )
+        for directory in _child_directories(root / ".agora" / "notifications" / "pack-updates"):
+            path = directory / "AUDIT.md"
+            audit = inspect(
+                "pack-update-audits",
+                "pack-update-audit.invalid",
+                path,
+                lambda path=path: read_pack_update_audit(path),
+            )
+            if isinstance(audit, PackUpdateAuditRecord) and audit.id != directory.name:
+                issue(
+                    "pack-update-audit.id-mismatch",
+                    path,
+                    f"Pack update audit id {audit.id} does not match directory {directory.name}",
                 )
         trust_keys: dict[str, RegistryTrustKeyRecord] = {}
         for path in sorted((root / ".agora" / "trust" / "keys").glob("*.md")):

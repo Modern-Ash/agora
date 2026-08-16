@@ -8,6 +8,7 @@ from agora.cli import main
 from agora.filesystem import template_root
 from agora.markdown import MarkdownDocument, read_markdown, render_markdown
 from agora.model import (
+    AuditPackUpdatesInput,
     InitInput,
     InstallCatalogPackInput,
     InstallRegistryInput,
@@ -20,6 +21,7 @@ from agora.packs import (
     compare_pack_versions,
     read_pack_lock,
     read_pack_removal,
+    read_pack_update_audit,
     version_satisfies,
 )
 from agora.tools import load_tool_contract
@@ -436,6 +438,63 @@ def test_pack_update_protects_local_modifications(tmp_path: Path, monkeypatch) -
         UpdateCatalogPackInput(kind="tool", pack_id="tracker", apply=True, force=True)
     )
     assert workspace.show_tool("tracker").version == "2.0.0"
+
+
+def test_audits_catalog_pack_updates_and_records_a_markdown_notification(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    source_v1 = _tool(tmp_path / "first" / "tracker", "tracker", "1.0.0")
+    registry_v1 = _registry(tmp_path / "registry-v1", [("tool", source_v1)])
+    workspace.install_registry(InstallRegistryInput(source=str(registry_v1), scope="project"))
+    workspace.install_catalog_pack(
+        InstallCatalogPackInput(kind="tool", pack_id="tracker", scope="project")
+    )
+    direct = _tool(tmp_path / "direct", "direct", "1.0.0")
+    workspace.install_tool(InstallToolInput(source=str(direct), scope="project"))
+    source_v2 = _tool(tmp_path / "second" / "tracker", "tracker", "2.0.0")
+    registry_v2 = _registry(tmp_path / "registry-v2", [("tool", source_v2)])
+    workspace.install_registry(
+        InstallRegistryInput(source=str(registry_v2), scope="project", force=True)
+    )
+
+    preview = workspace.audit_pack_updates(AuditPackUpdatesInput(scope="project"))
+
+    assert preview.path is None
+    assert len(preview.entries) == 1
+    assert preview.entries[0].id == "tracker"
+    assert preview.entries[0].from_version == "1.0.0"
+    assert preview.entries[0].to_version == "2.0.0"
+    assert preview.entries[0].update_available is True
+    assert preview.entries[0].modified is False
+    assert workspace.show_tool("tracker").version == "1.0.0"
+
+    recorded = workspace.audit_pack_updates(AuditPackUpdatesInput(scope="project", record=True))
+    assert recorded.path is not None
+    assert read_pack_update_audit(Path(recorded.path)).entries == recorded.entries
+    assert workspace.validate().ok is True
+
+    output = io.StringIO()
+    assert (
+        main(
+            ["pack", "audit", "--scope", "project"],
+            cwd=workspace.project_root(),
+            stdout=output,
+        )
+        == 0
+    )
+    assert '"update_available": true' in output.getvalue()
+
+    audit_path = Path(recorded.path)
+    audit_path.write_text(
+        audit_path.read_text(encoding="utf-8").replace(
+            '"update-available":true', '"update-available":false'
+        ),
+        encoding="utf-8",
+    )
+    invalid = workspace.validate()
+    assert invalid.ok is False
+    assert any(issue.code == "pack-update-audit.invalid" for issue in invalid.issues)
 
 
 def test_pack_update_rejects_mutable_versions_and_direct_installs(

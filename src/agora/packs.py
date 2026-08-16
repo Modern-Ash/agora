@@ -19,6 +19,8 @@ from agora.model import (
     PackRemovalRecord,
     PackRemovalStep,
     PackSourceRecord,
+    PackUpdateAuditEntry,
+    PackUpdateAuditRecord,
     PackUpdateHistoryRecord,
 )
 
@@ -476,6 +478,114 @@ def render_pack_removal(record: PackRemovalRecord) -> str:
                 f"# Pack removal {record.id}\n\n"
                 "This installer-owned record preserves the composition change after the pack "
                 "directories are removed."
+            ),
+        )
+    )
+
+
+def read_pack_update_audit(path: Path) -> PackUpdateAuditRecord:
+    document = read_markdown(path)
+    attributes = document.attributes
+    if string_attribute(attributes, "schema") != "agora/pack-update-audit/v1":
+        raise ValueError(f"Expected schema agora/pack-update-audit/v1: {path}")
+    id_ = string_attribute(attributes, "id")
+    assert_slug(id_, "Pack update audit id")
+    scope = string_attribute(attributes, "scope")
+    if scope not in {"user", "project"}:
+        raise ValueError(f"Unsupported pack update audit scope: {path}")
+    raw_entries = attributes.get("entries")
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Pack update audit entries must be an array: {path}")
+    entries: list[PackUpdateAuditEntry] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(raw_entries):
+        if not isinstance(item, dict) or set(item) != {
+            "kind",
+            "id",
+            "scope",
+            "registry",
+            "from-version",
+            "to-version",
+            "update-available",
+            "modified",
+        }:
+            raise ValueError(f"Pack update audit entry {index} is invalid: {path}")
+        kind = item.get("kind")
+        pack_id = item.get("id")
+        entry_scope = item.get("scope")
+        registry = item.get("registry")
+        from_version = item.get("from-version")
+        to_version = item.get("to-version")
+        update_available = item.get("update-available")
+        modified = item.get("modified")
+        if kind not in PACK_KINDS or not isinstance(pack_id, str):
+            raise ValueError(f"Pack update audit entry {index} identity is invalid: {path}")
+        assert_slug(pack_id, "Pack update audit pack id")
+        if entry_scope != scope or not isinstance(registry, str):
+            raise ValueError(f"Pack update audit entry {index} source is invalid: {path}")
+        assert_slug(registry, "Pack update audit registry")
+        if not isinstance(from_version, str) or not isinstance(to_version, str):
+            raise ValueError(f"Pack update audit entry {index} versions are invalid: {path}")
+        validate_pack_version(from_version)
+        validate_pack_version(to_version)
+        if not isinstance(update_available, bool) or not isinstance(modified, bool):
+            raise ValueError(f"Pack update audit entry {index} flags are invalid: {path}")
+        relation = compare_pack_versions(to_version, from_version)
+        if relation < 0 or update_available != (relation > 0 or modified):
+            raise ValueError(f"Pack update audit entry {index} relation is invalid: {path}")
+        key = (kind, pack_id)
+        if key in seen:
+            raise ValueError(f"Pack update audit contains a duplicate pack: {kind}/{pack_id}")
+        seen.add(key)
+        entries.append(
+            PackUpdateAuditEntry(
+                kind=kind,  # type: ignore[arg-type]
+                id=pack_id,
+                scope=scope,  # type: ignore[arg-type]
+                registry=registry,
+                from_version=from_version,
+                to_version=to_version,
+                update_available=update_available,
+                modified=modified,
+            )
+        )
+    return PackUpdateAuditRecord(
+        id=id_,
+        scope=scope,  # type: ignore[arg-type]
+        checked_at=string_attribute(attributes, "checked-at"),
+        entries=entries,
+        path=str(path),
+    )
+
+
+def render_pack_update_audit(record: PackUpdateAuditRecord) -> str:
+    updates = sum(item.update_available for item in record.entries)
+    modified = sum(item.modified for item in record.entries)
+    return render_markdown(
+        MarkdownDocument(
+            attributes={
+                "schema": "agora/pack-update-audit/v1",
+                "id": record.id,
+                "scope": record.scope,
+                "checked-at": record.checked_at,
+                "entries": [
+                    {
+                        "kind": item.kind,
+                        "id": item.id,
+                        "scope": item.scope,
+                        "registry": item.registry,
+                        "from-version": item.from_version,
+                        "to-version": item.to_version,
+                        "update-available": item.update_available,
+                        "modified": item.modified,
+                    }
+                    for item in record.entries
+                ],
+            },
+            body=(
+                f"# Pack update audit {record.id}\n\n"
+                f"Checked {len(record.entries)} catalog packs, found {updates} updates, and "
+                f"detected {modified} locally modified packs."
             ),
         )
     )

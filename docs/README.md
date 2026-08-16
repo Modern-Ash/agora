@@ -41,8 +41,8 @@ lifecycles. Start with the user journey, then use the conceptual and reference m
   Tool Packs, and select provenance with deterministic scope precedence.
 - [Pack dependencies](guides/pack-dependencies.md): declare compatible pack versions, recursively
   resolve catalog dependencies, and reject broken or cyclic compositions.
-- [Pack updates](guides/pack-updates.md): persist catalog provenance, preview dependency-aware
-  upgrades, and protect local pack amendments.
+- [Pack updates](guides/pack-updates.md): audit catalog installations, persist provenance, preview
+  dependency-aware upgrades, and protect local pack amendments.
 - [Pack composition locks](guides/pack-locks.md): inventory installed trees and validate durable,
   continuous per-pack update histories.
 - [Pack removal](guides/pack-removal.md): preview safe removals, protect dependents and durable

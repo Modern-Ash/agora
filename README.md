@@ -196,6 +196,7 @@ agora pack install --kind method --id release-flow \
   --registry team-catalog --scope project
 agora pack update --kind method --id release-flow
 agora pack update --kind method --id release-flow --apply
+agora pack audit --scope project --record
 ```
 
 Project registries override user registries, which override the bundled catalog when the same pack id
@@ -208,6 +209,8 @@ Each catalog-installed pack persists its registry and checksum in `SOURCE.md`. E
 [pack update guide](docs/guides/pack-updates.md).
 `PACKS.lock.md` inventories the exact installed composition, while per-pack `UPDATE.md` files retain
 each applied transition; see the [pack lock guide](docs/guides/pack-locks.md).
+Aggregate pack audits can record update and local-modification notifications without changing the
+installed composition.
 Remote releases are checksum-pinned and may require an Ed25519 signature; Agora persists their
 provenance beside the installed snapshot. See the
 [remote registry guide](docs/guides/remote-registries.md).

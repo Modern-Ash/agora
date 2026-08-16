@@ -562,6 +562,27 @@ class PackUpdateResult:
 
 
 @dataclass(frozen=True)
+class PackUpdateAuditEntry:
+    kind: PackKind
+    id: str
+    scope: Literal["user", "project"]
+    registry: str
+    from_version: str
+    to_version: str
+    update_available: bool
+    modified: bool
+
+
+@dataclass(frozen=True)
+class PackUpdateAuditRecord:
+    id: str
+    scope: Literal["user", "project"]
+    checked_at: str
+    entries: list[PackUpdateAuditEntry]
+    path: str | None = None
+
+
+@dataclass(frozen=True)
 class PackRemovalStep:
     kind: PackKind
     id: str
@@ -921,6 +942,12 @@ class UpdateCatalogPackInput:
     registry_id: str | None = None
     apply: bool = False
     force: bool = False
+
+
+@dataclass(frozen=True)
+class AuditPackUpdatesInput:
+    scope: Literal["user", "project"]
+    record: bool = False
 
 
 @dataclass(frozen=True)

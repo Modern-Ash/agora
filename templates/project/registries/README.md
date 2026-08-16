@@ -6,3 +6,7 @@ Installed registry snapshots live in subdirectories containing `REGISTRY.md`, `m
 Use `agora registry audit --scope project` for an authenticated aggregate update check. Add
 `--record` to persist a reviewable notification under `../notifications/registry-updates/`; audits
 never apply registry or installed-pack updates.
+
+After updating a registry snapshot, use `agora pack audit --scope project` to inspect every managed
+pack. Its optional report lives under `../notifications/pack-updates/` and never authorizes
+application.

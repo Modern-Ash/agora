@@ -87,6 +87,45 @@ swap restores every previous pack and leaves the existing lock untouched.
 Use `--scope user` or `--scope project` when the same pack is installed in both locations. Without a
 scope, an initialized project takes precedence over the user installation.
 
+## Aggregate pack audits
+
+After updating a registry snapshot, inspect every catalog-installed pack in one scope:
+
+```bash
+agora pack audit --scope project
+```
+
+Directly installed packs have no catalog provenance and are omitted. Each JSON entry reports its
+kind, id, registry, installed and target versions, update availability, and whether the installed
+tree has local modifications. The audit calls the same dependency-aware preview used by
+`agora pack update`; it does not write a pack, history record, or composition lock.
+
+Persist a durable notification for a human, agent, CI job, or external scheduler:
+
+```bash
+agora pack audit --scope project --record
+```
+
+Reports live under:
+
+```text
+.agora/notifications/pack-updates/<audit-id>/AUDIT.md
+```
+
+`agora validate` checks report identities, version direction, update flags, and duplicate entries.
+A catalog error, incompatible dependency graph, or mutable published version fails the audit rather
+than producing a successful notification.
+
+The complete scheduled detection sequence may be automated without granting mutation authority:
+
+```bash
+agora registry audit --scope project --record
+agora pack audit --scope project --record
+```
+
+Registry application and each pack application remain separate, explicit commands. Agora does not
+interpret a recorded audit as approval and never turns a notification into an automatic update.
+
 Run the end-to-end example:
 
 ```bash

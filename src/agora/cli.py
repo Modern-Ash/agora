@@ -17,6 +17,7 @@ from agora.model import (
     AddRegistryTrustKeyInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
+    AuditPackUpdatesInput,
     AuditRegistryUpdatesInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
@@ -299,6 +300,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pack_update.add_argument("--scope", choices=("user", "project"))
     pack_update.add_argument("--apply", action="store_true")
     pack_update.add_argument("--force", action="store_true")
+    pack_audit = pack.add_parser(
+        "audit", help="Check every catalog-installed pack and optionally record a notification"
+    )
+    pack_audit.add_argument("--scope", choices=("user", "project"), default="project")
+    pack_audit.add_argument("--record", action="store_true")
     pack_lock = pack.add_parser("lock", help="Refresh the installed pack composition lock")
     pack_lock.add_argument("--scope", choices=("user", "project"), default="project")
     pack_remove = pack.add_parser("remove", help="Preview or apply a safe pack removal")
@@ -1088,6 +1094,10 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
                 apply=args.apply,
                 force=args.force,
             )
+        )
+    if args.command == "pack" and args.pack_command == "audit":
+        return workspace.audit_pack_updates(
+            AuditPackUpdatesInput(scope=args.scope, record=args.record)
         )
     if args.command == "pack" and args.pack_command == "lock":
         return workspace.refresh_pack_lock(RefreshPackLockInput(scope=args.scope))

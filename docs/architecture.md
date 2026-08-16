@@ -103,6 +103,8 @@ Each catalog-installed pack carries installer-owned `SOURCE.md` provenance with 
 published version, and deterministic tree checksum. Pack updates are preview-only until `--apply`,
 reject downgrades and mutable versions, re-resolve the complete composition, and stage clean atomic
 pack replacements. Local amendments remain valid but require explicit `--force` before replacement.
+Aggregate pack audits run those previews over every managed pack in a scope and may persist a
+Markdown notification. They omit direct installations and never apply a plan.
 
 `PACKS.lock.md` is the deterministic current-state inventory for user or project scope. Managed pack
 mutations regenerate it; validation compares it with installed trees, while `agora pack lock` accepts

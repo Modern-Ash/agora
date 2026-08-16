@@ -41,8 +41,9 @@ validation, so front matter preserves structured metadata and gates remain execu
 - Organization root rotation, threshold signatures, and third-party transparency-log proofs for
   remote registry releases. Signed sequential trust and revocation feeds are implemented.
 - Automatic installed-pack updates and in-process background scheduling. Aggregate authenticated
-  notifications can be invoked and recorded by an external scheduler. Explicit authenticated
-  checks, transactional registry replacement, durable update history, dependency manifests, and
+  registry and pack notifications can be invoked and recorded by an external scheduler. Release
+  checks are authenticated; transactional registry replacement, durable update history, dependency
+  manifests, and
   compatibility-aware catalog installation are implemented. Installed pack provenance and explicit,
   dependency-aware pack updates are also implemented, including per-pack transition history and
   deterministic scope composition locks. Preview-first, dependency-safe pack removal is implemented
