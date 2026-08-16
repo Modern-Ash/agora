@@ -216,6 +216,7 @@ from agora.model import (
     UpgradeInput,
     UpgradeResult,
     UsageRecord,
+    UsageSummary,
     UserConfiguration,
     ValidationIssue,
     ValidationReport,
@@ -4097,6 +4098,33 @@ class AgoraWorkspace:
             self._load_usage(path)
             for path in sorted((Path(work.path) / "usage").glob("*/USAGE.md"))
         ]
+
+    def summarize_usage(self, swarm_id: str, work_id: str) -> UsageSummary:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        records = self.list_usage(swarm.id, work.id)
+        consumed: dict[str, int] = {}
+        for record in records:
+            for dimension, amount in record.amounts.items():
+                consumed[dimension] = consumed.get(dimension, 0) + amount
+        consumed = dict(sorted(consumed.items()))
+        remaining = (
+            None
+            if work.budget_limits is None
+            else {
+                dimension: limit - consumed.get(dimension, 0)
+                for dimension, limit in sorted(work.budget_limits.items())
+            }
+        )
+        return UsageSummary(
+            swarm_id=swarm.id,
+            work_id=work.id,
+            budget_limits=work.budget_limits,
+            consumed=consumed,
+            remaining=remaining,
+            records=len(records),
+        )
 
     @staticmethod
     def _normalize_usage_amounts(amounts: dict[str, int]) -> dict[str, int]:

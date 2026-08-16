@@ -77,6 +77,16 @@ List the ledger without mutation:
 agora usage list --swarm specialists --work child-slice
 ```
 
+Query cumulative consumption and remaining capacity without calculating it manually:
+
+```bash
+agora usage status --swarm specialists --work child-slice
+```
+
+The derived response includes `budget_limits`, `consumed`, `remaining`, and `records`. For unbounded
+work, `budget_limits` and `remaining` are `null`; observed dimensions still appear under `consumed`.
+The query creates no artifact and does not change the work precondition.
+
 An authenticated actor uses `agora usage prepare --action-id ...` and the ordinary
 `agora action authorization` / `agora action apply` sequence. The signature binds the exact usage
 id, amount map, evidence references, and current work digest. A concurrent usage record therefore
