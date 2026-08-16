@@ -32,6 +32,7 @@ def test_builds_a_python_only_full_verification_plan() -> None:
         "sample: gate-waivers",
         "sample: github-actions-cli",
         "sample: github-issues-cli",
+        "sample: gitlab-issues-cli",
         "sample: handoffs",
         "sample: interruptions",
         "sample: jira-cli",

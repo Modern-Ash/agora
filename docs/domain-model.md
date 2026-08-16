@@ -213,12 +213,14 @@ A **Tool Adapter** is a provider-specific Tool Pack that declares `provider`, `t
 provider-neutral contract it `implements`. The adapter changes command translation, not lifecycle
 authority. Adapter discovery records whether its executable is available; installation and
 invocation remain separate explicit actions. Bundled adapters implement `ci-cd` and
-`work-management` for GitHub through `gh`, Jira through `acli`, `cloud-infrastructure` through
-Terraform CLI, and a Confluence page lifecycle subset through `twg`.
+`work-management` for GitHub through `gh`, Jira through `acli`, and a GitLab Issues subset through
+`glab`; plus `cloud-infrastructure` through Terraform CLI and a Confluence page lifecycle subset
+through `twg`.
 A partial adapter lists `implements-operations`; it must contain exactly that conforming subset and
 cannot be invoked for omitted operations. AWS and Google Cloud inventory use this form for read-only
-resource discovery; the TWG Confluence adapter uses it to omit unsafe space-scoped search
-translation while preserving optimistic concurrency for updates.
+resource discovery; GitLab Issues uses it to omit unsupported typed creation; the TWG Confluence
+adapter uses it to omit unsafe space-scoped search translation while preserving optimistic
+concurrency for updates.
 An adapter may be distributed but unavailable in the current environment. `runtime_available`
 reflects executable discovery only. A checked adapter additionally reports its detected version and
 whether it meets the manifest's minimum runtime version. Neither result implies authentication,

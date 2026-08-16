@@ -237,6 +237,8 @@ concrete CLI-first implementations that delegate directly to `gh` and Terraform 
 Partial adapters declare the exact operations they implement. The AWS and Google Cloud inventory
 adapters use this mechanism to provide bounded native reads without claiming plan, deployment, or
 destruction behavior that the provider-wide CLIs do not possess.
+The GitLab Issues adapter similarly exposes native search, view, comment, and close/reopen through
+`glab` without claiming typed creation that the CLI cannot represent.
 The Jira adapter implements the complete work-management contract through `acli`; it remains
 discoverable but unavailable when that executable is absent. Availability never causes installation
 or an MCP fallback. The `twg-confluence` adapter uses the same explicit-subset mechanism for page

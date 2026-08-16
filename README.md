@@ -483,6 +483,7 @@ agora tool adapter list --check
 agora tool adapter list --compatible
 agora tool adapter install --id github-actions --scope project
 agora tool adapter install --id github-issues --scope project
+agora tool adapter install --id gitlab-issues --scope project
 agora tool adapter install --id jira --scope project
 agora tool adapter install --id twg-confluence --scope project
 agora tool adapter install --id terraform --scope project
@@ -556,7 +557,9 @@ the [environment permissions guide](docs/guides/environment-permissions.md).
 
 The `work-management` pack defines a stable `workctl` interface for Jira, Linear, or an internal
 tracker while keeping `issue.read`, `issue.write`, and `issue.transition` authority in the active
-Method Pack. The `github-issues` and `jira` adapters map that contract directly to `gh` and ACLI.
+Method Pack. The `github-issues` and `jira` adapters map that contract directly to `gh` and ACLI;
+the partial `gitlab-issues` adapter maps exact search, view, comment, and close/reopen operations to
+`glab` without claiming unsupported typed creation.
 See the [work-management integration guide](docs/guides/work-management-integrations.md).
 
 The `code-review` pack separates review reads, review writing, review decisions, and merge authority.
@@ -752,6 +755,7 @@ uv run python samples/pack-dependencies/run.py
 uv run python samples/remote-registry/run.py
 uv run python samples/gate-waivers/run.py
 uv run python samples/approval-delegation/run.py
+uv run python samples/gitlab-issues-cli/run.py
 uv run python samples/distributed-coordination/run.py
 uv run python samples/environment-permissions/run.py
 uv run python samples/twg-confluence-cli/run.py
@@ -784,6 +788,8 @@ local process contention and recovery. The
 compatible Tool Pack before copying either catalog selection. The
 [remote registry sample](samples/remote-registry/README.md) signs, verifies, installs, and validates a
 versioned registry snapshot without persisting a private key.
+The [GitLab Issues sample](samples/gitlab-issues-cli/README.md) prepares native issue reads and
+transitions while rejecting deletion and unsupported typed creation.
 The [environment permissions sample](samples/environment-permissions/README.md) gates a production
 Tool Run on role scope, Product Owner approval, and successful work evidence.
 The [TWG Confluence sample](samples/twg-confluence-cli/README.md) prepares native page commands,
@@ -829,8 +835,8 @@ mutation in a structured external lease while retaining the local operating-syst
 - The Tool Pack kernel plus Git repository, provider-neutral code-review, work-management, CI/CD,
   knowledge-base, cloud-infrastructure, and observability packs are implemented. Bundled vendor
   distributions currently include GitHub Actions, GitHub Issues, GitHub Pull Requests, Jira, and
-  Terraform CLI adapters, a partial Atlassian TWG Confluence adapter, plus partial AWS and Google
-  Cloud inventory adapters.
+  Terraform CLI adapters, partial GitLab Issues and Atlassian TWG Confluence adapters, plus partial
+  AWS and Google Cloud inventory adapters.
 - Governed same-swarm work decomposition and provider-neutral delegation budgets are implemented;
   the selected human, agent, or swarm remains responsible for proposing useful child contracts and
   external runtimes remain responsible for measuring usage. Agora provides an append-only,

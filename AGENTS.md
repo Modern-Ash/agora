@@ -26,6 +26,8 @@
   infer compatibility from executable presence alone when launching governed work.
 - Use an explicit conforming operation subset when a provider CLI cannot implement a full neutral
   contract; never invent generic plan, apply, or destructive semantics.
+- Never map GitLab issue creation to the neutral work-management contract unless the adapter can
+  preserve its required work-item type; restrict dynamic lifecycle subcommands to close or reopen.
 - Keep CI cancellation and deployment capabilities opt-in; combine production authority with
   explicit Method Pack policy, evidence, and operation approval requirements.
 - Keep documentation publication and archival opt-in; treat remote pages as external state and

@@ -154,6 +154,8 @@ do not exist as one static agent file in this repository.
   adapter, prepare native commands, and preserve separate cancellation authority.
 - [GitHub Issues CLI adapter](../samples/github-issues-cli/README.md): prepare native issue searches
   and constrain dynamic transitions to close or reopen.
+- [GitLab Issues CLI adapter](../samples/gitlab-issues-cli/README.md): prepare native issue reads and
+  transitions while rejecting deletion and unsupported typed creation.
 - [Jira ACLI adapter](../samples/jira-cli/README.md): prepare bounded Jira searches and governed
   transitions while keeping ACLI installation and authentication external.
 - [Atlassian TWG Confluence adapter](../samples/twg-confluence-cli/README.md): prepare page lifecycle

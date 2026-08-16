@@ -1253,6 +1253,104 @@ def test_installs_and_governs_the_github_issues_cli_adapter(
     assert workspace.validate().ok
 
 
+def test_installs_and_governs_the_gitlab_issues_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/glab" if executable == "glab" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="gitlab-issues", scope="project")
+    )
+    assert installed.implements_operations == ["search", "view", "comment", "transition"]
+
+    searched = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-issue-search",
+            tool_id="gitlab-issues",
+            operation_id="search",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"query": "governed adapter"},
+        )
+    )
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-issue-view",
+            tool_id="gitlab-issues",
+            operation_id="view",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"issue": "https://gitlab.com/example/agora/-/issues/42"},
+        )
+    )
+    transitioned = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-issue-close",
+            tool_id="gitlab-issues",
+            operation_id="transition",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={"issue": "42", "state": "close"},
+        )
+    )
+
+    assert searched.command == [
+        "glab",
+        "issue",
+        "list",
+        "--search",
+        "governed adapter",
+        "--all",
+        "--per-page",
+        "50",
+        "--output",
+        "json",
+    ]
+    assert viewed.command == [
+        "glab",
+        "issue",
+        "view",
+        "https://gitlab.com/example/agora/-/issues/42",
+        "--output",
+        "json",
+    ]
+    assert transitioned.command == ["glab", "issue", "close", "42"]
+    with pytest.raises(ValueError, match="state must be one of: close, reopen"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="gitlab-issue-unsafe-transition",
+                tool_id="gitlab-issues",
+                operation_id="transition",
+                actor_id="owner",
+                swarm_id="delivery",
+                inputs={"issue": "42", "state": "delete"},
+            )
+        )
+    with pytest.raises(FileNotFoundError, match="create"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="gitlab-issue-create",
+                tool_id="gitlab-issues",
+                operation_id="create",
+                actor_id="owner",
+                swarm_id="delivery",
+                inputs={
+                    "project": "example/agora",
+                    "type": "Task",
+                    "title": "Unsafe type mapping",
+                    "description": "Create is intentionally absent.",
+                },
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "gitlab-issue-unsafe-transition").exists()
+    assert not (root / ".agora" / "tool-runs" / "gitlab-issue-create").exists()
+    assert workspace.validate().ok
+
+
 def test_governs_partial_aws_and_gcp_inventory_adapters(
     project: tuple[Path, AgoraWorkspace], monkeypatch
 ) -> None:

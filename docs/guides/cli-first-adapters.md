@@ -137,6 +137,27 @@ Transition maps the state into the native command position, so its manifest rest
 `close` or `reopen`. Values such as `delete`, `edit`, or `transfer` are rejected before `RUN.md` is
 created.
 
+## GitLab Issues through `glab`
+
+The `gitlab-issues` adapter implements an explicit subset of `work-management` through GitLab CLI
+1.109.0 or newer:
+
+```bash
+agora tool adapter install --id gitlab-issues --scope project
+agora tool invoke \
+  --id inspect-gitlab-work \
+  --tool gitlab-issues \
+  --operation search \
+  --actor developer \
+  --swarm delivery \
+  --input query="governance"
+```
+
+Search and view request bounded JSON. Comment uses a non-interactive message flag. Transition places
+the requested state in a subcommand position, so the manifest permits only `close` or `reopen`.
+Create is omitted because the native command cannot preserve the neutral contract's required
+work-item `type`; Agora does not discard it or reinterpret it as a label.
+
 ## GitHub Pull Requests through `gh`
 
 The `github-pull-requests` adapter implements the provider-neutral `code-review` contract. It can
