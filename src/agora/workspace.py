@@ -88,6 +88,7 @@ from agora.model import (
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
     AddTransparencyTrustKeyInput,
+    AddUsageInput,
     ApplyLifecycleActionInput,
     ApplyPackUpdateAuditInput,
     ApprovalDelegationRecord,
@@ -167,6 +168,7 @@ from agora.model import (
     PrepareSessionAuthorizationInput,
     PrepareSessionInput,
     PrepareToolAuthorizationInput,
+    PrepareUsageInput,
     PrepareWorkTransitionInput,
     ProjectConfiguration,
     QuickstartInput,
@@ -213,6 +215,7 @@ from agora.model import (
     UpdateRegistryInput,
     UpgradeInput,
     UpgradeResult,
+    UsageRecord,
     UserConfiguration,
     ValidationIssue,
     ValidationReport,
@@ -3983,6 +3986,131 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def add_usage(self, data: AddUsageInput) -> UsageRecord:
+        root = self.project_root()
+        swarm, actor, work, amounts = self._validate_add_usage(root, data)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "prepare usage.add before applying it"
+            )
+        return self._apply_add_usage(work, actor, data, amounts, None)
+
+    @_locked_mutation("project")
+    def prepare_add_usage(self, data: PrepareUsageInput) -> LifecycleActionRecord:
+        assert_slug(data.action_id, "Lifecycle Action id")
+        root = self.project_root()
+        swarm, actor, work, amounts = self._validate_add_usage(root, data.usage)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=data.action_id,
+            action="usage.add",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={
+                "usage": data.usage.id,
+                "amounts": json.dumps(amounts, ensure_ascii=True, separators=(",", ":")),
+                "evidence": json.dumps(
+                    data.usage.evidence_refs,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+    def _validate_add_usage(
+        self, root: Path, data: AddUsageInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, dict[str, int]]:
+        assert_slug(data.id, "Usage id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, "usage.add")
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        amounts = self._normalize_usage_amounts(data.amounts)
+        evidence_refs = [reference.strip() for reference in data.evidence_refs]
+        if not evidence_refs or any(not reference for reference in evidence_refs):
+            raise ValueError("Usage requires at least one non-empty evidence reference")
+        usage_path = Path(work.path) / "usage" / data.id
+        if usage_path.exists():
+            raise FileExistsError(f"Usage record already exists: {data.id}")
+        totals = {dimension: 0 for dimension in work.budget_limits or {}}
+        for record in self.list_usage(swarm.id, work.id):
+            for dimension, amount in record.amounts.items():
+                totals[dimension] = totals.get(dimension, 0) + amount
+        if work.budget_limits is not None:
+            unknown = sorted(set(amounts) - set(work.budget_limits))
+            if unknown:
+                raise ValueError(
+                    "Usage dimensions are not available from the work budget: " + ", ".join(unknown)
+                )
+            exceeded = [
+                dimension
+                for dimension, amount in amounts.items()
+                if totals.get(dimension, 0) + amount > work.budget_limits[dimension]
+            ]
+            if exceeded:
+                detail = ", ".join(
+                    f"{dimension}={totals.get(dimension, 0) + amounts[dimension]}"
+                    f"/{work.budget_limits[dimension]}"
+                    for dimension in exceeded
+                )
+                raise ValueError(f"Usage exceeds work budget: {detail}")
+        return swarm, actor, work, amounts
+
+    def _apply_add_usage(
+        self,
+        work: WorkRecord,
+        actor: ActorRecord,
+        data: AddUsageInput,
+        amounts: dict[str, int],
+        action_id: str | None,
+    ) -> UsageRecord:
+        path = Path(work.path) / "usage" / data.id / "USAGE.md"
+        record = UsageRecord(
+            id=data.id,
+            swarm_id=work.swarm_id,
+            work_id=work.id,
+            actor=actor.reference,
+            amounts=amounts,
+            evidence_refs=[reference.strip() for reference in data.evidence_refs],
+            created_at=self._timestamp(),
+            path=str(path),
+            action_id=action_id,
+        )
+        write_new(path, self._render_usage(record))
+        self._append_work_event(
+            work,
+            "usage.added",
+            f"usage={record.id} actor={record.actor} amounts="
+            + json.dumps(record.amounts, ensure_ascii=True, separators=(",", ":")),
+        )
+        return record
+
+    def list_usage(self, swarm_id: str, work_id: str) -> list[UsageRecord]:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        return [
+            self._load_usage(path)
+            for path in sorted((Path(work.path) / "usage").glob("*/USAGE.md"))
+        ]
+
+    @staticmethod
+    def _normalize_usage_amounts(amounts: dict[str, int]) -> dict[str, int]:
+        if not amounts:
+            raise ValueError("Usage requires at least one amount")
+        normalized: dict[str, int] = {}
+        for dimension, amount in amounts.items():
+            assert_slug(dimension, "Usage dimension")
+            if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+                raise ValueError(f"Usage amount must be a positive integer: {dimension}")
+            normalized[dimension] = amount
+        return dict(sorted(normalized.items()))
+
+    @_locked_mutation("project")
     def delegate_approval(self, data: DelegateApprovalInput) -> ApprovalDelegationRecord:
         root = self.project_root()
         delegation, swarm, actor, target, work = self._validate_delegate_approval(root, data)
@@ -4525,6 +4653,9 @@ class AgoraWorkspace:
         evidence_context: (
             tuple[PrepareEvidenceInput, SwarmRecord, ActorRecord, WorkRecord] | None
         ) = None
+        usage_context: (
+            tuple[AddUsageInput, SwarmRecord, ActorRecord, WorkRecord, dict[str, int]] | None
+        ) = None
         approval_context: (
             tuple[
                 AddApprovalInput,
@@ -4756,6 +4887,19 @@ class AgoraWorkspace:
             )
             swarm, actor, work = self._validate_add_evidence(root, evidence)
             evidence_context = (evidence, swarm, actor, work)
+        elif record.action == "usage.add":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no usage work: {record.id}")
+            usage = AddUsageInput(
+                id=record.parameters["usage"],
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                amounts=self._usage_amounts_parameter(record),
+                evidence_refs=self._string_list_parameter(record, "evidence"),
+            )
+            swarm, actor, work, amounts = self._validate_add_usage(root, usage)
+            usage_context = (usage, swarm, actor, work, amounts)
         elif record.action == "approval.delegate":
             if record.work_id is None:
                 raise ValueError(f"Lifecycle Action has no Approval Delegation work: {record.id}")
@@ -5027,6 +5171,10 @@ class AgoraWorkspace:
             assert evidence_context is not None
             evidence, swarm, actor, work = evidence_context
             self._apply_add_evidence(swarm, actor, work, evidence)
+        elif record.action == "usage.add":
+            assert usage_context is not None
+            usage, _, actor, work, amounts = usage_context
+            self._apply_add_usage(work, actor, usage, amounts, record.id)
         elif record.action == "approval.delegate":
             assert approval_delegation_context is not None
             delegation_input, swarm, actor, target, work = approval_delegation_context
@@ -5147,6 +5295,16 @@ class AgoraWorkspace:
                 f"Lifecycle Action parameter {key} must be an integer map or null: {record.id}"
             )
         return cls._normalize_budget_limits(value)
+
+    @classmethod
+    def _usage_amounts_parameter(cls, record: LifecycleActionRecord) -> dict[str, int]:
+        try:
+            value = json.loads(record.parameters["amounts"])
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Lifecycle Action has invalid usage amounts: {record.id}") from error
+        if not isinstance(value, dict):
+            raise ValueError(f"Lifecycle Action usage amounts must be a map: {record.id}")
+        return cls._normalize_usage_amounts(value)
 
     @classmethod
     def _artifact_promotions_parameter(cls, record: LifecycleActionRecord) -> dict[str, str]:
@@ -7086,6 +7244,7 @@ class AgoraWorkspace:
         delegations = self.list_delegations()
         sessions = self.list_sessions()
         tool_runs = self.list_tool_runs()
+        usage = [record for item in work for record in self.list_usage(item.swarm_id, item.id)]
         terminal_states = {
             swarm.id: load_method_contract(
                 root / ".agora" / "methods" / swarm.method
@@ -7130,6 +7289,7 @@ class AgoraWorkspace:
                 "work": len(work),
                 "delegations": len(delegations),
                 "sessions": len(sessions),
+                "usage": len(usage),
                 "tool-runs": len(tool_runs),
             },
             swarm_statuses=_count_values(item.status for item in swarms),
@@ -7577,6 +7737,7 @@ class AgoraWorkspace:
             "actor-keys": 0,
             "swarms": 0,
             "work": 0,
+            "usage": 0,
             "approval-delegations": 0,
             "gate-waivers": 0,
             "handoffs": 0,
@@ -8564,6 +8725,7 @@ class AgoraWorkspace:
                 )
 
         work_records: dict[tuple[str, str], WorkRecord] = {}
+        usage_records: dict[tuple[str, str, str], UsageRecord] = {}
         approval_delegation_records: dict[tuple[str, str, str], ApprovalDelegationRecord] = {}
         gate_waiver_records: dict[tuple[str, str, str], GateWaiverRecord] = {}
         for swarm in swarms.values():
@@ -8647,6 +8809,71 @@ class AgoraWorkspace:
                     )
                 if work.operational_status != "cancelled":
                     state_counts[work.state] = state_counts.get(work.state, 0) + 1
+                usage_totals: dict[str, int] = {}
+                for usage_directory in _child_directories(Path(work.path) / "usage"):
+                    usage_path = usage_directory / "USAGE.md"
+                    usage = inspect(
+                        "usage",
+                        "usage.invalid",
+                        usage_path,
+                        lambda usage_path=usage_path: self._load_usage(usage_path),
+                    )
+                    if not isinstance(usage, UsageRecord):
+                        continue
+                    usage_records[(swarm.id, work.id, usage.id)] = usage
+                    if usage.id != usage_directory.name:
+                        issue(
+                            "usage.id-mismatch",
+                            usage_path,
+                            "Usage id does not match its directory",
+                        )
+                    if usage.swarm_id != swarm.id or usage.work_id != work.id:
+                        issue(
+                            "usage.owner-mismatch",
+                            usage_path,
+                            "Usage does not belong to its filesystem owner",
+                        )
+                    usage_actor = resolve_actor(usage.actor, usage_path)
+                    if (
+                        usage_actor is not None
+                        and usage_actor.authentication_required
+                        and usage.action_id is None
+                    ):
+                        issue(
+                            "usage.authentication-missing",
+                            usage_path,
+                            f"Actor {usage.actor} requires a signed usage action",
+                        )
+                    if (
+                        usage.action_id is not None
+                        and not (
+                            root / ".agora" / "actions" / usage.action_id / "ACTION.md"
+                        ).is_file()
+                    ):
+                        issue(
+                            "usage.action-missing",
+                            usage_path,
+                            f"Usage references missing Lifecycle Action: {usage.action_id}",
+                        )
+                    for dimension, amount in usage.amounts.items():
+                        usage_totals[dimension] = usage_totals.get(dimension, 0) + amount
+                if work.budget_limits is not None:
+                    unknown_usage = sorted(set(usage_totals) - set(work.budget_limits))
+                    if unknown_usage:
+                        issue(
+                            "usage.dimension-unavailable",
+                            path,
+                            "Usage dimensions are absent from the work budget: "
+                            + ", ".join(unknown_usage),
+                        )
+                    for dimension in sorted(set(usage_totals) & set(work.budget_limits)):
+                        if usage_totals[dimension] > work.budget_limits[dimension]:
+                            issue(
+                                "usage.budget-exceeded",
+                                path,
+                                f"Usage {dimension}={usage_totals[dimension]} exceeds "
+                                f"work budget {work.budget_limits[dimension]}",
+                            )
                 for waiver_directory in _child_directories(Path(work.path) / "waivers"):
                     waiver_path = waiver_directory / "WAIVER.md"
                     waiver = inspect(
@@ -9715,6 +9942,39 @@ class AgoraWorkspace:
                             "lifecycle-action.evidence-mismatch",
                             evidence_path,
                             "Evidence row is missing from its applied Lifecycle Action",
+                        )
+            if action.action == "usage.add" and action.work_id is not None:
+                usage_key = (
+                    action.swarm_id,
+                    action.work_id,
+                    action.parameters["usage"],
+                )
+                usage = usage_records.get(usage_key)
+                if action.status == "prepared" and usage is not None:
+                    issue(
+                        "lifecycle-action.usage-conflict",
+                        path,
+                        "Prepared usage action already has a Usage record",
+                    )
+                elif action.status == "applied" and usage is None:
+                    issue(
+                        "lifecycle-action.usage-missing",
+                        path,
+                        "Applied usage action has no Usage record",
+                    )
+                elif action.status == "applied" and usage is not None:
+                    expected_amounts = self._usage_amounts_parameter(action)
+                    expected_evidence = self._string_list_parameter(action, "evidence")
+                    if (
+                        usage.actor != action.actor
+                        or usage.amounts != expected_amounts
+                        or usage.evidence_refs != expected_evidence
+                        or usage.action_id != action.id
+                    ):
+                        issue(
+                            "lifecycle-action.usage-mismatch",
+                            Path(usage.path),
+                            "Usage record differs from its applied Lifecycle Action",
                         )
             if action.action == "handoff.create" and action.swarm_id in swarms:
                 swarm = swarms[action.swarm_id]
@@ -11075,6 +11335,57 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _render_usage(record: UsageRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/usage/v1",
+                    "id": record.id,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "actor": record.actor,
+                    "amounts": record.amounts,
+                    "evidence-refs": record.evidence_refs,
+                    "created-at": record.created_at,
+                    "action": record.action_id,
+                },
+                body=(
+                    f"# Usage {record.id}\n\n"
+                    "This append-only record contains externally measured resource usage. Agora "
+                    "validates attribution and budget limits but does not perform provider "
+                    "metering."
+                ),
+            )
+        )
+
+    @classmethod
+    def _load_usage(cls, path: Path) -> UsageRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/usage/v1", path)
+        amounts = optional_integer_record_attribute(document.attributes, "amounts")
+        if amounts is None:
+            raise ValueError(f"Usage amounts are required: {path}")
+        record = UsageRecord(
+            id=string_attribute(document.attributes, "id"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            actor=string_attribute(document.attributes, "actor"),
+            amounts=cls._normalize_usage_amounts(amounts),
+            evidence_refs=strings_attribute(document.attributes, "evidence-refs"),
+            created_at=string_attribute(document.attributes, "created-at"),
+            path=str(path),
+            action_id=optional_string_attribute(document.attributes, "action"),
+        )
+        assert_slug(record.id, "Usage id")
+        if not record.evidence_refs or any(
+            not reference.strip() for reference in record.evidence_refs
+        ):
+            raise ValueError(f"Usage requires non-empty evidence references: {path}")
+        if record.action_id is not None:
+            assert_slug(record.action_id, "Usage Lifecycle Action id")
+        return record
+
+    @staticmethod
     def _render_gate_waiver(record: GateWaiverRecord) -> str:
         return render_markdown(
             MarkdownDocument(
@@ -11311,6 +11622,12 @@ class AgoraWorkspace:
             digest.update(b"\0")
             digest.update(path.read_bytes())
             digest.update(b"\0")
+        for path in sorted((work_root / "usage").glob("*/USAGE.md")):
+            digest.update(b"usage\0")
+            digest.update(path.parent.name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
         return digest.hexdigest()
 
     def _lifecycle_precondition_sha256(
@@ -11329,6 +11646,7 @@ class AgoraWorkspace:
             "artifact.add",
             "criterion.satisfy",
             "evidence.add",
+            "usage.add",
             "gate.waive",
             "work.block",
             "work.cancel",
@@ -11546,6 +11864,7 @@ class AgoraWorkspace:
             "delegation.reject",
             "delegation.resume",
             "evidence.add",
+            "usage.add",
             "gate.waive",
             "handoff.create",
             "session.prepare",
@@ -11599,6 +11918,7 @@ class AgoraWorkspace:
             "delegation.reject": {"delegation", "reason"},
             "delegation.resume": {"delegation", "reason"},
             "evidence.add": {"type", "result", "artifacts"},
+            "usage.add": {"usage", "amounts", "evidence"},
             "gate.waive": {
                 "waiver",
                 "gate",
@@ -11812,6 +12132,27 @@ class AgoraWorkspace:
                 not isinstance(value, str) for value in artifacts
             ):
                 raise ValueError(f"Lifecycle Action evidence artifacts must be strings: {path}")
+        if action == "usage.add":
+            assert_slug(parameters["usage"], "Lifecycle Action usage id")
+            try:
+                amounts = json.loads(parameters["amounts"])
+                evidence = json.loads(parameters["evidence"])
+            except json.JSONDecodeError as error:
+                raise ValueError(f"Lifecycle Action has invalid usage JSON: {path}") from error
+            if not isinstance(amounts, dict):
+                raise ValueError(f"Lifecycle Action usage amounts must be a map: {path}")
+            AgoraWorkspace._normalize_usage_amounts(amounts)
+            if (
+                not isinstance(evidence, list)
+                or not evidence
+                or any(
+                    not isinstance(reference, str) or not reference.strip()
+                    for reference in evidence
+                )
+            ):
+                raise ValueError(
+                    f"Lifecycle Action usage evidence must be non-empty strings: {path}"
+                )
         if action == "gate.waive":
             assert_slug(parameters["waiver"], "Lifecycle Action Gate Waiver id")
             assert_slug(parameters["gate"], "Lifecycle Action gate id")

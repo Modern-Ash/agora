@@ -211,6 +211,10 @@ resolution distinct from evidence that recovery actually occurred.
 The code-review pack separates review reads, review writing, review decisions, and merge authority.
 Its GitHub Pull Requests adapter uses `gh`; no bundled role receives `review.merge`.
 
+External runtimes and adapters may submit provider-neutral Usage records with authoritative evidence
+references. Agora accumulates those append-only integer dimensions against work budget limits and
+signs authenticated submissions without importing a provider metering SDK.
+
 Actor authentication is separate from provider authentication. An actor may require an Ed25519
 signature over a prepared lifecycle action, Tool Run, or agent session before execution. Agora
 stores only the public key and durable proof, revalidates that proof during workspace validation,

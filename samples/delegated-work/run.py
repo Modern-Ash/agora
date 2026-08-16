@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from agora.model import (
     AddActorInput,
     AddArtifactInput,
+    AddUsageInput,
     ApplyLifecycleActionInput,
     AssignActorInput,
     ChangeDelegationStatusInput,
@@ -231,6 +232,16 @@ def main() -> None:
         )
     )
     sign_and_apply(evidence.id, "facilitator")
+    agora.add_usage(
+        AddUsageInput(
+            id="specialist-runtime-usage",
+            swarm_id="specialists",
+            work_id="child-slice",
+            actor_id="specialist",
+            amounts={"effort": 3, "tokens": 18000},
+            evidence_refs=["telemetry://specialists/child-slice"],
+        )
+    )
     approval = agora.prepare_approval(
         PrepareApprovalInput(
             id="approve-child-slice",
@@ -266,6 +277,7 @@ def main() -> None:
     print(f"Delegation: {proposed.status} -> {accepted.status} -> {collected.status}")
     print(f"Child swarm: {agora.show_swarm('specialists').status}")
     print(f"Child budget: {agora.show_work('specialists', 'child-slice').budget_limits}")
+    print(f"Child usage: {agora.list_usage('specialists', 'child-slice')[0].amounts}")
     print(f"Parent artifacts: {', '.join(parent_work.artifact_kinds)}")
     print(f"Parent evidence: {', '.join(parent_work.evidence_results)}")
     print(f"Record: {collected.path}")

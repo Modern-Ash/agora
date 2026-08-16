@@ -37,7 +37,8 @@ the current protocol:
 
 The `0.2.0` to `0.3.0` migration updates the protocol version while preserving installed pack
 composition, Method Pack roles, and portable commands. It reports the new operational-loop and
-code-review capabilities for explicit adoption. Install the reviewed neutral pack separately:
+usage-accounting capabilities for explicit role-policy adoption, plus code-review for explicit pack
+installation. Install the reviewed neutral pack separately:
 
 ```bash
 agora pack install --kind tool --id code-review --scope project
