@@ -58,6 +58,26 @@ state occupies a native subcommand position, so `input-values` restricts it to `
 Any other value is rejected before a Tool Run exists. Repository and authentication selection remain
 in the existing GitHub CLI profile, and installation does not alter role authority.
 
+## Native GitLab Issues adapter
+
+Install the partial GitLab adapter when the developer already uses `glab`:
+
+```bash
+agora tool adapter install --id gitlab-issues --scope project
+agora tool doctor --tool gitlab-issues
+```
+
+It maps `search`, `view`, `comment`, and `transition` to native GitLab issue commands. Search returns
+at most fifty open or closed issues as JSON. Transition restricts its dynamic subcommand to `close`
+or `reopen`, so `delete`, `update`, and other verbs are rejected before a Tool Run exists. Issue IIDs
+use the repository already selected by `glab`; full issue URLs can target another project.
+
+The adapter deliberately omits `create`. Agora's neutral operation requires a stable work-item
+`type`, while native `glab issue create` does not accept an equivalent input. A reviewed team wrapper
+may normalize an organization-specific type mapping; the bundled adapter does not silently convert
+types into labels or discard them. GitLab CLI installation and authentication remain external; see
+the official [`glab issue` reference](https://docs.gitlab.com/cli/issue/).
+
 ## Native Jira ACLI adapter
 
 Install the reviewed Jira Cloud adapter when Atlassian CLI is part of the developer environment:

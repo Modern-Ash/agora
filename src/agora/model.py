@@ -1632,6 +1632,7 @@ class InvokeToolInput:
     inputs: dict[str, str] = field(default_factory=dict)
     launch: bool = False
     force: bool = False
+    read_only_sync: bool = False
 
 
 @dataclass(frozen=True)

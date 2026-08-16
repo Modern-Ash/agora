@@ -89,6 +89,8 @@ do not exist as one static agent file in this repository.
 
 ## Ecosystem integrations
 
+- [GitHub ecosystem](guides/github-ecosystem.md): install and govern Issues, Pull Requests, Actions,
+  repository policy, releases, security alerts, Projects, and explicit snapshots.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): prefer reviewed native CLIs while
   retaining MCP as an explicit alternative transport.
 - [Code-review integrations](guides/code-review-integrations.md): govern Pull Requests, checks,
@@ -152,8 +154,16 @@ do not exist as one static agent file in this repository.
   plus Product Owner approval before deployment.
 - [GitHub Actions CLI adapter](../samples/github-actions-cli/README.md): install the reviewed `gh`
   adapter, prepare native commands, and preserve separate cancellation authority.
+- [Governed GitHub delivery](../samples/github-end-to-end/README.md): prepare the complete path from
+  Issue and branch through review, merge, security snapshots, Projects, and release.
+- [GitLab CI/CD CLI adapter](../samples/gitlab-ci-cli/README.md): prepare bounded pipeline reads and
+  reject unauthorized cancellation and unsupported trigger translation.
 - [GitHub Issues CLI adapter](../samples/github-issues-cli/README.md): prepare native issue searches
   and constrain dynamic transitions to close or reopen.
+- [GitLab Issues CLI adapter](../samples/gitlab-issues-cli/README.md): prepare native issue reads and
+  transitions while rejecting deletion and unsupported typed creation.
+- [GitLab Merge Requests CLI adapter](../samples/gitlab-merge-requests-cli/README.md): prepare native
+  review creation and head-pipeline checks while rejecting unsupported merge translation.
 - [Jira ACLI adapter](../samples/jira-cli/README.md): prepare bounded Jira searches and governed
   transitions while keeping ACLI installation and authentication external.
 - [Atlassian TWG Confluence adapter](../samples/twg-confluence-cli/README.md): prepare page lifecycle

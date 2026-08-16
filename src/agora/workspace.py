@@ -6952,6 +6952,11 @@ class AgoraWorkspace:
         operation = contract.operations.get(data.operation_id)
         if operation is None:
             raise FileNotFoundError(f"Tool operation not found: {contract.id}/{data.operation_id}")
+        if data.read_only_sync and operation.risk != "read":
+            raise PermissionError(
+                f"Tool sync requires a read operation: {contract.id}/{operation.id} "
+                f"has risk {operation.risk}"
+            )
         allowed_capabilities = self._actor_tool_capabilities(root, swarm, roles)
         if operation.capability not in allowed_capabilities:
             raise PermissionError(

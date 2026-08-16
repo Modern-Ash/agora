@@ -212,18 +212,26 @@ size; it is not filesystem, network, syscall, resource, or process-tree isolatio
 A **Tool Adapter** is a provider-specific Tool Pack that declares `provider`, `transport`, and the
 provider-neutral contract it `implements`. The adapter changes command translation, not lifecycle
 authority. Adapter discovery records whether its executable is available; installation and
-invocation remain separate explicit actions. Bundled adapters implement `ci-cd` and
-`work-management` for GitHub through `gh`, Jira through `acli`, `cloud-infrastructure` through
-Terraform CLI, and a Confluence page lifecycle subset through `twg`.
+invocation remain separate explicit actions. Bundled adapters implement work management, code
+review, CI/CD, repository governance, release management, security scanning, and portfolio
+management for GitHub through `gh`; Jira through `acli`; and explicit GitLab CI/CD, Issues, and Merge
+Requests subsets through `glab`. Terraform CLI and a Confluence page lifecycle subset through `twg`
+cover additional neutral contracts.
 A partial adapter lists `implements-operations`; it must contain exactly that conforming subset and
 cannot be invoked for omitted operations. AWS and Google Cloud inventory use this form for read-only
-resource discovery; the TWG Confluence adapter uses it to omit unsafe space-scoped search
-translation while preserving optimistic concurrency for updates.
+resource discovery; GitLab CI/CD, Issues, and Merge Requests use it to omit lossy provider
+translations; the TWG Confluence adapter uses it to omit unsafe space-scoped search translation
+while preserving optimistic concurrency for updates.
 An adapter may be distributed but unavailable in the current environment. `runtime_available`
 reflects executable discovery only. A checked adapter additionally reports its detected version and
 whether it meets the manifest's minimum runtime version. Neither result implies authentication,
 installation, authority, or a successful provider call. The Jira adapter demonstrates the absent
 state when ACLI is not installed.
+
+A **Tool Sync** is a launched Tool Run constrained to an operation with `risk: "read"`. It persists
+the current bounded external result under `.agora/tool-runs` and never reconciles or mutates remote
+state implicitly. Provider names do not appear in the sync rule; installed adapters supply the
+translation.
 
 A **Coordination Policy** keeps local operating-system locking as the baseline and may require an
 external lease CLI for project mutations across hosts. The policy stores a stable resource id and

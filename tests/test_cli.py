@@ -171,6 +171,43 @@ def test_discovers_and_installs_a_cli_adapter_from_the_cli(tmp_path: Path, monke
     assert (home / "tools" / "github-actions" / "TOOL.md").is_file()
 
 
+def test_tool_sync_dispatches_an_explicit_read_only_launch(tmp_path: Path, monkeypatch) -> None:
+    captured = []
+
+    def invoke_tool(workspace, data):
+        captured.append(data)
+        return None
+
+    monkeypatch.setattr("agora.cli.AgoraWorkspace.invoke_tool", invoke_tool)
+
+    assert (
+        main(
+            [
+                "tool",
+                "sync",
+                "--id",
+                "github-snapshot",
+                "--tool",
+                "github-security",
+                "--operation",
+                "list-code-alerts",
+                "--actor",
+                "developer",
+                "--swarm",
+                "delivery",
+                "--input",
+                "project=example/agora",
+            ],
+            cwd=tmp_path,
+        )
+        == 0
+    )
+    assert len(captured) == 1
+    assert captured[0].launch is True
+    assert captured[0].read_only_sync is True
+    assert captured[0].inputs == {"project": "example/agora"}
+
+
 def test_filters_cli_adapters_by_checked_runtime_compatibility(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(
@@ -203,9 +240,10 @@ def test_filters_cli_adapters_by_checked_runtime_compatibility(tmp_path: Path, m
     )
 
     assert errors.getvalue() == ""
-    assert output.getvalue().count('"runtime_compatible": true') == 3
+    assert output.getvalue().count('"runtime_compatible": true') == 7
     assert '"id": "github-actions"' in output.getvalue()
     assert '"id": "github-issues"' in output.getvalue()
+    assert '"id": "github-projects"' in output.getvalue()
     assert '"id": "terraform"' not in output.getvalue()
 
 

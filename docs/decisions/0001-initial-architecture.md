@@ -54,8 +54,9 @@ validation, so front matter preserves structured metadata and gates remain execu
   with explicit orphan pruning, rollback protection, lock refresh, and durable audit records.
 - Additional published vendor Tool Packs for Jira, documentation, cloud, and observability.
   Provider-neutral contracts and executable adapter samples are implemented, and the reviewed
-  GitHub Actions, GitHub Issues, and Terraform CLI adapters now delegate directly to installed
-  native tools through the CLI-first adapter catalog. Partial AWS and Google Cloud inventory
+  GitHub Actions, Issues, Pull Requests, repository governance, releases, security, and Projects
+  adapters now delegate directly to installed native tools through the CLI-first adapter catalog.
+  Partial AWS and Google Cloud inventory
   adapters provide bounded reads without claiming provider-wide deployment semantics. Jira has a
   complete ACLI adapter; Confluence still requires a reviewed wrapper or future supported CLI.
 - Governed same-swarm work decomposition, provider-neutral delegation budgets, opt-in typed child

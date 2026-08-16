@@ -61,6 +61,35 @@ it does not remove `ci-cd` or grant `ci.cancel` and `deployment.create`.
 See [CLI-first ecosystem adapters](cli-first-adapters.md) for the selection policy and complete
 examples.
 
+## Native GitLab CLI adapter
+
+When a developer already uses GitLab CLI 1.109.0 or newer, install the reviewed partial adapter:
+
+```bash
+glab auth status
+agora tool adapter install --id gitlab-ci --scope project
+agora tool show --tool gitlab-ci
+agora validate
+```
+
+The adapter exposes `list-runs`, `view-run`, and `cancel-run`. Listing filters by the neutral
+pipeline name and returns at most fifty JSON records. Inspection requests job details but excludes
+CI/CD variables and logs so sensitive provider output is not expanded into durable results.
+Cancellation remains destructive and requires the separately granted `ci.cancel` capability.
+
+```mermaid
+flowchart LR
+    Contract[Agora CI/CD contract] --> Exact{Exact glab mapping?}
+    Exact -->|Yes| Native[list-runs, view-run, cancel-run]
+    Exact -->|No| Omitted[trigger, view-deployment, create-deployment]
+    Omitted --> Wrapper[Reviewed team wrapper]
+```
+
+`glab ci run` selects a ref and inputs but does not preserve Agora's required neutral pipeline
+identity. Agora therefore does not discard that input or reinterpret it as a project. GitLab
+deployment workflows likewise need a team-specific wrapper that binds immutable artifacts,
+environments, provider policy, and evidence.
+
 ## Default authority
 
 Bundled Spec-Driven, Scrum, and Kanban roles already separate CI/CD authority:

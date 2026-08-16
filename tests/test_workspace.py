@@ -973,7 +973,11 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
     assert [(item.id, item.provider, item.transport) for item in available] == [
         ("github-actions", "github", "cli"),
         ("github-issues", "github", "cli"),
+        ("github-projects", "github", "cli"),
         ("github-pull-requests", "github", "cli"),
+        ("github-releases", "github", "cli"),
+        ("github-repository-governance", "github", "cli"),
+        ("github-security", "github", "cli"),
     ]
     assert available[0].runtime_available is True
     assert available[0].installed_scopes == []
@@ -1085,6 +1089,91 @@ def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
     cancel_path.write_text(cancel_path.read_text().replace("ci.cancel", "ci.read"))
     report = governed.validate()
     assert any(item.code == "tool-adapter.contract-invalid" for item in report.issues)
+
+
+def test_installs_and_governs_the_gitlab_ci_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/glab" if executable == "glab" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="gitlab-ci", scope="project")
+    )
+    assert installed.implements_operations == ["list-runs", "view-run", "cancel-run"]
+
+    listed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-ci-runs",
+            tool_id="gitlab-ci",
+            operation_id="list-runs",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"pipeline": "verify"},
+        )
+    )
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-ci-run",
+            tool_id="gitlab-ci",
+            operation_id="view-run",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"run": "12345"},
+        )
+    )
+
+    assert listed.command == [
+        "glab",
+        "ci",
+        "list",
+        "--name",
+        "verify",
+        "--per-page",
+        "50",
+        "--output",
+        "json",
+    ]
+    assert viewed.command == [
+        "glab",
+        "ci",
+        "get",
+        "--pipeline-id",
+        "12345",
+        "--with-job-details",
+        "--output",
+        "json",
+    ]
+    with pytest.raises(PermissionError, match="ci.cancel"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="gitlab-ci-cancel",
+                tool_id="gitlab-ci",
+                operation_id="cancel-run",
+                actor_id="developer",
+                swarm_id="delivery",
+                inputs={"run": "12345"},
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "gitlab-ci-cancel").exists()
+
+    for operation in ("trigger", "view-deployment", "create-deployment"):
+        run_id = f"gitlab-ci-unsupported-{operation}"
+        with pytest.raises(FileNotFoundError, match=operation):
+            workspace.invoke_tool(
+                InvokeToolInput(
+                    id=run_id,
+                    tool_id="gitlab-ci",
+                    operation_id=operation,
+                    actor_id="developer",
+                    swarm_id="delivery",
+                )
+            )
+        assert not (root / ".agora" / "tool-runs" / run_id).exists()
+    assert workspace.validate().ok
 
 
 def test_discovers_installs_and_governs_the_terraform_cli_adapter(
@@ -1250,6 +1339,215 @@ def test_installs_and_governs_the_github_issues_cli_adapter(
             )
         )
     assert not (root / ".agora" / "tool-runs" / "github-issue-unsafe-transition").exists()
+    assert workspace.validate().ok
+
+
+def test_installs_and_governs_the_gitlab_issues_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/glab" if executable == "glab" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="gitlab-issues", scope="project")
+    )
+    assert installed.implements_operations == ["search", "view", "comment", "transition"]
+
+    searched = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-issue-search",
+            tool_id="gitlab-issues",
+            operation_id="search",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"query": "governed adapter"},
+        )
+    )
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-issue-view",
+            tool_id="gitlab-issues",
+            operation_id="view",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"issue": "https://gitlab.com/example/agora/-/issues/42"},
+        )
+    )
+    transitioned = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-issue-close",
+            tool_id="gitlab-issues",
+            operation_id="transition",
+            actor_id="owner",
+            swarm_id="delivery",
+            inputs={"issue": "42", "state": "close"},
+        )
+    )
+
+    assert searched.command == [
+        "glab",
+        "issue",
+        "list",
+        "--search",
+        "governed adapter",
+        "--all",
+        "--per-page",
+        "50",
+        "--output",
+        "json",
+    ]
+    assert viewed.command == [
+        "glab",
+        "issue",
+        "view",
+        "https://gitlab.com/example/agora/-/issues/42",
+        "--output",
+        "json",
+    ]
+    assert transitioned.command == ["glab", "issue", "close", "42"]
+    with pytest.raises(ValueError, match="state must be one of: close, reopen"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="gitlab-issue-unsafe-transition",
+                tool_id="gitlab-issues",
+                operation_id="transition",
+                actor_id="owner",
+                swarm_id="delivery",
+                inputs={"issue": "42", "state": "delete"},
+            )
+        )
+    with pytest.raises(FileNotFoundError, match="create"):
+        workspace.invoke_tool(
+            InvokeToolInput(
+                id="gitlab-issue-create",
+                tool_id="gitlab-issues",
+                operation_id="create",
+                actor_id="owner",
+                swarm_id="delivery",
+                inputs={
+                    "project": "example/agora",
+                    "type": "Task",
+                    "title": "Unsafe type mapping",
+                    "description": "Create is intentionally absent.",
+                },
+            )
+        )
+    assert not (root / ".agora" / "tool-runs" / "gitlab-issue-unsafe-transition").exists()
+    assert not (root / ".agora" / "tool-runs" / "gitlab-issue-create").exists()
+    assert workspace.validate().ok
+
+
+def test_installs_and_governs_the_gitlab_merge_request_cli_adapter(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/glab" if executable == "glab" else None,
+    )
+    _prepare_scrum_team(workspace)
+    installed = workspace.install_tool_adapter(
+        InstallToolAdapterInput(adapter_id="gitlab-merge-requests", scope="project")
+    )
+    assert installed.implements_operations == ["view", "create", "comment", "checks"]
+
+    viewed = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-view",
+            tool_id="gitlab-merge-requests",
+            operation_id="view",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"review": "42"},
+        )
+    )
+    created = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-create",
+            tool_id="gitlab-merge-requests",
+            operation_id="create",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={
+                "project": "example/agora",
+                "base": "main",
+                "head": "agora/governed-change",
+                "title": "feat: add governed review",
+                "description": "Implements the accepted work.",
+            },
+        )
+    )
+    commented = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-comment",
+            tool_id="gitlab-merge-requests",
+            operation_id="comment",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"review": "42", "body": "Verification evidence is attached."},
+        )
+    )
+    checks = workspace.invoke_tool(
+        InvokeToolInput(
+            id="gitlab-mr-checks",
+            tool_id="gitlab-merge-requests",
+            operation_id="checks",
+            actor_id="developer",
+            swarm_id="delivery",
+            inputs={"review": "42"},
+        )
+    )
+
+    assert viewed.command == ["glab", "mr", "view", "42", "--output", "json"]
+    assert created.command == [
+        "glab",
+        "mr",
+        "create",
+        "--repo",
+        "example/agora",
+        "--target-branch",
+        "main",
+        "--source-branch",
+        "agora/governed-change",
+        "--title",
+        "feat: add governed review",
+        "--description",
+        "Implements the accepted work.",
+        "--yes",
+    ]
+    assert commented.command == [
+        "glab",
+        "mr",
+        "note",
+        "--message",
+        "Verification evidence is attached.",
+        "42",
+    ]
+    assert checks.command == [
+        "glab",
+        "ci",
+        "get",
+        "--merge-request",
+        "42",
+        "--output",
+        "json",
+    ]
+    for operation in ("list", "approve", "request-changes", "merge"):
+        run_id = f"gitlab-mr-unsupported-{operation}"
+        with pytest.raises(FileNotFoundError, match=operation):
+            workspace.invoke_tool(
+                InvokeToolInput(
+                    id=run_id,
+                    tool_id="gitlab-merge-requests",
+                    operation_id=operation,
+                    actor_id="owner",
+                    swarm_id="delivery",
+                )
+            )
+        assert not (root / ".agora" / "tool-runs" / run_id).exists()
     assert workspace.validate().ok
 
 
@@ -2507,7 +2805,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.counts == {
         "actors": 3,
         "methods": 3,
-        "tools": 7,
+        "tools": 11,
         "environments": 0,
         "swarms": 1,
         "work": 1,
@@ -2531,7 +2829,11 @@ def test_lists_and_summarizes_operational_workspace_state(
         "code-review",
         "knowledge-base",
         "observability",
+        "portfolio-management",
+        "release-management",
         "repository",
+        "repository-governance",
+        "security-scanning",
         "work-management",
     ]
     assert [item.id for item in workspace.list_actors("project")] == [

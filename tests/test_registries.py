@@ -203,7 +203,10 @@ def test_discovers_bundled_packs_without_an_initialized_project(
 
     assert [(item.id, item.scope) for item in registries] == [("agora-bundled", "bundled")]
     assert [item.id for item in methods] == ["kanban", "scrum", "spec-driven"]
-    assert [(item.id, item.registry) for item in tools] == [("repository", "agora-bundled")]
+    assert [(item.id, item.registry) for item in tools] == [
+        ("repository", "agora-bundled"),
+        ("repository-governance", "agora-bundled"),
+    ]
 
 
 def test_installs_a_user_registry_and_its_method_into_a_project(

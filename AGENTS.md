@@ -20,14 +20,26 @@
   containers or runners as the isolation boundary for filesystem, network, syscalls, and resources.
 - Keep ecosystem Tool Pack capabilities provider-neutral; place Jira, CI/CD, documentation, and
   cloud translation in reviewed external adapters rather than the kernel.
+- Keep GitLab merge-request adapters on an exact native subset; do not discard review-decision bodies
+  or reinterpret conditional list and merge flags as neutral semantics.
+- Keep GitHub ecosystem adapters behind provider-neutral contracts; keep ruleset administration
+  read-only until a neutral policy artifact is validated, and keep release publication ungranted.
+- Redact GitHub secret scanning values before provider output becomes durable; never request secret
+  locations or raw credentials merely to build a synchronization snapshot.
+- Keep Tool Sync provider-neutral, explicit, read-only, bounded, and persisted as an ordinary Tool
+  Run; never add background reconciliation or allow write risk through the sync path.
 - Prefer a reviewed native provider CLI when it is installed and non-interactive; use a team wrapper
   for normalization and MCP only as an explicit alternative transport.
 - Give reviewed CLI adapters a structured local version command and a tested minimum version; never
   infer compatibility from executable presence alone when launching governed work.
 - Use an explicit conforming operation subset when a provider CLI cannot implement a full neutral
   contract; never invent generic plan, apply, or destructive semantics.
+- Never map GitLab issue creation to the neutral work-management contract unless the adapter can
+  preserve its required work-item type; restrict dynamic lifecycle subcommands to close or reopen.
 - Keep CI cancellation and deployment capabilities opt-in; combine production authority with
   explicit Method Pack policy, evidence, and operation approval requirements.
+- Keep GitLab CI/CD adapters on an exact native subset; do not discard the neutral pipeline identity
+  when translating triggers or expose deployment operations without immutable artifact binding.
 - Keep documentation publication and archival opt-in; treat remote pages as external state and
   persist their identifiers as Agora artifacts or evidence when lifecycle gates require them.
 - Keep Confluence updates bound to native optimistic-concurrency tokens; expose only an explicit

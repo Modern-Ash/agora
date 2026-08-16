@@ -137,12 +137,75 @@ Transition maps the state into the native command position, so its manifest rest
 `close` or `reopen`. Values such as `delete`, `edit`, or `transfer` are rejected before `RUN.md` is
 created.
 
+## GitLab Issues through `glab`
+
+The `gitlab-issues` adapter implements an explicit subset of `work-management` through GitLab CLI
+1.109.0 or newer:
+
+```bash
+agora tool adapter install --id gitlab-issues --scope project
+agora tool invoke \
+  --id inspect-gitlab-work \
+  --tool gitlab-issues \
+  --operation search \
+  --actor developer \
+  --swarm delivery \
+  --input query="governance"
+```
+
+Search and view request bounded JSON. Comment uses a non-interactive message flag. Transition places
+the requested state in a subcommand position, so the manifest permits only `close` or `reopen`.
+Create is omitted because the native command cannot preserve the neutral contract's required
+work-item `type`; Agora does not discard it or reinterpret it as a label.
+
+## GitLab Merge Requests through `glab`
+
+The `gitlab-merge-requests` adapter implements an explicit subset of `code-review` through GitLab
+CLI 1.109.0 or newer:
+
+```bash
+agora tool adapter install --id gitlab-merge-requests --scope project
+agora tool invoke \
+  --id inspect-gitlab-review \
+  --tool gitlab-merge-requests \
+  --operation checks \
+  --actor developer \
+  --swarm delivery \
+  --input review=42
+```
+
+View and checks request JSON, create supplies every field non-interactively without pushing, and
+comment uses a native message flag. List is omitted because neutral states map to different native
+flags. Approval cannot carry the required decision body, request-changes has no native decision,
+and merge strategies need conditional flags; a reviewed team wrapper can normalize those gaps.
+
 ## GitHub Pull Requests through `gh`
 
 The `github-pull-requests` adapter implements the provider-neutral `code-review` contract. It can
 list and view reviews, create and comment on Pull Requests, inspect checks, and submit approval or
 request-changes decisions. Merge remains a distinct `review.merge` capability granted to no bundled
 role. See [Code-review integrations](code-review-integrations.md) for the complete flow.
+
+## GitLab CI/CD through `glab`
+
+The `gitlab-ci` adapter implements exact pipeline listing, inspection, and cancellation through
+GitLab CLI 1.109.0 or newer:
+
+```bash
+agora tool adapter install --id gitlab-ci --scope project
+agora tool invoke \
+  --id inspect-gitlab-pipeline \
+  --tool gitlab-ci \
+  --operation view-run \
+  --actor developer \
+  --swarm delivery \
+  --input run=12345
+```
+
+Pipeline reads are JSON and bounded. Inspection includes job details but not variables or logs.
+Cancellation retains destructive risk and ungranted `ci.cancel` authority. Trigger and deployment
+operations are omitted because the native CLI cannot bind every required neutral input; see
+[CI/CD integrations](ci-cd-integrations.md).
 
 ## Jira through Atlassian CLI
 
