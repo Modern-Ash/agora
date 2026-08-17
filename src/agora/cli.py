@@ -1,14 +1,20 @@
 import argparse
 import json
+import re
+import shutil
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-from agora.console import ActivityContext, ConsoleActivity
+from agora.console import ActivityContext, ConsoleActivity, ConsoleResult, is_human_terminal
+from agora.filesystem import agora_home
+from agora.git import is_git_repository
 from agora.model import (
     ACTOR_KINDS,
+    BUILTIN_METHODS,
     DEFAULT_SESSION_MAX_OUTPUT_BYTES,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
     INTEGRATIONS,
@@ -69,6 +75,7 @@ from agora.model import (
     PrepareToolAuthorizationInput,
     PrepareUsageInput,
     PrepareWorkTransitionInput,
+    ProjectConfiguration,
     QuickstartInput,
     RefreshPackLockInput,
     RemovePackInput,
@@ -94,6 +101,7 @@ from agora.model import (
     WaiveGateInput,
     WorkActorInput,
 )
+from agora.wizard import Choice, Wizard
 from agora.workspace import AgoraWorkspace
 
 
@@ -103,17 +111,42 @@ def main(
     cwd: Path | str | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
+    stdin: TextIO | None = None,
 ) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     output = stdout or sys.stdout
     error_output = stderr or sys.stderr
+    input_stream = stdin or sys.stdin
     project, arguments = _extract_project(arguments)
     parser = _build_parser()
     try:
         namespace = parser.parse_args(arguments)
         workspace = AgoraWorkspace(cwd=project or cwd)
         with ConsoleActivity(error_output, _activity_context(workspace, namespace)) as activity:
-            if namespace.command == "run" and namespace.until_blocked:
+            if namespace.command == "setup" or (
+                namespace.command == "adopt" and not namespace.check
+            ):
+                result = _run_setup_wizard(
+                    workspace,
+                    namespace,
+                    input_stream=input_stream,
+                    output_stream=error_output,
+                )
+            elif namespace.command == "continue":
+                result = _run_continue_wizard(
+                    workspace,
+                    namespace,
+                    input_stream=input_stream,
+                    output_stream=error_output,
+                )
+            elif namespace.command == "work" and namespace.work_command == "start":
+                result = _run_work_start_wizard(
+                    workspace,
+                    namespace,
+                    input_stream=input_stream,
+                    output_stream=error_output,
+                )
+            elif namespace.command == "run" and namespace.until_blocked:
                 result = _dispatch(
                     workspace,
                     namespace,
@@ -122,7 +155,7 @@ def main(
             else:
                 result = _dispatch(workspace, namespace)
         if result is not None:
-            _print_json(output, result)
+            _present_result(output, namespace, result)
         if isinstance(result, (AdoptionReport, ValidationReport)) and not result.ok:
             return 1
         if isinstance(result, dict) and result.get("ok") is False:
@@ -131,6 +164,30 @@ def main(
     except (FileExistsError, FileNotFoundError, PermissionError, RuntimeError, ValueError) as error:
         print(str(error), file=error_output)
         return 1
+
+
+def _present_result(output: TextIO, args: argparse.Namespace, result: Any) -> None:
+    setup_guided = args.command == "setup" or (args.command == "adopt" and not args.check)
+    continue_guided = args.command == "continue"
+    work_start_guided = args.command == "work" and args.work_command == "start"
+    guided_dialogue_already_rendered = (
+        (setup_guided and not args.non_interactive)
+        or (continue_guided and not args.yes)
+        or work_start_guided
+    )
+    if is_human_terminal(output):
+        if not guided_dialogue_already_rendered:
+            ConsoleResult(output).render(_command_name(args), result)
+        return
+    _print_json(output, result)
+
+
+def _command_name(args: argparse.Namespace) -> str:
+    parts = [args.command]
+    parts.extend(
+        value for key, value in vars(args).items() if key.endswith("_command") and value is not None
+    )
+    return " ".join(parts)
 
 
 def _run_input(args: argparse.Namespace) -> RunNextInput:
@@ -161,11 +218,29 @@ def _activity_context(
             "Agora is checking durable state and actor authority",
             "Phase: preflight",
             args.actor or "next eligible actor",
+            live_details=(
+                "Resolving project, actor, role, and work references",
+                "Checking lifecycle authority and authentication requirements",
+                "Computing the bounded runtime before launch",
+            ),
         )
-    return _preview_activity_context(preview, args)
+    return _preview_activity_context(
+        preview,
+        args,
+        live_detail_provider=_governed_activity_provider(
+            workspace,
+            swarm_id=preview.task.swarm_id,
+            work_id=preview.task.work_id,
+        ),
+    )
 
 
-def _preview_activity_context(preview: RunPreview, args: argparse.Namespace) -> ActivityContext:
+def _preview_activity_context(
+    preview: RunPreview,
+    args: argparse.Namespace,
+    *,
+    live_detail_provider: Callable[[], str | None] | None = None,
+) -> ActivityContext:
     task = preview.task
     targets = ", ".join(task.target_states) or "governed action"
     capabilities = ", ".join(preview.actor_capabilities) or "none declared"
@@ -200,6 +275,15 @@ def _preview_activity_context(preview: RunPreview, args: argparse.Namespace) -> 
     preflight.append(boundary)
     if task.blockers:
         preflight.append(f"  Blockers   {'; '.join(task.blockers)}")
+    live_details = [
+        f"Runtime active within {task.state} -> {targets}",
+        f"Boundary enforced for {task.role}: {capabilities}",
+        "Watching durable artifacts, evidence, tool runs, and transitions",
+    ]
+    if preview.max_output_bytes is not None:
+        live_details.append(
+            f"Capturing runner output within the {_format_bytes(preview.max_output_bytes)} limit"
+        )
     return ActivityContext(
         headline=headline,
         subject=preview.work_title,
@@ -208,7 +292,63 @@ def _preview_activity_context(preview: RunPreview, args: argparse.Namespace) -> 
         detail=f"{task.actor} ({task.role}) | {reference} | {preview.method}",
         safety=f"Authority: {capabilities} | {authentication} | {runtime}",
         preflight=tuple(preflight),
+        live_details=tuple(live_details),
+        live_detail_provider=live_detail_provider,
     )
+
+
+def _governed_activity_provider(
+    workspace: AgoraWorkspace,
+    *,
+    swarm_id: str,
+    work_id: str,
+) -> Callable[[], str | None]:
+    try:
+        baseline = workspace.list_activity(swarm_id=swarm_id, work_id=work_id, limit=1)
+    except (OSError, RuntimeError, ValueError):
+        baseline = []
+    last_seen = _activity_identity(baseline[-1]) if baseline else None
+    current_detail: str | None = None
+    observed_at = 0.0
+    next_poll = 0.0
+
+    def latest_detail() -> str | None:
+        nonlocal current_detail, last_seen, next_poll, observed_at
+        now = time.monotonic()
+        if now >= next_poll:
+            next_poll = now + 0.75
+            records = workspace.list_activity(swarm_id=swarm_id, work_id=work_id, limit=1)
+            if records:
+                latest = records[-1]
+                identity = _activity_identity(latest)
+                if identity != last_seen:
+                    last_seen = identity
+                    current_detail = _activity_live_detail(latest.type, latest.summary)
+                    observed_at = now
+        if current_detail is not None and now - observed_at <= 6:
+            return current_detail
+        return None
+
+    return latest_detail
+
+
+def _activity_identity(record: Any) -> tuple[str, str, str]:
+    return record.timestamp, record.type, record.source
+
+
+def _activity_live_detail(type_: str, summary: str) -> str:
+    labels = {
+        "session.prepared": "Session prepared",
+        "artifact.added": "Artifact registered",
+        "evidence.added": "Evidence recorded",
+        "work.criterion-satisfied": "Acceptance criterion recorded",
+        "work.transitioned": "Lifecycle advanced",
+        "tool.prepared": "Tool run prepared",
+        "tool.completed": "Tool run completed",
+        "tool.failed": "Tool run failed",
+    }
+    label = labels.get(type_, type_.replace(".", " ").replace("-", " ").title())
+    return f"{label} · {summary}"
 
 
 def _format_bytes(value: int) -> str:
@@ -217,6 +357,834 @@ def _format_bytes(value: int) -> str:
     if value >= 1024:
         return f"{value / 1024:g} KiB"
     return f"{value} B"
+
+
+def _run_continue_wizard(
+    workspace: AgoraWorkspace,
+    args: argparse.Namespace,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> dict[str, Any]:
+    interactive = not args.yes
+    if interactive and not input_stream.isatty():
+        raise ValueError("agora continue needs an interactive terminal; use --yes for automation")
+    tasks = workspace.next_actions(
+        actor_id=args.actor,
+        swarm_id=args.swarm,
+        human_only=False,
+        limit=1000,
+    )
+    if args.work is not None:
+        tasks = [item for item in tasks if item.work_id == args.work]
+    wizard = Wizard(input_stream, output_stream, brand="Agora Continue")
+    if not tasks:
+        if interactive:
+            wizard.success("No governed action is currently eligible")
+            wizard.next_steps((("agora status", "Review completed work and project attention."),))
+        return {"ok": True, "applied": False, "status": "clear", "next_actions": []}
+
+    task = tasks[0]
+    if interactive and len(tasks) > 1:
+        choices = [
+            Choice(
+                f"{item.swarm_id}/{item.work_id}",
+                item.id,
+                f"{item.actor or 'unassigned'} ({item.role or 'no role'}) · "
+                f"{item.state or item.kind} -> {', '.join(item.target_states) or 'attention'}",
+            )
+            for item in tasks
+        ]
+        wizard.heading("Choose work", "Select one bounded governed action to inspect.")
+        selected = wizard.choose("Eligible actions", choices)
+        task = next(item for item in tasks if item.id == selected)
+
+    scope = f"{task.swarm_id}/{task.work_id}"
+    if task.actor_kind == "human" or task.actor is None:
+        if interactive:
+            wizard.heading(
+                "Human attention",
+                "Agora stopped before a human decision; no LLM session was launched.",
+            )
+            wizard.rows(
+                (
+                    ("Work", scope),
+                    ("Actor", task.actor or "unassigned"),
+                    ("Role", task.role or "unassigned"),
+                    ("State", task.state or "pending"),
+                    ("Next", ", ".join(task.target_states) or "resolve assignment"),
+                )
+            )
+            for blocker in task.blockers:
+                wizard.warning(blocker)
+            wizard.next_steps(
+                (
+                    (
+                        f"agora next --swarm {task.swarm_id}",
+                        "Review the exact gate obligations before recording the human decision.",
+                    ),
+                    (
+                        f"agora run --actor {task.actor} --swarm {task.swarm_id} "
+                        f"--work {task.work_id} --explain",
+                        "Inspect the human role boundary without launching an LLM.",
+                    ),
+                )
+            )
+        return {
+            "ok": True,
+            "applied": False,
+            "status": "human-attention",
+            "task": task,
+        }
+
+    run_input = RunNextInput(
+        actor_id=task.actor,
+        swarm_id=task.swarm_id,
+        work_id=task.work_id,
+        runner=args.runner,
+    )
+    preview = workspace.preview_run(run_input)
+    if interactive:
+        wizard.heading(
+            "Next governed action",
+            "Review one bounded LLM action before Agora launches the configured runtime.",
+        )
+        wizard.rows(
+            (
+                ("Work", scope),
+                ("Actor", f"{task.actor} ({task.role})"),
+                ("Phase", f"{task.state} -> {', '.join(task.target_states)}"),
+                ("Runtime", f"{preview.integration}/{preview.provider}/{preview.model}"),
+                ("Timeout", f"{preview.timeout_seconds}s"),
+                ("Output", _format_bytes(preview.max_output_bytes or 0)),
+            )
+        )
+        for blocker in task.blockers:
+            wizard.warning(blocker)
+        if not wizard.confirm("Run this governed agent action", default=True):
+            wizard.success("Execution cancelled", "No session or project mutation was created.")
+            return {
+                "ok": True,
+                "applied": False,
+                "status": "cancelled",
+                "preview": preview,
+            }
+
+    context = _preview_activity_context(
+        preview,
+        args,
+        live_detail_provider=_governed_activity_provider(
+            workspace,
+            swarm_id=task.swarm_id or "",
+            work_id=task.work_id or "",
+        ),
+    )
+    with ConsoleActivity(output_stream, context) as activity:
+        if args.until_blocked:
+            result: Any = workspace.run_until_blocked(
+                run_input,
+                max_steps=args.max_steps,
+                observer=activity.handle_run_event,
+            )
+        else:
+            result = workspace.run_next(run_input)
+    next_actions = workspace.next_actions(swarm_id=task.swarm_id, limit=20)
+    if interactive:
+        wizard.success("Governed action completed", f"Agora persisted the session for {scope}.")
+        if any(item.actor_kind == "human" for item in next_actions):
+            wizard.warning("Human attention is now required; Agora stopped before that decision.")
+        wizard.next_steps(
+            (
+                ("agora continue", "Inspect and perform the next governed action."),
+                (f"agora next --swarm {task.swarm_id}", "Review all currently eligible actions."),
+            )
+        )
+    return {
+        "ok": True,
+        "applied": True,
+        "status": "completed",
+        "result": result,
+        "next_actions": next_actions,
+    }
+
+
+def _run_work_start_wizard(
+    workspace: AgoraWorkspace,
+    args: argparse.Namespace,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> dict[str, Any]:
+    if not input_stream.isatty():
+        raise ValueError(
+            "agora work start needs an interactive terminal; use work create in automation"
+        )
+    wizard = Wizard(input_stream, output_stream, brand="Agora Work")
+    swarms = [item for item in workspace.list_swarms() if item.status in {"ready", "running"}]
+    if not swarms:
+        raise ValueError(
+            "No ready swarm is available; finish role assignments before starting work"
+        )
+    swarm = next((item for item in swarms if item.id == args.swarm), None)
+    if args.swarm is not None and swarm is None:
+        raise ValueError(f"Swarm {args.swarm} is not ready or does not exist")
+    if swarm is None:
+        wizard.heading("Swarm", "Choose the governed team and Method Pack for this work.")
+        selected = wizard.choose(
+            "Ready swarms",
+            [
+                Choice(
+                    item.id,
+                    item.id,
+                    f"{item.method} · {item.objective}",
+                )
+                for item in swarms
+            ],
+        )
+        swarm = next(item for item in swarms if item.id == selected)
+
+    candidates = workspace.action_candidates(swarm.id, "work.create", "artifact.add")
+    if not candidates:
+        raise ValueError(
+            f"Swarm {swarm.id} has no assigned actor allowed to create work and register artifacts"
+        )
+    if len(candidates) == 1:
+        creator = candidates[0]
+    else:
+        wizard.heading("Responsible actor", "Select who owns creation of this durable work item.")
+        selected_actor = wizard.choose(
+            "Compatible assigned actors",
+            [
+                Choice(
+                    str(item["name"]),
+                    str(item["actor"]),
+                    f"{item['actor']} · {item['kind']} as {item['role']}",
+                )
+                for item in candidates
+            ],
+        )
+        creator = next(item for item in candidates if item["actor"] == selected_actor)
+
+    wizard.heading("Work", "Describe one reviewable increment. Nothing is written before review.")
+    title = wizard.text("Title")
+    default_id = _work_id_from_title(title)
+    work_id = wizard.text(
+        "Work id",
+        default=default_id,
+        validate=lambda value: (
+            None
+            if re.fullmatch(r"[a-z][a-z0-9-]*", value)
+            else "Use a lowercase id with letters, digits, and hyphens."
+        ),
+    )
+    description = wizard.text("Description", default=title)
+    criterion_count = wizard.integer("Number of acceptance criteria", default=1, minimum=1)
+    criteria: list[tuple[str, str]] = []
+    for index in range(1, criterion_count + 1):
+        criterion_description = wizard.text(f"Criterion {index}")
+        default_criterion_id = _work_id_from_title(criterion_description)[:48].rstrip("-")
+        criterion_id = wizard.text(
+            f"Criterion {index} id",
+            default=default_criterion_id,
+            validate=lambda value: (
+                None
+                if re.fullmatch(r"[a-z][a-z0-9-]*", value)
+                else "Use a lowercase id with letters, digits, and hyphens."
+            ),
+        )
+        criteria.append((criterion_id, criterion_description))
+
+    default_artifacts = "spec" if swarm.method == "spec-driven" else "none"
+    artifact_text = wizard.text(
+        "Required artifact kinds (comma separated, or none)", default=default_artifacts
+    )
+    required_artifacts = (
+        []
+        if artifact_text.strip().lower() == "none"
+        else list(dict.fromkeys(item.strip() for item in artifact_text.split(",") if item.strip()))
+    )
+    if any(re.fullmatch(r"[a-z][a-z0-9-]*", item) is None for item in required_artifacts):
+        raise ValueError("Required artifact kinds must be lowercase ids")
+
+    spec_uri: str | None = None
+    if "spec" in required_artifacts:
+        wizard.note("Press Enter to register the specification later through the assigned role.")
+        spec_value = wizard.optional_text("Existing specification path")
+        if spec_value is not None:
+            root = workspace.project_root()
+            spec_path = (root / spec_value).resolve()
+            try:
+                relative_spec = spec_path.relative_to(root)
+            except ValueError as error:
+                raise ValueError("Specification path must stay inside the project") from error
+            if not spec_path.is_file():
+                raise FileNotFoundError(f"Specification file not found: {spec_path}")
+            spec_uri = f"repo://{relative_spec.as_posix()}"
+
+    wizard.review(
+        (
+            ("Swarm", swarm.id),
+            ("Method", swarm.method),
+            ("Actor", f"{creator['actor']} ({creator['role']})"),
+            ("Work", work_id),
+            ("Title", title),
+            ("Criteria", str(len(criteria))),
+            ("Required artifacts", ", ".join(required_artifacts) or "none"),
+            ("Registered spec", spec_uri or "later"),
+        )
+    )
+    if not wizard.confirm("Create this governed work item", default=True):
+        wizard.success("Work creation cancelled", "No project files were changed.")
+        return {"ok": True, "applied": False, "status": "cancelled"}
+
+    work = workspace.create_work(
+        CreateWorkInput(
+            swarm_id=swarm.id,
+            id=work_id,
+            title=title,
+            actor_id=str(creator["actor"]),
+            acceptance_criteria=criteria,
+            required_artifacts=required_artifacts,
+            description=description,
+        )
+    )
+    if spec_uri is not None:
+        work = workspace.add_artifact(
+            AddArtifactInput(
+                swarm_id=swarm.id,
+                work_id=work_id,
+                actor_id=str(creator["actor"]),
+                kind="spec",
+                uri=spec_uri,
+            )
+        )
+    wizard.success("Governed work created", f"{swarm.id}/{work_id} is ready in {work.state}.")
+    wizard.next_steps(
+        (
+            ("agora continue", "Inspect and perform the next bounded governed action."),
+            (f"agora next --swarm {swarm.id}", "Review every currently eligible action."),
+        )
+    )
+    return {
+        "ok": True,
+        "applied": True,
+        "status": "created",
+        "work": work,
+        "spec_registered": spec_uri is not None,
+    }
+
+
+def _work_id_from_title(title: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if not value or not value[0].isalpha():
+        value = f"work-{value}".rstrip("-")
+    return value[:64].rstrip("-")
+
+
+def _add_guided_setup_arguments(parser: argparse.ArgumentParser, *, default_id: str) -> None:
+    parser.add_argument("--path", help="Project directory (default: current directory)")
+    parser.add_argument(
+        "--id", default=default_id, help=f"Starter swarm id (default: {default_id})"
+    )
+    parser.add_argument("--objective", help="First governed objective")
+    parser.add_argument("--integration", choices=INTEGRATIONS)
+    parser.add_argument("--provider", help="Provider label persisted in project configuration")
+    parser.add_argument("--model", help="Model selection or native CLI configuration marker")
+    parser.add_argument("--method", metavar="METHOD_ID")
+    parser.add_argument("--max-delegation-depth", type=int)
+    parser.add_argument("--base", help="Expected current Git branch")
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Accept reviewed existing working-tree changes",
+    )
+    parser.add_argument("--secure", action="store_true", help="Generate signed actor identities")
+    parser.add_argument("--key-dir", help="External directory for generated actor keypairs")
+    parser.add_argument(
+        "--save-user-defaults",
+        action="store_true",
+        help="Reuse the selected runtime and method for future projects",
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Use flags only; requires --yes and an objective for new projects",
+    )
+    parser.add_argument("--yes", action="store_true", help="Apply the reviewed setup plan")
+
+
+def _run_setup_wizard(
+    workspace: AgoraWorkspace,
+    args: argparse.Namespace,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> dict[str, Any]:
+    mode = "adopt" if args.command == "adopt" else "setup"
+    interactive = not args.non_interactive
+    if interactive and not input_stream.isatty():
+        raise ValueError(
+            f"agora {mode} needs an interactive terminal; use --non-interactive --yes "
+            "with explicit flags for automation"
+        )
+    if not interactive and not args.yes:
+        raise ValueError("--non-interactive requires --yes before applying setup")
+
+    wizard = Wizard(input_stream, output_stream)
+    if interactive:
+        wizard.heading(
+            "Project",
+            (
+                "Adopt an existing Git repository through a read-only preflight."
+                if mode == "adopt"
+                else "Select a project to initialize or review its existing Agora configuration."
+            ),
+        )
+    path_value = args.path or "."
+    if interactive and args.path is None:
+        path_value = wizard.text("Project path", default=".")
+    target = (workspace.cwd / path_value).resolve()
+    initialized = (target / ".agora" / "project.md").is_file()
+    if mode == "adopt" and initialized:
+        raise ValueError("This repository is already initialized; use agora setup")
+    if mode == "adopt" and (not target.is_dir() or not is_git_repository(target)):
+        raise ValueError("agora adopt requires an existing Git repository")
+
+    target_workspace = AgoraWorkspace(cwd=target)
+    existing = target_workspace.show_project() if initialized else None
+    detected_clis = [
+        executable
+        for executable in (
+            "codex",
+            "claude",
+            "gh",
+            "glab",
+            "acli",
+            "terraform",
+            "aws",
+            "gcloud",
+            "twg",
+        )
+        if shutil.which(executable) is not None
+    ]
+
+    if existing is not None:
+        return _review_existing_setup(
+            target_workspace,
+            existing,
+            args,
+            wizard=wizard,
+            interactive=interactive,
+            detected_clis=detected_clis,
+        )
+    if not interactive and not args.objective:
+        raise ValueError("--non-interactive requires --objective for a new project")
+
+    default_integration = (
+        "codex"
+        if shutil.which("codex") is not None
+        else "claude"
+        if shutil.which("claude") is not None
+        else "generic"
+    )
+    integration = args.integration or default_integration
+    if interactive and args.integration is None:
+        runtime_choices = [
+            Choice("Codex CLI", "codex", "Use the installed native Codex runtime."),
+            Choice("Claude CLI", "claude", "Use the installed native Claude runtime."),
+            Choice("Generic runner", "generic", "Provide a structured runner when executing."),
+        ]
+        default_index = next(
+            index
+            for index, choice in enumerate(runtime_choices)
+            if choice.value == default_integration
+        )
+        wizard.heading("LLM runtime")
+        integration = wizard.choose(
+            "Select the project runtime", runtime_choices, default=default_index
+        )
+    provider_defaults = {
+        "codex": "openai",
+        "claude": "anthropic",
+        "generic": "configured-by-runner",
+    }
+    model_defaults = {
+        "codex": "configured-by-codex",
+        "claude": "configured-by-claude",
+        "generic": "configured-by-runner",
+    }
+    provider = args.provider or provider_defaults[integration]
+    model = args.model or model_defaults[integration]
+    if interactive and args.provider is None:
+        provider = wizard.text("Provider label", default=provider)
+    if interactive and args.model is None:
+        model = wizard.text("Model", default=model)
+    maximum_depth = args.max_delegation_depth if args.max_delegation_depth is not None else 3
+    if interactive and args.max_delegation_depth is None:
+        maximum_depth = wizard.integer("Maximum swarm delegation depth", default=maximum_depth)
+
+    method = args.method or "spec-driven"
+    if interactive and args.method is None:
+        wizard.heading("Development method")
+        method_choices = [
+            Choice(
+                "Spec-Driven", "spec-driven", "Clarify a durable specification before planning."
+            ),
+            Choice("Scrum", "scrum", "Deliver increments through explicit team roles and gates."),
+            Choice("Kanban", "kanban", "Pull continuous work under WIP and acceptance policy."),
+        ]
+        method_choices.append(
+            Choice("Custom installed Method Pack", "custom", "Enter an installed Method Pack id.")
+        )
+        default_index = next(
+            index for index, choice in enumerate(method_choices) if choice.value == method
+        )
+        method = wizard.choose("Select the work lifecycle", method_choices, default=default_index)
+        if method == "custom":
+            method = wizard.text("Method Pack id")
+
+    swarm_id = args.id
+    objective = args.objective or ""
+    if interactive:
+        wizard.heading("Starter team")
+        if args.objective is None:
+            objective = wizard.text("First governed objective")
+        swarm_id = wizard.text("Starter swarm id", default=swarm_id)
+
+    secure = args.secure
+    key_directory = args.key_dir
+    if interactive and not args.secure:
+        wizard.heading("Actor security")
+        secure = (
+            wizard.choose(
+                "Select actor authentication",
+                (
+                    Choice(
+                        "Local identity",
+                        "local",
+                        "Fast onboarding; filesystem and Method Pack rules still apply.",
+                    ),
+                    Choice(
+                        "Signed Ed25519 actors",
+                        "signed",
+                        "Generate external local keypairs and require signed operations.",
+                    ),
+                ),
+            )
+            == "signed"
+        )
+    if secure and interactive and key_directory is None:
+        if not wizard.confirm("Use Agora's default external key directory", default=True):
+            key_directory = wizard.text("External actor key directory")
+
+    git_enabled = target.is_dir() and is_git_repository(target)
+    base_branch = args.base
+    if git_enabled:
+        initial_report = target_workspace.check_adoption(
+            AdoptionInput(
+                swarm_id=swarm_id,
+                base_branch=None,
+                allow_dirty=False,
+                integration=integration,
+                model=model,
+            )
+        )
+        if interactive and args.base is None:
+            base_branch = wizard.text("Git base branch", default=initial_report.branch or "main")
+        dirty = next((check for check in initial_report.checks if check.name == "git-clean"), None)
+        allow_dirty = args.allow_dirty
+        if dirty is not None and not dirty.ok and interactive and not allow_dirty:
+            allow_dirty = wizard.confirm(
+                "The working tree has changes. Continue without discarding them", default=False
+            )
+        report = target_workspace.check_adoption(
+            AdoptionInput(
+                swarm_id=swarm_id,
+                base_branch=base_branch,
+                allow_dirty=allow_dirty,
+                integration=integration,
+                model=model,
+            )
+        )
+        failed = [check for check in report.checks if not check.ok]
+        if failed:
+            detail = "; ".join(f"{check.name}: {check.detail}" for check in failed)
+            raise ValueError(f"Setup preflight failed: {detail}")
+    else:
+        allow_dirty = args.allow_dirty
+        base_branch = None
+        report = None
+
+    save_user_defaults = args.save_user_defaults
+    if interactive and not args.save_user_defaults:
+        save_user_defaults = wizard.confirm(
+            "Reuse this runtime and method as defaults for future projects", default=False
+        )
+    if (
+        save_user_defaults
+        and method not in BUILTIN_METHODS
+        and not (agora_home() / "methods" / method / "METHOD.md").is_file()
+    ):
+        raise ValueError(
+            "A custom Method Pack must be installed at user scope before it can become a "
+            "user default"
+        )
+
+    if interactive:
+        wizard.review(
+            (
+                ("Mode", mode),
+                ("Project", str(target)),
+                ("Runtime", f"{integration}/{provider}/{model}"),
+                ("Method", method),
+                ("Swarm", swarm_id),
+                ("Objective", objective),
+                ("Security", "signed Ed25519" if secure else "local identity"),
+                ("Git branch", f"agora/{swarm_id}" if git_enabled else "filesystem-only"),
+                ("Detected CLIs", ", ".join(detected_clis) or "none"),
+                ("User defaults", "update" if save_user_defaults else "unchanged"),
+            )
+        )
+        if not args.yes and not wizard.confirm("Apply this setup plan", default=True):
+            wizard.note("Setup cancelled; no project files were changed.")
+            return {"ok": True, "applied": False, "mode": mode, "target": str(target)}
+
+    result = target_workspace.quickstart(
+        QuickstartInput(
+            swarm_id=swarm_id,
+            objective=objective,
+            method=method,
+            secure=secure,
+            key_directory=key_directory,
+            base_branch=base_branch,
+            allow_dirty=allow_dirty,
+            integration=integration,
+            provider=provider,
+            model=model,
+            max_delegation_depth=maximum_depth,
+            entrypoint=mode,
+        )
+    )
+    if save_user_defaults:
+        target_workspace.configure(
+            ConfigureInput(
+                integration=integration,
+                provider=provider,
+                model=model,
+                default_method=method,
+                max_delegation_depth=maximum_depth,
+                force=True,
+            )
+        )
+    validation = target_workspace.validate()
+    doctor = target_workspace.doctor()
+    doctor_ok = all(check.ok or check.name == "git" for check in doctor)
+    if interactive:
+        if validation.ok and doctor_ok:
+            wizard.success(
+                "Agora project is ready",
+                "The starter team is governed, persisted, and ready to receive work.",
+            )
+        else:
+            wizard.warning("Setup completed, but one or more checks need attention")
+        wizard.section("Project")
+        wizard.rows(
+            (
+                ("Path", str(target)),
+                ("Runtime", f"{integration}/{provider}/{model}"),
+                ("Method", method),
+                ("Swarm", f"{result.swarm.id} ({result.swarm.status})"),
+                ("Actors", f"{result.human_actor}, {result.ai_actor}"),
+                ("Security", "signed Ed25519" if secure else "local identity"),
+            )
+        )
+        wizard.section("Checks")
+        wizard.check("Doctor", f"{sum(check.ok for check in doctor)}/{len(doctor)} passed")
+        wizard.check("Validation", f"{len(validation.issues)} issues", ok=validation.ok)
+        wizard.check("Persistence", "Project state and activity ledger written")
+        wizard.next_steps(
+            (
+                ("agora status", "See the governed project at a glance."),
+                ("agora work start", "Create the first work item through a reviewed wizard."),
+                ("agora continue", "Inspect and perform one bounded governed action."),
+            )
+        )
+    return {
+        "ok": validation.ok and doctor_ok,
+        "applied": True,
+        "mode": mode,
+        "target": str(target),
+        "setup": result,
+        "user_defaults_saved": save_user_defaults,
+        "doctor": doctor,
+        "validation": validation,
+    }
+
+
+def _review_existing_setup(
+    workspace: AgoraWorkspace,
+    existing: ProjectConfiguration,
+    args: argparse.Namespace,
+    *,
+    wizard: Wizard,
+    interactive: bool,
+    detected_clis: list[str],
+) -> dict[str, Any]:
+    requested_values = {
+        "integration": args.integration,
+        "provider": args.provider,
+        "model": args.model,
+        "default_method": args.method,
+        "max_delegation_depth": args.max_delegation_depth,
+    }
+    changed = [
+        name.replace("default_method", "method").replace("max_delegation_depth", "depth")
+        for name, requested in requested_values.items()
+        if requested is not None and requested != getattr(existing, name)
+    ]
+    if changed:
+        raise ValueError(
+            "This Agora project is already initialized; setup will not replace its "
+            f"{', '.join(changed)}. Use explicit configuration and migration commands."
+        )
+    if args.secure or args.key_dir is not None:
+        raise ValueError(
+            "This Agora project is already initialized; setup cannot replace existing actor "
+            "identities. Add or rotate authenticated actors explicitly."
+        )
+
+    status = workspace.status()
+    if interactive:
+        wizard.heading(
+            "Existing project",
+            "Agora is already initialized. Setup will review and validate it without recreating "
+            "actors, swarms, or work.",
+        )
+        wizard.review(
+            (
+                ("Project", existing.project),
+                ("Path", str(workspace.project_root())),
+                (
+                    "Runtime",
+                    f"{existing.integration}/{existing.provider}/{existing.model}",
+                ),
+                ("Method", existing.default_method),
+                ("Git branch", status.branch),
+                ("Actors", str(status.counts["actors"])),
+                ("Swarms", str(status.counts["swarms"])),
+                ("Work items", str(status.counts["work"])),
+                ("Detected CLIs", ", ".join(detected_clis) or "none"),
+            )
+        )
+
+    save_user_defaults = args.save_user_defaults
+    if interactive and not args.save_user_defaults:
+        save_user_defaults = wizard.confirm(
+            "Reuse this project's runtime and method as defaults for future projects",
+            default=False,
+        )
+    if (
+        save_user_defaults
+        and existing.default_method not in BUILTIN_METHODS
+        and not (agora_home() / "methods" / existing.default_method / "METHOD.md").is_file()
+    ):
+        raise ValueError(
+            "A custom Method Pack must be installed at user scope before it can become a "
+            "user default"
+        )
+
+    if interactive and not args.yes:
+        if not wizard.confirm("Run doctor and validation checks", default=True):
+            wizard.note("Setup review cancelled; no project files were changed.")
+            return {
+                "ok": True,
+                "applied": False,
+                "mode": "setup-existing",
+                "action": "cancelled",
+                "target": str(workspace.project_root()),
+            }
+
+    if save_user_defaults:
+        workspace.configure(
+            ConfigureInput(
+                integration=existing.integration,
+                provider=existing.provider,
+                model=existing.model,
+                default_method=existing.default_method,
+                max_delegation_depth=existing.max_delegation_depth,
+                force=True,
+            )
+        )
+    doctor = workspace.doctor()
+    validation = workspace.validate()
+    doctor_ok = all(check.ok or check.name == "git" for check in doctor)
+    if interactive:
+        passed_doctor = sum(check.ok for check in doctor)
+        if validation.ok and doctor_ok:
+            wizard.success(
+                "Agora project is ready",
+                "Existing governance state was checked without recreating actors, swarms, or work.",
+            )
+        else:
+            wizard.warning("Agora project needs attention before governed work continues")
+        wizard.section("Project")
+        wizard.rows(
+            (
+                ("Name", existing.project),
+                ("Runtime", f"{existing.integration}/{existing.provider}/{existing.model}"),
+                ("Method", existing.default_method),
+                ("Branch", status.branch),
+                (
+                    "State",
+                    f"{status.counts['actors']} actors · {status.counts['swarms']} swarms · "
+                    f"{status.counts['work']} work items · {status.counts['sessions']} sessions",
+                ),
+            )
+        )
+        wizard.section("Checks")
+        wizard.check("Doctor", f"{passed_doctor}/{len(doctor)} passed", ok=doctor_ok)
+        wizard.check("Validation", f"{len(validation.issues)} issues", ok=validation.ok)
+        wizard.check("State preserved", "No actors, swarms, or work were recreated")
+        wizard.check(
+            "User defaults",
+            "Saved for future projects" if save_user_defaults else "Unchanged",
+        )
+        attention = status.attention
+        active_work = attention["active-work"]
+        failed_sessions = attention["failed-sessions"]
+        if active_work or failed_sessions:
+            wizard.section("Attention")
+            if active_work:
+                wizard.rows((("Active work", ", ".join(active_work)),))
+            if failed_sessions:
+                wizard.warning(f"{len(failed_sessions)} previous failed sessions remain recorded")
+        next_commands: list[tuple[str, str]] = [
+            ("agora status", "Review active work and recorded attention."),
+        ]
+        if active_work:
+            swarm_id = active_work[0].split("/", 1)[0]
+            next_commands.append(
+                (
+                    f"agora continue --swarm {swarm_id}",
+                    "Inspect and perform one bounded governed action.",
+                )
+            )
+        else:
+            next_commands.append(
+                ("agora work start", "Create governed work through a reviewed wizard.")
+            )
+        wizard.next_steps(next_commands)
+    return {
+        "ok": validation.ok and doctor_ok,
+        "applied": save_user_defaults,
+        "mode": "setup-existing",
+        "action": "validated-existing-project",
+        "target": str(workspace.project_root()),
+        "user_defaults_saved": save_user_defaults,
+        "status": status,
+        "doctor": doctor,
+        "validation": validation,
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -230,6 +1198,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project", help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
+
+    setup = commands.add_parser(
+        "setup", help="Configure and bootstrap Agora through a guided workflow"
+    )
+    _add_guided_setup_arguments(setup, default_id="delivery")
 
     configure = commands.add_parser("configure", help="Persist user-level defaults")
     configure.add_argument("--integration", choices=INTEGRATIONS, default="generic")
@@ -254,17 +1227,12 @@ def _build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--force", action="store_true")
 
     adopt = commands.add_parser(
-        "adopt", help="Check whether an existing code repository is ready for Agora"
+        "adopt", help="Adopt an existing Git repository or run its read-only preflight"
     )
-    adopt.add_argument("--check", action="store_true", required=True)
-    adopt.add_argument("--path")
-    adopt.add_argument("--id", default="quickstart", help="Planned swarm id")
-    adopt.add_argument("--base", help="Expected current base branch")
     adopt.add_argument(
-        "--allow-dirty",
-        action="store_true",
-        help="Accept existing working-tree changes after reporting them",
+        "--check", action="store_true", help="Run only the read-only adoption preflight"
     )
+    _add_guided_setup_arguments(adopt, default_id="delivery")
 
     quickstart = commands.add_parser(
         "quickstart",
@@ -309,6 +1277,24 @@ def _build_parser() -> argparse.ArgumentParser:
     inbox.add_argument("--actor")
     inbox.add_argument("--swarm")
     inbox.add_argument("--limit", type=int, default=20)
+    continue_action = commands.add_parser(
+        "continue", help="Interactively inspect and perform the next governed action"
+    )
+    continue_action.add_argument("--actor")
+    continue_action.add_argument("--swarm")
+    continue_action.add_argument("--work")
+    continue_action.add_argument(
+        "--runner", help="External structured runner command for a generic integration"
+    )
+    continue_action.add_argument(
+        "--yes", action="store_true", help="Run the selected agent action without prompting"
+    )
+    continue_action.add_argument(
+        "--until-blocked",
+        action="store_true",
+        help="Repeat agent actions until human attention or no governed progress",
+    )
+    continue_action.add_argument("--max-steps", type=int, default=20)
     run = commands.add_parser("run", help="Prepare or launch the next eligible agent action")
     run.add_argument("--actor")
     run.add_argument("--swarm")
@@ -901,6 +1887,10 @@ def _build_parser() -> argparse.ArgumentParser:
     work = commands.add_parser("work", help="Manage governed work").add_subparsers(
         dest="work_command", required=True
     )
+    work_start = work.add_parser(
+        "start", help="Create governed work through an interactive reviewed workflow"
+    )
+    work_start.add_argument("--swarm", help="Ready swarm to use (otherwise choose interactively)")
     work_create = work.add_parser("create", help="Create a work item")
     work_create.add_argument("--swarm", required=True)
     work_create.add_argument("--id", required=True)
@@ -1040,6 +2030,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     session_list = session.add_parser("list", help="List sessions")
     session_list.add_argument("--status")
+    session_show = session.add_parser("show", help="Show one durable session")
+    session_show.add_argument("--session", required=True)
+    session_diagnose = session.add_parser(
+        "diagnose", help="Explain a session outcome and its safe recovery action"
+    )
+    session_diagnose.add_argument("--session", required=True)
     session_prepare = session.add_parser("prepare", help="Prepare a signed session context intent")
     session_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
     session_prepare.add_argument("--session", required=True)
@@ -1086,6 +2082,19 @@ def _build_parser() -> argparse.ArgumentParser:
     event_list.add_argument("--work")
     event_list.add_argument("--type")
     event_list.add_argument("--limit", type=int, default=50)
+
+    activity = commands.add_parser(
+        "activity", help="Inspect the linked project Activity Ledger"
+    ).add_subparsers(dest="activity_command", required=True)
+    activity_list = activity.add_parser("list", help="List recent governed activity")
+    activity_list.add_argument("--actor")
+    activity_list.add_argument("--swarm")
+    activity_list.add_argument("--work")
+    activity_list.add_argument("--session")
+    activity_list.add_argument("--tool-run")
+    activity_list.add_argument("--type")
+    activity_list.add_argument("--limit", type=int, default=50)
+    activity.add_parser("rebuild", help="Rebuild the ledger from existing durable project records")
 
     artifact = commands.add_parser("artifact", help="Manage artifacts").add_subparsers(
         dest="artifact_command", required=True
@@ -1268,6 +2277,8 @@ def _dispatch(
                 swarm_id=args.id,
                 base_branch=args.base,
                 allow_dirty=args.allow_dirty,
+                integration=args.integration,
+                model=args.model,
             )
         )
     if args.command == "quickstart":
@@ -1335,6 +2346,10 @@ def _dispatch(
                 max_output_bytes=args.max_output_bytes,
             )
         )
+    if args.command == "session" and args.session_command == "show":
+        return workspace.show_session(args.session)
+    if args.command == "session" and args.session_command == "diagnose":
+        return workspace.diagnose_session(args.session)
     if args.command == "lock" and args.lock_command == "status":
         return workspace.lock_status(args.scope)
     if args.command == "upgrade":
@@ -2054,6 +3069,18 @@ def _dispatch(
             type_=args.type,
             limit=args.limit,
         )
+    if args.command == "activity" and args.activity_command == "list":
+        return workspace.list_activity(
+            actor_id=args.actor,
+            swarm_id=args.swarm,
+            work_id=args.work,
+            session_id=args.session,
+            tool_run_id=args.tool_run,
+            type_=args.type,
+            limit=args.limit,
+        )
+    if args.command == "activity" and args.activity_command == "rebuild":
+        return workspace.rebuild_activity()
     if args.command == "artifact" and args.artifact_command == "add":
         return workspace.add_artifact(
             AddArtifactInput(

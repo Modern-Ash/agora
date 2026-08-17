@@ -9,9 +9,9 @@ reference.
 ```mermaid
 flowchart LR
     A[Install Agora] --> B[Run the zero-config self-test]
-    B --> C[Choose an agent integration]
-    C --> D[Configure user defaults]
-    D --> E[Initialize or quickstart a project]
+    B --> C[Run agora setup]
+    C --> D[Review runtime, method, security, and persistence]
+    D --> E[Confirm the project plan]
     E --> F[Review generated protocol]
     F --> G[Run governed work]
     G --> H[Validate and commit Markdown state]
@@ -58,7 +58,7 @@ flowchart LR
 ```
 
 The command runs in temporary workspaces and needs no project, LLM, provider account, key, or
-repository. A successful JSON report and exit status `0` confirm that the installed distribution can
+repository. A successful report and exit status `0` confirm that the installed distribution can
 govern all bundled roles through terminal work states. See the
 [Role conformance test harness](guides/self-test.md) for the complete visual walkthrough, CI usage,
 and assurance boundary.
@@ -82,7 +82,14 @@ flowchart TD
     G --> H
 ```
 
-Configure personal defaults once:
+The recommended path presents these choices sequentially and can optionally persist personal
+defaults:
+
+```bash
+agora setup
+```
+
+For automation or explicit manual assembly, configure personal defaults directly:
 
 ```bash
 agora configure \
@@ -114,14 +121,14 @@ For the fastest useful workspace:
 mkdir payment-service
 cd payment-service
 git init
-agora quickstart --objective "Deliver payment idempotency"
+agora setup
 agora doctor
 agora validate
 ```
 
-Quickstart creates a project, one human actor, one AI actor, a method-compatible swarm, and its
-assignments. The default mode stores no private keys. Add `--secure` when every actor should use an
-external Ed25519 identity from the beginning.
+The wizard creates a project, one human actor, one AI actor, a method-compatible swarm, and its
+assignments after confirmation. The default mode stores no private keys. Select signed security
+when every actor should use an external Ed25519 identity from the beginning.
 
 Use `agora init` instead when you want to register actors and form the swarm step by step.
 
@@ -131,11 +138,7 @@ Start from the clean base branch that will receive the feature:
 
 ```bash
 git status --short
-agora adopt --check --id payment-idempotency --base main
-agora quickstart \
-  --id payment-idempotency \
-  --base main \
-  --objective "Deliver payment idempotency"
+agora adopt
 ```
 
 ```mermaid

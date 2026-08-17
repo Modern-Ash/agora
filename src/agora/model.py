@@ -87,6 +87,7 @@ class GatePolicy:
     id: str
     require_all_criteria: bool = True
     require_required_artifacts: bool = True
+    required_artifacts: list[str] | None = None
     require_successful_evidence: bool = True
     required_approval_roles: list[str] = field(default_factory=list)
 
@@ -319,6 +320,8 @@ class AdoptionInput:
     swarm_id: str = "quickstart"
     base_branch: str | None = None
     allow_dirty: bool = False
+    integration: Integration | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -904,6 +907,20 @@ class EventRecord:
 
 
 @dataclass(frozen=True)
+class ActivityRecord:
+    timestamp: str
+    type: str
+    summary: str
+    actor: str | None
+    swarm_id: str | None
+    work_id: str | None
+    session_id: str | None
+    tool_run_id: str | None
+    source: str
+    path: str
+
+
+@dataclass(frozen=True)
 class WorkspaceStatus:
     project: str
     integration: Integration
@@ -1364,6 +1381,11 @@ class QuickstartInput:
     key_directory: str | None = None
     base_branch: str | None = None
     allow_dirty: bool = False
+    integration: Integration | None = None
+    provider: str | None = None
+    model: str | None = None
+    max_delegation_depth: int | None = None
+    entrypoint: Literal["quickstart", "setup", "adopt"] = "quickstart"
 
 
 @dataclass(frozen=True)

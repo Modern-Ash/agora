@@ -1,14 +1,26 @@
 import os
 import threading
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from types import TracebackType
-from typing import TextIO
+from typing import Any, TextIO
 
 from agora.model import RunLoopEvent
 
 _DISABLED_VALUES = {"1", "true", "yes", "on"}
+_ANSI = {
+    "bold": "1",
+    "dim": "2",
+    "cyan": "36",
+    "green": "32",
+    "yellow": "33",
+    "red": "31",
+    "bold_cyan": "1;36",
+    "bold_green": "1;32",
+    "bold_yellow": "1;33",
+    "bold_red": "1;31",
+}
 
 
 @dataclass(frozen=True)
@@ -20,6 +32,8 @@ class ActivityContext:
     detail: str
     safety: str = ""
     preflight: tuple[str, ...] = ()
+    live_details: tuple[str, ...] = ()
+    live_detail_provider: Callable[[], str | None] | None = None
 
 
 class ConsoleActivity:
@@ -135,6 +149,9 @@ class ConsoleActivity:
             ]
             if self.context.safety:
                 lines.append(f"           {self.context.safety}")
+            live_detail = self._current_live_detail(frame)
+            if live_detail:
+                lines.append(f"           Now: {live_detail}")
             self._render_lines(lines)
 
     def _render_final(self, status: str, elapsed: float) -> None:
@@ -150,7 +167,29 @@ class ConsoleActivity:
             ]
             if self.context.safety:
                 lines.append(f"           {self.context.safety}")
+            if self.context.live_details or self.context.live_detail_provider is not None:
+                outcome = (
+                    "Governed session finished; durable result finalized"
+                    if status == "finished"
+                    else "Governed session failed; durable diagnostics finalized"
+                )
+                lines.append(f"           Now: {outcome}")
             self._render_lines(lines, finish=True)
+
+    def _current_live_detail(self, frame: int) -> str | None:
+        assert self.context is not None
+        if self.context.live_detail_provider is not None:
+            try:
+                provided = self.context.live_detail_provider()
+            except (OSError, RuntimeError, ValueError):
+                provided = None
+            if provided:
+                return provided
+        if not self.context.live_details:
+            return None
+        frames_per_detail = max(1, round(1.8 / self.interval_seconds))
+        index = (frame // frames_per_detail) % len(self.context.live_details)
+        return self.context.live_details[index]
 
     def _emit_event(self, message: str) -> None:
         with self._lock:
@@ -193,6 +232,264 @@ class ConsoleActivity:
             self._stop.set()
 
 
+class ConsoleResult:
+    """Present structured command results for a human terminal."""
+
+    def __init__(self, stream: TextIO) -> None:
+        self.stream = stream
+        self.color = supports_color(stream)
+
+    def render(self, command: str, value: Any) -> None:
+        data = _normalize(value)
+        if command == "status" and isinstance(data, dict):
+            self._status(data)
+        elif command == "doctor" and isinstance(data, (dict, list)):
+            self._doctor(data)
+        elif command == "validate" and isinstance(data, dict):
+            self._validation(data)
+        elif command in {"next", "inbox"} and isinstance(data, list):
+            self._tasks(command, data)
+        elif command == "session diagnose" and isinstance(data, dict):
+            self._session_diagnosis(data)
+        else:
+            self._generic(command, data)
+        self.stream.flush()
+
+    def _status(self, data: dict[str, Any]) -> None:
+        self._headline("Agora status", ok=True)
+        self._section("Project")
+        self._rows(
+            (
+                ("Name", data.get("project")),
+                ("Runtime", data.get("integration")),
+                ("Method", data.get("default_method")),
+                ("Branch", data.get("branch")),
+            )
+        )
+        counts = data.get("counts", {})
+        if isinstance(counts, dict):
+            visible = [
+                (key.replace("-", " ").title(), value) for key, value in counts.items() if value
+            ]
+            self._section("State")
+            self._rows(visible)
+        attention = data.get("attention", {})
+        pending = (
+            [(key.replace("-", " ").title(), values) for key, values in attention.items() if values]
+            if isinstance(attention, dict)
+            else []
+        )
+        if pending:
+            self._section("Attention")
+            for label, values in pending:
+                if len(values) == 1:
+                    self._check(label, str(values[0]), ok=False)
+                    continue
+                self._check(label, f"{len(values)} recorded", ok=False)
+                for item in values[:3]:
+                    print(f"      {self._paint(str(item), 'dim')}", file=self.stream)
+                if len(values) > 3:
+                    print(
+                        f"      {self._paint(f'+{len(values) - 3} more', 'dim')}",
+                        file=self.stream,
+                    )
+        else:
+            self._section("Attention")
+            self._check("Clear", "No governed work currently needs attention", ok=True)
+
+    def _doctor(self, data: dict[str, Any] | list[Any]) -> None:
+        if isinstance(data, dict):
+            data = data.get("checks", [])
+        checks = [item for item in data if isinstance(item, dict)]
+        passed = sum(item.get("ok") is True for item in checks)
+        self._headline("Agora doctor", ok=passed == len(checks))
+        self._section(f"Checks · {passed}/{len(checks)} passed")
+        for item in checks:
+            self._check(
+                str(item.get("name", "check")).replace("-", " ").title(),
+                str(item.get("detail", "")),
+                ok=item.get("ok") is True,
+            )
+
+    def _validation(self, data: dict[str, Any]) -> None:
+        ok = data.get("ok") is True
+        issues = data.get("issues", [])
+        self._headline("Agora validation", ok=ok)
+        self._rows((("Project", data.get("project")), ("Issues", len(issues))))
+        checked = data.get("checked", {})
+        if isinstance(checked, dict):
+            total = sum(value for value in checked.values() if isinstance(value, int))
+            self._check("Records", f"{total} durable records checked", ok=True)
+        if issues:
+            self._section("Issues")
+            for item in issues:
+                if not isinstance(item, dict):
+                    self._check("Issue", str(item), ok=False)
+                    continue
+                label = str(item.get("code", item.get("severity", "issue")))
+                detail = str(item.get("message", item.get("path", "")))
+                self._check(label, detail, ok=item.get("severity") != "error")
+        else:
+            self._check("Validation", "No issues found", ok=True)
+
+    def _tasks(self, command: str, data: list[Any]) -> None:
+        title = "Human inbox" if command == "inbox" else "Next governed actions"
+        self._headline(title, ok=True)
+        if not data:
+            self._check("Clear", "No eligible actions found", ok=True)
+            return
+        for index, item in enumerate(data, start=1):
+            if not isinstance(item, dict):
+                self._rows(((str(index), item),))
+                continue
+            actor = item.get("actor") or "unassigned"
+            role = item.get("role") or "no role"
+            reference = "/".join(
+                str(part) for part in (item.get("swarm_id"), item.get("work_id")) if part
+            )
+            state = item.get("state") or item.get("kind") or "pending"
+            targets = item.get("target_states") or []
+            print(
+                f"\n  {self._paint(str(index) + '.', 'bold_cyan')} "
+                f"{self._paint(reference or str(item.get('id', 'action')), 'bold')}",
+                file=self.stream,
+            )
+            self._rows(
+                (
+                    ("Actor", f"{actor} ({role})"),
+                    ("Action", item.get("kind")),
+                    ("State", state),
+                    (
+                        "Transition",
+                        " → ".join([str(state), *map(str, targets)]) if targets else None,
+                    ),
+                )
+            )
+            blockers = item.get("blockers") or []
+            if blockers:
+                self._check("Blocked", "; ".join(str(value) for value in blockers), ok=False)
+
+    def _session_diagnosis(self, data: dict[str, Any]) -> None:
+        status = str(data.get("status", "unknown"))
+        ok = status in {"completed", "recovered"}
+        self._headline("Session diagnosis", ok=ok)
+        scope = "/".join(str(item) for item in (data.get("swarm_id"), data.get("work_id")) if item)
+        self._rows(
+            (
+                ("Session", data.get("id")),
+                ("Status", status),
+                ("Actor", data.get("actor")),
+                ("Work", scope),
+                ("Cause", data.get("termination_reason")),
+                (
+                    "Output",
+                    f"{data.get('output_bytes', 0)} / {data.get('max_output_bytes', 0)} "
+                    f"bytes ({data.get('output_percent', 0)}%)",
+                ),
+            )
+        )
+        self._section("Assessment")
+        self._check(
+            "Outcome",
+            str(data.get("diagnosis", "No diagnosis available")),
+            ok=ok,
+        )
+        if data.get("recovered_by"):
+            self._check("Recovery", str(data["recovered_by"]), ok=True)
+        self._section("Next step")
+        self._rows((("Command", data.get("recommended_command")),))
+
+    def _generic(self, command: str, data: Any) -> None:
+        ok = not (isinstance(data, dict) and data.get("ok") is False)
+        self._headline(command.replace("-", " ").title(), ok=ok)
+        if isinstance(data, dict):
+            self._render_mapping(data)
+        elif isinstance(data, list):
+            self._render_list(data)
+        elif data is None:
+            self._check("Completed", "No structured result returned", ok=ok)
+        else:
+            self._rows((("Result", data),))
+
+    def _render_mapping(self, data: dict[str, Any]) -> None:
+        scalars = [(key, value) for key, value in data.items() if _is_scalar(value)]
+        if scalars:
+            self._rows(((_label(key), _scalar(value)) for key, value in scalars))
+        for key, value in data.items():
+            if _is_scalar(value):
+                continue
+            if isinstance(value, list) and all(_is_scalar(item) for item in value):
+                self._rows(((_label(key), _scalar_list(value)),))
+                continue
+            self._section(_label(key))
+            if isinstance(value, dict):
+                nested_scalars = [
+                    (_label(child), _scalar(item))
+                    for child, item in value.items()
+                    if _is_scalar(item)
+                ]
+                self._rows(nested_scalars or (("Entries", len(value)),))
+                nested = sum(not _is_scalar(item) for item in value.values())
+                if nested:
+                    self._rows((("Nested records", nested),))
+            elif isinstance(value, list):
+                self._render_list(value)
+            else:
+                self._rows((("Value", value),))
+
+    def _render_list(self, values: list[Any]) -> None:
+        if not values:
+            self._rows((("Items", 0),))
+            return
+        for index, item in enumerate(values, start=1):
+            if not isinstance(item, dict):
+                self._rows(((str(index), _scalar(item)),))
+                continue
+            identity = next(
+                (
+                    item.get(key)
+                    for key in ("title", "name", "id", "reference", "type", "kind")
+                    if item.get(key) not in (None, "")
+                ),
+                f"Item {index}",
+            )
+            print(
+                f"  {self._paint('•', 'cyan')} {self._paint(str(identity), 'bold')}",
+                file=self.stream,
+            )
+            details = [
+                (_label(key), _scalar(value))
+                for key, value in item.items()
+                if key not in {"title", "name", "id", "reference"} and _is_scalar(value)
+            ][:5]
+            self._rows(details)
+
+    def _headline(self, title: str, *, ok: bool) -> None:
+        marker = self._paint("✓" if ok else "!", "bold_green" if ok else "bold_yellow")
+        print(f"\n{marker} {self._paint(title, 'bold')}", file=self.stream)
+
+    def _section(self, title: str) -> None:
+        print(f"\n{self._paint(title, 'bold_cyan')}", file=self.stream)
+
+    def _rows(self, rows: Sequence[tuple[str, Any]]) -> None:
+        materialized = [(str(label), value) for label, value in rows if value is not None]
+        width = max((len(label) for label, _ in materialized), default=0)
+        for label, value in materialized:
+            print(
+                f"  {self._paint(f'{label:<{width}}', 'dim')}  {_scalar(value)}",
+                file=self.stream,
+            )
+
+    def _check(self, label: str, detail: str, *, ok: bool) -> None:
+        marker = self._paint("✓" if ok else "!", "green" if ok else "bold_yellow")
+        print(f"  {marker} {self._paint(label, 'bold')}  {detail}", file=self.stream)
+
+    def _paint(self, value: str, style: str) -> str:
+        if not self.color:
+            return value
+        return f"\x1b[{_ANSI[style]}m{value}\x1b[0m"
+
+
 def _next_action_label(actions: Sequence[object]) -> str:
     for action in actions:
         actor = getattr(action, "actor", None)
@@ -210,6 +507,55 @@ def _supports_progress(stream: TextIO) -> bool:
         return stream.isatty()
     except (AttributeError, OSError):
         return False
+
+
+def is_human_terminal(stream: TextIO) -> bool:
+    try:
+        return stream.isatty()
+    except (AttributeError, OSError):
+        return False
+
+
+def supports_color(stream: TextIO) -> bool:
+    return (
+        is_human_terminal(stream)
+        and "NO_COLOR" not in os.environ
+        and os.environ.get("TERM", "") != "dumb"
+    )
+
+
+def _normalize(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return {key: _normalize(child) for key, child in asdict(value).items()}
+    if isinstance(value, dict):
+        return {key: _normalize(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize(child) for child in value]
+    return value
+
+
+def _is_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _scalar(value: Any) -> str:
+    if value is None:
+        return "none"
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return str(value)
+
+
+def _scalar_list(values: list[Any]) -> str:
+    visible = ", ".join(_scalar(value) for value in values[:6])
+    remaining = len(values) - 6
+    return f"{visible} (+{remaining} more)" if remaining > 0 else visible or "none"
+
+
+def _label(value: str) -> str:
+    return value.replace("_", " ").replace("-", " ").strip().title()
 
 
 def _orbit_frame(active: int | None) -> tuple[str, str, str, str, str]:

@@ -9,7 +9,7 @@ agora self-test
 
 The command needs no initialized project, provider account, LLM, key, repository, or network
 connection. It creates isolated temporary workspaces, exercises the bundled lifecycle contracts,
-prints a JSON report, and removes the workspaces when complete.
+prints a human terminal report or captured JSON, and removes the workspaces when complete.
 
 ## Fastest confidence check
 

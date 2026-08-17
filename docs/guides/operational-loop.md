@@ -4,6 +4,20 @@ Agora can derive the next permitted action from Method Pack state and run assign
 through Codex, Claude, or a structured external runner. The controller remains provider-neutral and
 stops before replacing a human decision.
 
+## Recommended guided loop
+
+For daily interactive use, start with one command:
+
+```bash
+agora continue
+```
+
+Agora selects or lets you choose one eligible work item, displays its actor, role, phase, runtime,
+timeout, output boundary, and current blockers, then asks before launching exactly one non-human
+action. When the next action belongs to a human, it launches no LLM and presents the gate obligations
+and inspection commands instead. `agora continue --until-blocked` remains bounded and stops at the
+same human boundary. Automation may use `agora continue --yes` or the lower-level `run` commands.
+
 ## Inspect before execution
 
 ```bash
@@ -90,6 +104,18 @@ with code `124`; an output violation exits with code `125`. Both leave the sessi
 an explicit `termination-reason`, and persist bounded standard output and error in `RESULT.md`.
 `agora resume` inherits the failed session boundaries unless replacements are supplied.
 
+Inspect one session without opening its raw provider output:
+
+```bash
+agora session show --session run-delivery-change-20260816t120000z
+agora session diagnose --session run-delivery-change-20260816t120000z
+```
+
+`session diagnose` classifies timeout, output-limit, launcher, and nonzero-exit failures, reports
+captured-output utilization, detects a successful retry, and prints the bounded recovery command.
+Recovered failures remain in the audit history but no longer appear as unresolved attention in
+`agora status`.
+
 These limits prevent an unattended local process from running forever or producing unbounded
 captured output. They are not a filesystem, network, syscall, credential, or resource sandbox.
 Run untrusted workloads through a reviewed container, VM, CI runner, or organization wrapper and
@@ -137,8 +163,27 @@ sequenceDiagram
 Agora deliberately does not display chain-of-thought, credentials, environment secrets, or raw
 provider output in this view. The console contains only policy and lifecycle facts that Agora owns.
 Full bounded process output remains in the session's `RESULT.md` for explicit audit. Interactive
-output is written to `stderr`; the final structured JSON stays on `stdout` for scripts and IDEs.
+output is written to `stderr`; scripts, pipes, and IDE capture receive the final structured JSON on
+`stdout`, while a terminal receives the concise human result.
+
+During a live session, the fixed console block includes one `Now:` line. It rotates slowly through
+the active lifecycle boundary, role authority, output limit, and the durable records Agora is
+watching. When the Activity Ledger receives a new artifact, criterion, evidence, tool, or transition
+event, that real governed event temporarily replaces the contextual heartbeat. The line never
+streams provider reasoning or raw model output, and its position remains stable so long sessions do
+not flood the terminal.
 Pipes and CI do not render animation. Set `AGORA_NO_PROGRESS=1` to disable it explicitly.
+
+Every prepared and finished session is also linked from `.agora/activity.md`. Inspect the concise
+chronology without opening provider output:
+
+```bash
+agora activity list --swarm delivery --work change-api
+```
+
+Completed sessions add a deterministic `SUMMARY.md`; follow its `repo://` source to reach the
+bounded `RESULT.md` only when deeper audit is necessary. See the
+[Activity Ledger guide](activity-ledger.md).
 
 ## Run until human attention or a blocker
 

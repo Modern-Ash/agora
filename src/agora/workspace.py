@@ -88,6 +88,7 @@ from agora.model import (
     INTEGRATIONS,
     MAX_SESSION_MAX_OUTPUT_BYTES,
     MAX_SESSION_TIMEOUT_SECONDS,
+    ActivityRecord,
     ActorKeyRecord,
     ActorRecord,
     AddActorInput,
@@ -484,7 +485,20 @@ class AgoraWorkspace:
                 f"integration={configuration.integration} | method={configuration.default_method}"
             ),
         )
+        self._append_activity(
+            target,
+            "project.initialized",
+            (
+                f"Initialized project with integration={configuration.integration} "
+                f"method={configuration.default_method}"
+            ),
+            source=agora / "project.md",
+            timestamp=configuration.created_at,
+        )
         return configuration
+
+    def show_project(self) -> ProjectConfiguration:
+        return self._load_project_configuration(self.project_root())
 
     def check_adoption(self, data: AdoptionInput) -> AdoptionReport:
         assert_slug(data.swarm_id, "Swarm id")
@@ -493,11 +507,12 @@ class AgoraWorkspace:
         user = self._load_user_configuration()
         if initialized:
             configuration = self._load_project_configuration(target)
-            integration = configuration.integration
-            model = configuration.model
+            integration = data.integration or configuration.integration
+            model = data.model or configuration.model
         else:
-            integration = user.integration if user is not None else "generic"
-            model = user.model if user is not None else "configured-by-integration"
+            integration = data.integration or (user.integration if user is not None else "generic")
+            model = data.model or (user.model if user is not None else "configured-by-integration")
+        self._assert_integration(integration)
 
         checks = [
             DoctorCheck("target-exists", target.is_dir(), str(target)),
@@ -3557,6 +3572,27 @@ class AgoraWorkspace:
         ]
         return [record for record in records if status is None or record.status == status]
 
+    def action_candidates(self, swarm_id: str, *actions: str) -> list[dict[str, str]]:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        required_actions = tuple(dict.fromkeys(actions))
+        candidates: list[dict[str, str]] = []
+        for role, reference in swarm.assignments.items():
+            if all(
+                self._role_allows_action(root, swarm.method, role, action)
+                for action in required_actions
+            ):
+                actor = self._find_actor(root, reference)
+                candidates.append(
+                    {
+                        "actor": actor.reference,
+                        "name": actor.name,
+                        "kind": actor.kind,
+                        "role": role,
+                    }
+                )
+        return candidates
+
     def list_handoffs(self, swarm_id: str) -> list[HandoffRecord]:
         root = self.project_root()
         swarm = self._load_swarm(root, swarm_id)
@@ -3865,7 +3901,7 @@ class AgoraWorkspace:
         }
         outstanding_artifacts = {
             item
-            for item in work.required_artifacts
+            for item in self._required_artifacts_for_gate(work, gate)
             if gate.require_required_artifacts
             and item not in work.artifact_kinds
             and item not in coverage[1]
@@ -4806,6 +4842,15 @@ class AgoraWorkspace:
                 f"kind={record.action} actor={record.actor} swarm={record.swarm_id} "
                 f"work={record.work_id}"
             ),
+        )
+        self._append_activity(
+            root,
+            "lifecycle-action.prepared",
+            f"Prepared signed intent for {record.action}",
+            actor=actor.reference,
+            swarm_id=swarm.id,
+            work_id=work.id if work is not None else None,
+            source=action_root / "ACTION.md",
         )
         return record
 
@@ -6991,6 +7036,16 @@ class AgoraWorkspace:
                 f"actor={actor.reference} swarm={swarm.id}"
             ),
         )
+        self._append_activity(
+            root,
+            "session.prepared",
+            (f"Prepared {integration}/{provider}/{model} session for roles {', '.join(roles)}"),
+            actor=actor.reference,
+            swarm_id=swarm.id,
+            work_id=work.id if work is not None else None,
+            session_id=session_id,
+            source=session_path / "SESSION.md",
+        )
         return record
 
     def prepare_session_authorization(
@@ -7154,22 +7209,63 @@ class AgoraWorkspace:
             if current.status != "running":
                 raise ValueError(f"Running session state changed during execution: {running.id}")
             atomic_write(session_path / "SESSION.md", self._render_session(finished))
+            result_contents = self._render_session_result(finished, stdout, stderr)
+            result_sha256 = hashlib.sha256(result_contents.encode("utf-8")).hexdigest()
+            completed_at = self._timestamp()
+            atomic_write(session_path / "RESULT.md", result_contents)
             atomic_write(
-                session_path / "RESULT.md",
-                self._render_session_result(finished, stdout, stderr),
+                session_path / "SUMMARY.md",
+                self._render_session_summary(
+                    finished,
+                    completed_at=completed_at,
+                    result_sha256=result_sha256,
+                ),
             )
             append_entry(
                 root / ".agora" / "events.md",
                 (
-                    f"- {self._timestamp()} | session.{status} | session={running.id} "
+                    f"- {completed_at} | session.{status} | session={running.id} "
                     f"exit-code={exit_code if exit_code is not None else 'unavailable'}"
                 ),
+            )
+            self._append_activity(
+                root,
+                f"session.{status}",
+                (
+                    f"Session {status}; exit-code="
+                    f"{exit_code if exit_code is not None else 'unavailable'}; "
+                    f"output-bytes={finished.output_bytes}; result-sha256={result_sha256}"
+                ),
+                actor=actor.reference,
+                swarm_id=swarm.id,
+                work_id=work.id if work is not None else None,
+                session_id=running.id,
+                source=session_path / "SUMMARY.md",
+                timestamp=completed_at,
             )
         if launch_error is not None:
             raise launch_error
         if exit_code != 0:
+            recovery = ["agora", "resume", "--session", running.id]
+            if termination_reason == "output-limit":
+                recovery.extend(
+                    [
+                        "--max-output-bytes",
+                        str(min(running.max_output_bytes * 2, MAX_SESSION_MAX_OUTPUT_BYTES)),
+                    ]
+                )
+            elif termination_reason == "timeout":
+                recovery.extend(
+                    [
+                        "--timeout-seconds",
+                        str(min(running.timeout_seconds * 2, MAX_SESSION_TIMEOUT_SECONDS)),
+                    ]
+                )
+            reason = termination_reason or f"exit-code-{exit_code}"
             raise RuntimeError(
-                f"Session runner exited with code {exit_code}: {' '.join(running.launch_command)}"
+                f"Session runner exited with code {exit_code}: {running.id} ({reason}). "
+                "Durable diagnostics: "
+                f"{session_path / 'SUMMARY.md'}. Resume with: {shlex.join(recovery)}"
             )
         return finished
 
@@ -7194,6 +7290,219 @@ class AgoraWorkspace:
             for path in sorted((root / ".agora" / "sessions").glob("*/SESSION.md"))
         ]
         return [record for record in records if status is None or record.status == status]
+
+    def show_session(self, session_id: str) -> SessionRecord:
+        assert_slug(session_id, "Session id")
+        root = self.project_root()
+        return self._load_session(root / ".agora" / "sessions" / session_id)
+
+    def diagnose_session(self, session_id: str) -> dict[str, object]:
+        record = self.show_session(session_id)
+        sessions = self.list_sessions()
+        retries = self._session_retries(record, sessions)
+        recovered_by = next((item for item in retries if item.status == "completed"), None)
+        reason_messages = {
+            "timeout": "The runtime exceeded its bounded execution time.",
+            "output-limit": "The runtime exceeded its bounded captured-output limit.",
+            "launcher-error": "The configured runtime could not be launched.",
+            "nonzero-exit": "The runtime exited without completing successfully.",
+        }
+        if recovered_by is not None:
+            diagnosis = f"Recovered by session {recovered_by.id}."
+            recommended_command = f"agora next --swarm {record.swarm_id}"
+        elif record.status == "failed":
+            diagnosis = reason_messages.get(
+                record.termination_reason, "The session failed without a classified cause."
+            )
+            command = ["agora", "resume", "--session", record.id]
+            if record.termination_reason == "output-limit":
+                command.extend(
+                    [
+                        "--max-output-bytes",
+                        str(min(record.max_output_bytes * 2, MAX_SESSION_MAX_OUTPUT_BYTES)),
+                    ]
+                )
+            elif record.termination_reason == "timeout":
+                command.extend(
+                    [
+                        "--timeout-seconds",
+                        str(min(record.timeout_seconds * 2, MAX_SESSION_TIMEOUT_SECONDS)),
+                    ]
+                )
+            recommended_command = shlex.join(command)
+        elif record.status == "prepared":
+            diagnosis = "The bounded session is prepared and has not launched."
+            recommended_command = f"agora resume --session {record.id}"
+        elif record.status == "running":
+            diagnosis = "The bounded session is still running."
+            recommended_command = f"agora session show --session {record.id}"
+        else:
+            diagnosis = "The governed session completed successfully."
+            recommended_command = f"agora next --swarm {record.swarm_id}"
+        result_path = Path(record.path) / "RESULT.md"
+        summary_path = Path(record.path) / "SUMMARY.md"
+        return {
+            "id": record.id,
+            "status": "recovered" if recovered_by is not None else record.status,
+            "actor": record.actor,
+            "swarm_id": record.swarm_id,
+            "work_id": record.work_id,
+            "termination_reason": record.termination_reason,
+            "diagnosis": diagnosis,
+            "output_bytes": record.output_bytes,
+            "max_output_bytes": record.max_output_bytes,
+            "output_percent": round((record.output_bytes / record.max_output_bytes) * 100, 1),
+            "timeout_seconds": record.timeout_seconds,
+            "recovered_by": recovered_by.id if recovered_by is not None else None,
+            "retries": [
+                {
+                    "id": item.id,
+                    "status": item.status,
+                    "termination_reason": item.termination_reason,
+                }
+                for item in retries
+            ],
+            "recommended_command": recommended_command,
+            "summary_path": str(summary_path) if summary_path.is_file() else None,
+            "result_path": str(result_path) if result_path.is_file() else None,
+        }
+
+    @staticmethod
+    def _session_retries(
+        record: SessionRecord, sessions: list[SessionRecord]
+    ) -> list[SessionRecord]:
+        prefix = f"{record.id}-retry-"
+        return sorted(
+            (item for item in sessions if item.id.startswith(prefix)),
+            key=lambda item: (item.created_at, item.id),
+        )
+
+    def list_activity(
+        self,
+        *,
+        actor_id: str | None = None,
+        swarm_id: str | None = None,
+        work_id: str | None = None,
+        session_id: str | None = None,
+        tool_run_id: str | None = None,
+        type_: str | None = None,
+        limit: int = 50,
+    ) -> list[ActivityRecord]:
+        if limit < 1:
+            raise ValueError("Activity limit must be a positive integer")
+        if work_id is not None and swarm_id is None:
+            raise ValueError("--work requires --swarm when listing activity")
+        path = self.project_root() / ".agora" / "activity.md"
+        if not path.is_file():
+            return []
+        records = self._read_activity(path)
+        filters = (
+            (actor_id, lambda item: item.actor),
+            (swarm_id, lambda item: item.swarm_id),
+            (work_id, lambda item: item.work_id),
+            (session_id, lambda item: item.session_id),
+            (tool_run_id, lambda item: item.tool_run_id),
+            (type_, lambda item: item.type),
+        )
+        for expected, value in filters:
+            if expected is not None:
+                records = [item for item in records if value(item) == expected]
+        return records[-limit:]
+
+    @_locked_mutation("project")
+    def rebuild_activity(self) -> dict[str, object]:
+        root = self.project_root()
+        events = self.list_events(limit=1_000_000)
+        activity_path = root / ".agora" / "activity.md"
+        atomic_write(
+            activity_path,
+            render_markdown(
+                MarkdownDocument(
+                    attributes={"schema": "agora/activity-ledger/v1"},
+                    body=(
+                        "# Activity ledger\n\n"
+                        "Append-only project chronology. Raw output remains in linked session "
+                        "and Tool Run records."
+                    ),
+                )
+            ),
+        )
+        recorded: set[tuple[str, ...]] = set()
+        count = 0
+        for event in events:
+            actor = self._event_detail_value(event.detail, "actor")
+            session_id = self._event_detail_value(event.detail, "session")
+            tool_run_id = self._event_detail_value(event.detail, "run")
+            swarm_id: str | None = None
+            work_id: str | None = None
+            if event.scope.startswith("work:"):
+                swarm_id, work_id = event.scope.removeprefix("work:").split("/", 1)
+            elif event.scope.startswith("swarm:"):
+                swarm_id = event.scope.removeprefix("swarm:")
+            swarm_id = swarm_id or self._event_detail_value(event.detail, "swarm")
+            work_id = work_id or self._event_detail_value(event.detail, "work")
+
+            source = Path(event.path)
+            if session_id is not None:
+                session_path = root / ".agora" / "sessions" / session_id
+                if (session_path / "SESSION.md").is_file():
+                    session = self._load_session(session_path)
+                    actor = session.actor
+                    swarm_id = session.swarm_id
+                    work_id = session.work_id
+                    if event.type in {"session.completed", "session.failed"}:
+                        summary_path = session_path / "SUMMARY.md"
+                        result_path = session_path / "RESULT.md"
+                        source = (
+                            summary_path
+                            if summary_path.is_file()
+                            else result_path
+                            if result_path.is_file()
+                            else source
+                        )
+                    else:
+                        source = session_path / "SESSION.md"
+            if tool_run_id is not None:
+                run_path = root / ".agora" / "tool-runs" / tool_run_id
+                if (run_path / "RUN.md").is_file():
+                    run = self._load_tool_run(run_path)
+                    actor = run.actor
+                    swarm_id = run.swarm_id
+                    work_id = run.work_id
+                    if event.type in {"tool.completed", "tool.failed"}:
+                        result_path = run_path / "RESULT.md"
+                        source = result_path if result_path.is_file() else source
+                    else:
+                        source = run_path / "RUN.md"
+            if event.type == "project.initialized":
+                source = root / ".agora" / "project.md"
+
+            identity = (
+                (event.type, "session", session_id)
+                if session_id is not None
+                else (
+                    (event.type, "tool-run", tool_run_id)
+                    if tool_run_id is not None
+                    else (event.timestamp, event.type, event.scope, event.detail)
+                )
+            )
+            if identity in recorded:
+                continue
+            recorded.add(identity)
+            self._append_activity(
+                root,
+                event.type,
+                event.detail,
+                actor=actor,
+                swarm_id=swarm_id,
+                work_id=work_id,
+                session_id=session_id,
+                tool_run_id=tool_run_id,
+                source=source,
+                timestamp=event.timestamp,
+            )
+            count += 1
+        return {"rebuilt": count, "path": str(activity_path)}
 
     @_locked_mutation("project")
     def invoke_tool(self, data: InvokeToolInput) -> ToolRunRecord:
@@ -7573,7 +7882,14 @@ class AgoraWorkspace:
             "unfinished-sessions": [
                 item.id for item in sessions if item.status in {"prepared", "running"}
             ],
-            "failed-sessions": [item.id for item in sessions if item.status == "failed"],
+            "failed-sessions": [
+                item.id
+                for item in sessions
+                if item.status == "failed"
+                and not any(
+                    retry.status == "completed" for retry in self._session_retries(item, sessions)
+                )
+            ],
             "failed-tool-runs": [item.id for item in tool_runs if item.status == "failed"],
         }
         return WorkspaceStatus(
@@ -7910,6 +8226,54 @@ class AgoraWorkspace:
         sessions: list[SessionRecord] = []
 
         def finish(reason: str, actions: list[OperationalTask]) -> RunLoopResult:
+            root = self.project_root()
+            last_session = sessions[-1] if sessions else None
+            next_task = actions[0] if actions else None
+            swarm_id = data.swarm_id or (
+                last_session.swarm_id
+                if last_session is not None
+                else next_task.swarm_id
+                if next_task is not None
+                else None
+            )
+            work_id = data.work_id or (
+                last_session.work_id
+                if last_session is not None
+                else next_task.work_id
+                if next_task is not None
+                else None
+            )
+            actor = last_session.actor if last_session is not None else None
+            timestamp = self._timestamp()
+            detail = (
+                f"reason={reason} sessions={len(sessions)} actor={actor or '-'} "
+                f"swarm={swarm_id or '-'} work={work_id or '-'} "
+                f"session={last_session.id if last_session is not None else '-'}"
+            )
+            source = root / ".agora" / "project.md"
+            if last_session is not None:
+                summary = Path(last_session.path) / "SUMMARY.md"
+                source = summary if summary.is_file() else Path(last_session.path) / "SESSION.md"
+            elif swarm_id is not None and work_id is not None:
+                candidate = root / ".agora" / "swarms" / swarm_id / "work" / work_id / "WORK.md"
+                if candidate.is_file():
+                    source = candidate
+            with self._mutation_lock((root,), "record_run_loop_stop"):
+                append_entry(
+                    root / ".agora" / "events.md",
+                    f"- {timestamp} | run-loop.stopped | {detail}",
+                )
+                self._append_activity(
+                    root,
+                    "run-loop.stopped",
+                    f"Stopped after {len(sessions)} session(s): {reason}",
+                    actor=actor,
+                    swarm_id=swarm_id,
+                    work_id=work_id,
+                    session_id=last_session.id if last_session is not None else None,
+                    source=source,
+                    timestamp=timestamp,
+                )
             observer and observer(
                 RunLoopEvent(
                     kind="loop-stopped",
@@ -8136,6 +8500,7 @@ class AgoraWorkspace:
             "lifecycle-actions": 0,
             "tool-runs": 0,
             "event-files": 0,
+            "activity-ledgers": 0,
             "upgrades": 0,
             "registries": 0,
             "registry-update-audits": 0,
@@ -9330,7 +9695,8 @@ class AgoraWorkspace:
                         set(waiver.waived_criteria) - set(work.acceptance_criteria)
                     )
                     invalid_artifacts = sorted(
-                        set(waiver.waived_artifacts) - set(work.required_artifacts)
+                        set(waiver.waived_artifacts)
+                        - set(self._required_artifacts_for_gate(work, gate))
                     )
                     invalid_approvals = sorted(
                         set(waiver.waived_approval_roles) - set(gate.required_approval_roles)
@@ -9935,6 +10301,14 @@ class AgoraWorkspace:
                     "session.result-invalid",
                     result_path,
                     lambda session=session: self._validate_session_result(session),
+                )
+            summary_path = path.parent / "SUMMARY.md"
+            if summary_path.is_file():
+                inspect(
+                    "documents",
+                    "session-summary.invalid",
+                    summary_path,
+                    lambda session=session: self._validate_session_summary(session),
                 )
 
         for directory in _child_directories(root / ".agora" / "actions"):
@@ -10759,6 +11133,15 @@ class AgoraWorkspace:
                 lambda path=path, scope=scope: self._read_events(path, scope),
             )
 
+        activity_path = root / ".agora" / "activity.md"
+        if activity_path.is_file():
+            inspect(
+                "activity-ledgers",
+                "activity.invalid",
+                activity_path,
+                lambda: self._validate_activity_ledger(root, activity_path),
+            )
+
         ordered = sorted(
             issues,
             key=lambda item: (item.severity != "error", item.path, item.code, item.message),
@@ -11234,7 +11617,21 @@ class AgoraWorkspace:
             role for role, reference in swarm.assignments.items() if reference == actor.reference
         ]
         if not roles:
-            raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+            candidates = list(
+                dict.fromkeys(
+                    reference
+                    for role, reference in swarm.assignments.items()
+                    if self._role_allows_action(root, swarm.method, role, action)
+                )
+            )
+            guidance = (
+                f" Actors allowed to perform {action}: {', '.join(candidates)}."
+                if candidates
+                else " Assign or hand off a compatible role before retrying."
+            )
+            raise ValueError(
+                f"Actor {actor.reference} is not assigned to swarm {swarm.id}.{guidance}"
+            )
         allowed = any(self._role_allows_action(root, swarm.method, role, action) for role in roles)
         if not allowed:
             raise PermissionError(f"Actor {actor.reference} is not allowed to perform {action}")
@@ -12895,6 +13292,50 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _render_session_summary(
+        record: SessionRecord,
+        *,
+        completed_at: str,
+        result_sha256: str,
+    ) -> str:
+        outcome = "completed successfully" if record.status == "completed" else "failed"
+        work_reference = (
+            f"{record.swarm_id}/{record.work_id}" if record.work_id is not None else record.swarm_id
+        )
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/session-summary/v1",
+                    "session": record.id,
+                    "status": record.status,
+                    "actor": record.actor,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "roles": record.roles,
+                    "integration": record.integration,
+                    "provider": record.provider,
+                    "model": record.model,
+                    "exit-code": record.exit_code,
+                    "output-bytes": record.output_bytes,
+                    "termination-reason": record.termination_reason,
+                    "context-sha256": record.context_sha256,
+                    "result-sha256": result_sha256,
+                    "completed-at": completed_at,
+                },
+                body=(
+                    f"# Session summary {record.id}\n\n"
+                    f"The governed session {outcome} for `{work_reference}` as "
+                    f"`{', '.join(record.roles)}`.\n\n"
+                    "## Durable records\n\n"
+                    "- Runtime input: `CONTEXT.md`\n"
+                    "- Execution metadata: `SESSION.md`\n"
+                    "- Bounded provider output: `RESULT.md`\n"
+                    "- Project chronology: `../../activity.md`"
+                ),
+            )
+        )
+
+    @staticmethod
     def _validate_session_result(record: SessionRecord) -> None:
         path = Path(record.path) / "RESULT.md"
         document = read_markdown(path)
@@ -12913,6 +13354,23 @@ class AgoraWorkspace:
             raise ValueError(f"Session result output size does not match SESSION.md: {path}")
         if optional_string_attribute(attributes, "termination-reason") != record.termination_reason:
             raise ValueError(f"Session result termination reason does not match SESSION.md: {path}")
+
+    @staticmethod
+    def _validate_session_summary(record: SessionRecord) -> None:
+        path = Path(record.path) / "SUMMARY.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/session-summary/v1", path)
+        attributes = document.attributes
+        if string_attribute(attributes, "session") != record.id:
+            raise ValueError(f"Session summary id does not match SESSION.md: {path}")
+        if string_attribute(attributes, "status") != record.status:
+            raise ValueError(f"Session summary status does not match SESSION.md: {path}")
+        result_sha256 = string_attribute(attributes, "result-sha256")
+        if re.fullmatch(r"[0-9a-f]{64}", result_sha256) is None:
+            raise ValueError(f"Session summary result digest is not SHA-256: {path}")
+        result_path = Path(record.path) / "RESULT.md"
+        if hashlib.sha256(result_path.read_bytes()).hexdigest() != result_sha256:
+            raise ValueError(f"Session summary result digest mismatch: {path}")
 
     def _render_session_context(
         self,
@@ -12947,6 +13405,7 @@ class AgoraWorkspace:
                 )
         required_reading = [
             root / ".agora" / "project.md",
+            root / ".agora" / "activity.md",
             root / ".agora" / "constitution.md",
             root / ".agora" / "PROTOCOL.md",
             root / ".agora" / "STANDARDS.md",
@@ -13411,7 +13870,7 @@ class AgoraWorkspace:
         missing_artifacts = (
             [
                 item
-                for item in work.required_artifacts
+                for item in self._required_artifacts_for_gate(work, gate)
                 if item not in work.artifact_kinds and item not in waived_artifacts
             ]
             if gate.require_required_artifacts
@@ -13434,26 +13893,180 @@ class AgoraWorkspace:
                 f"missing-approvals=[{', '.join(missing_approvals)}]"
             )
 
+    @staticmethod
+    def _required_artifacts_for_gate(work: WorkRecord, gate: GatePolicy) -> list[str]:
+        if not gate.require_required_artifacts:
+            return []
+        if gate.required_artifacts is not None:
+            return gate.required_artifacts
+        return work.required_artifacts
+
     def _append_swarm_event(self, root: Path, swarm_id: str, type_: str, detail: str) -> None:
+        timestamp = self._timestamp()
         append_entry(
             root / ".agora" / "swarms" / swarm_id / "events.md",
-            f"- {self._timestamp()} | {type_} | {detail}",
+            f"- {timestamp} | {type_} | {detail}",
+        )
+        self._append_activity(
+            root,
+            type_,
+            detail,
+            actor=self._event_detail_value(detail, "actor"),
+            swarm_id=swarm_id,
+            source=root / ".agora" / "swarms" / swarm_id / "events.md",
+            timestamp=timestamp,
         )
 
     def _append_work_event(self, work: WorkRecord, type_: str, detail: str) -> None:
         path = Path(work.path) / "events.md"
         if not path.exists():
             write_new(path, "# Work events\n\n")
-        append_entry(path, f"- {self._timestamp()} | {type_} | {detail}")
+        timestamp = self._timestamp()
+        append_entry(path, f"- {timestamp} | {type_} | {detail}")
+        root = Path(work.path).parents[4]
+        self._append_activity(
+            root,
+            type_,
+            detail,
+            actor=self._event_detail_value(detail, "actor"),
+            swarm_id=work.swarm_id,
+            work_id=work.id,
+            session_id=self._event_detail_value(detail, "session"),
+            tool_run_id=self._event_detail_value(detail, "run"),
+            source=path,
+            timestamp=timestamp,
+        )
 
     def _append_tool_event(self, root: Path, record: ToolRunRecord, status: str) -> None:
+        timestamp = self._timestamp()
         append_entry(
             root / ".agora" / "events.md",
             (
-                f"- {self._timestamp()} | tool.{status} | run={record.id} "
+                f"- {timestamp} | tool.{status} | run={record.id} "
                 f"tool={record.tool_id} operation={record.operation_id} actor={record.actor}"
             ),
         )
+        source_name = "RESULT.md" if status in {"completed", "failed"} else "RUN.md"
+        self._append_activity(
+            root,
+            f"tool.{status}",
+            (
+                f"{record.tool_id}/{record.operation_id} {status}; risk={record.risk}; "
+                f"exit-code={record.exit_code if record.exit_code is not None else 'unavailable'}"
+            ),
+            actor=record.actor,
+            swarm_id=record.swarm_id,
+            work_id=record.work_id,
+            tool_run_id=record.id,
+            source=Path(record.path) / source_name,
+            timestamp=timestamp,
+        )
+
+    def _append_activity(
+        self,
+        root: Path,
+        type_: str,
+        summary: str,
+        *,
+        actor: str | None = None,
+        swarm_id: str | None = None,
+        work_id: str | None = None,
+        session_id: str | None = None,
+        tool_run_id: str | None = None,
+        source: Path,
+        timestamp: str | None = None,
+    ) -> None:
+        ledger = root / ".agora" / "activity.md"
+        if not ledger.is_file():
+            write_new(
+                ledger,
+                render_markdown(
+                    MarkdownDocument(
+                        attributes={"schema": "agora/activity-ledger/v1"},
+                        body=(
+                            "# Activity ledger\n\n"
+                            "Append-only project chronology. Raw output remains in linked session "
+                            "and Tool Run records."
+                        ),
+                    )
+                ),
+            )
+        relative_source = source.resolve().relative_to(root.resolve())
+        context = " ".join(
+            (
+                f"actor={actor or '-'}",
+                f"swarm={swarm_id or '-'}",
+                f"work={work_id or '-'}",
+                f"session={session_id or '-'}",
+                f"tool-run={tool_run_id or '-'}",
+                f"source=repo://{relative_source.as_posix()}",
+            )
+        )
+        normalized_summary = " ".join(summary.split())
+        append_entry(
+            ledger,
+            f"- {timestamp or self._timestamp()} | {type_} | {context} | {normalized_summary}",
+        )
+
+    @staticmethod
+    def _event_detail_value(detail: str, key: str) -> str | None:
+        prefix = f"{key}="
+        for token in detail.split():
+            if token.startswith(prefix):
+                value = token.removeprefix(prefix)
+                return value if value and value != "-" else None
+        return None
+
+    @staticmethod
+    def _read_activity(path: Path) -> list[ActivityRecord]:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/activity-ledger/v1", path)
+        records: list[ActivityRecord] = []
+        expected_keys = {"actor", "swarm", "work", "session", "tool-run", "source"}
+        for number, line in enumerate(document.body.splitlines(), start=1):
+            if not line.startswith("- "):
+                continue
+            parts = line[2:].split(" | ", 3)
+            if len(parts) != 4 or any(not part.strip() for part in parts):
+                raise ValueError(f"Invalid activity entry at {path}:{number}")
+            try:
+                datetime.fromisoformat(parts[0].strip().replace("Z", "+00:00"))
+            except ValueError as error:
+                raise ValueError(f"Invalid activity timestamp at {path}:{number}") from error
+            context: dict[str, str] = {}
+            for token in parts[2].split():
+                if "=" not in token:
+                    raise ValueError(f"Invalid activity context at {path}:{number}")
+                key, value = token.split("=", 1)
+                context[key] = value
+            if set(context) != expected_keys:
+                raise ValueError(f"Invalid activity context fields at {path}:{number}")
+            source = context["source"]
+            if not source.startswith("repo://"):
+                raise ValueError(f"Invalid activity source at {path}:{number}")
+
+            def optional(key: str, values: dict[str, str] = context) -> str | None:
+                return None if values[key] == "-" else values[key]
+
+            records.append(
+                ActivityRecord(
+                    timestamp=parts[0].strip(),
+                    type=parts[1].strip(),
+                    summary=parts[3].strip(),
+                    actor=optional("actor"),
+                    swarm_id=optional("swarm"),
+                    work_id=optional("work"),
+                    session_id=optional("session"),
+                    tool_run_id=optional("tool-run"),
+                    source=source,
+                    path=str(path),
+                )
+            )
+        return records
+
+    def _validate_activity_ledger(self, root: Path, path: Path) -> None:
+        for record in self._read_activity(path):
+            self._assert_artifact_reference(root, record.source)
 
     @staticmethod
     def _read_events(path: Path, scope: str) -> list[EventRecord]:
@@ -13546,6 +14159,8 @@ class AgoraWorkspace:
                     swarm_id=data.swarm_id,
                     base_branch=data.base_branch,
                     allow_dirty=data.allow_dirty,
+                    integration=data.integration,
+                    model=data.model,
                 )
             )
             failed = [check for check in report.checks if not check.ok]
@@ -13557,7 +14172,7 @@ class AgoraWorkspace:
         integration = (
             self._load_project_configuration(target).integration
             if initialized
-            else (user.integration if user is not None else "generic")
+            else data.integration or (user.integration if user is not None else "generic")
         )
         generated_paths = self._quickstart_generated_paths(target, integration)
         original_generated = {path for path in generated_paths if path.exists()}
@@ -13592,7 +14207,14 @@ class AgoraWorkspace:
                     project = self._load_project_configuration(target)
                 else:
                     project = self.initialize(
-                        InitInput(target=data.path, default_method=data.method)
+                        InitInput(
+                            target=data.path,
+                            integration=data.integration,
+                            provider=data.provider,
+                            model=data.model,
+                            default_method=data.method,
+                            max_delegation_depth=data.max_delegation_depth,
+                        )
                     )
                 self.cwd = target
                 return self._complete_quickstart(
@@ -13705,7 +14327,7 @@ class AgoraWorkspace:
             )
             assignments[role_id] = actor_id
 
-        return QuickstartResult(
+        result = QuickstartResult(
             project=project,
             swarm=swarm,
             human_actor=human_id,
@@ -13714,6 +14336,27 @@ class AgoraWorkspace:
             secure=data.secure,
             key_directory=str(keys_dir) if keys_dir is not None else None,
         )
+        timestamp = self._timestamp()
+        detail = (
+            f"entrypoint={data.entrypoint} swarm={swarm.id} method={method} "
+            f"secure={str(data.secure).lower()}"
+        )
+        append_entry(
+            root / ".agora" / "events.md",
+            f"- {timestamp} | {data.entrypoint}.completed | {detail}",
+        )
+        self._append_activity(
+            root,
+            f"{data.entrypoint}.completed",
+            (
+                f"Created starter team and ready swarm with method={method}; "
+                f"secure={str(data.secure).lower()}"
+            ),
+            swarm_id=swarm.id,
+            source=Path(swarm.path) / "SWARM.md",
+            timestamp=timestamp,
+        )
+        return result
 
     def _quickstart_generated_paths(self, root: Path, integration: Integration) -> list[Path]:
         paths = [root / ".agora"]

@@ -175,6 +175,7 @@ schema: "agora/gate/v1"
 id: "completion"
 require-all-criteria: true
 require-required-artifacts: true
+required-artifacts: ["verification-report"]
 require-successful-evidence: true
 required-approval-roles: ["owner"]
 ---
@@ -184,7 +185,13 @@ required-approval-roles: ["owner"]
 Explain what this policy protects and what evidence reviewers should inspect.
 ```
 
-The three Boolean requirements may be enabled independently. Each role in
+The three Boolean requirements may be enabled independently. When `required-artifacts` is present,
+the gate requires exactly those artifact kinds for that transition. When it is omitted,
+`require-required-artifacts: true` retains the compatible behavior of requiring every artifact
+declared by the work item. This lets an early clarification gate require only `spec` while the
+completion gate still enforces the work's full artifact contract.
+
+Each role in
 `required-approval-roles` must have an approval recorded by its assigned actor or the target of a
 valid single-use Approval Delegation. The approving role needs `approval.add`; the grantor
 additionally needs `approval.delegate` and `approval.delegation.revoke`. See

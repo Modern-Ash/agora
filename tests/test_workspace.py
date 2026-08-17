@@ -75,6 +75,7 @@ def test_persists_defaults_and_materializes_a_codex_project(
     assert (root / ".agora" / "methods" / "scrum" / "METHOD.md").exists()
     assert (root / ".agora" / "methods" / "kanban" / "METHOD.md").exists()
     assert (root / ".agora" / "environments" / "README.md").exists()
+    assert (root / ".agora" / "activity.md").exists()
     assert (root / ".agents" / "skills" / "agora-objective" / "SKILL.md").exists()
     assert "conventional-commits/v1.0.0" in (root / ".agora" / "STANDARDS.md").read_text()
     assert 'integration: "codex"' in (root / ".agora" / "project.md").read_text()
@@ -840,6 +841,13 @@ def test_prepares_and_launches_a_session_with_actor_runtime_override(
     assert "Model: `governance-model`" in context
     assert "Roles: `scrum-master`" in context
     assert "session.completed" in (root / ".agora" / "events.md").read_text()
+    summary = root / ".agora" / "sessions" / "governance-session" / "SUMMARY.md"
+    assert summary.is_file()
+    assert 'schema: "agora/session-summary/v1"' in summary.read_text()
+    activity = session_workspace.list_activity(session_id="governance-session")
+    assert [item.type for item in activity] == ["session.prepared", "session.completed"]
+    assert activity[-1].actor == "project:facilitator"
+    assert activity[-1].source.endswith("/SUMMARY.md")
 
 
 def test_governs_and_persists_external_tool_invocations(
@@ -874,6 +882,9 @@ def test_governs_and_persists_external_tool_invocations(
     result = root / ".agora" / "tool-runs" / "repository-status" / "RESULT.md"
     assert "M README.md" in result.read_text()
     assert "tool.completed" in (root / ".agora" / "events.md").read_text()
+    tool_activity = tool_workspace.list_activity(tool_run_id="repository-status")
+    assert [item.type for item in tool_activity] == ["tool.prepared", "tool.completed"]
+    assert tool_activity[-1].source.endswith("/RESULT.md")
 
     commit = tool_workspace.invoke_tool(
         InvokeToolInput(
@@ -2888,6 +2899,88 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert len(work_events) == 1
     assert work_events[0].scope == "work:delivery/observable-work"
     assert workspace.validate().ok is True
+
+
+def test_activity_ledger_filters_work_chronology_and_validates_sources(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="ledger-work",
+            title="Make activity reviewable",
+            actor_id="owner",
+        )
+    )
+
+    records = workspace.list_activity(
+        swarm_id="delivery",
+        work_id="ledger-work",
+        type_="work.created",
+    )
+
+    assert len(records) == 1
+    assert records[0].actor == "project:owner"
+    assert records[0].summary == "state=specified actor=project:owner"
+    assert records[0].source == ("repo://.agora/swarms/delivery/work/ledger-work/events.md")
+    assert workspace.validate().checked["activity-ledgers"] == 1
+
+    ledger = root / ".agora" / "activity.md"
+    ledger.write_text(
+        ledger.read_text().replace(
+            "repo://.agora/swarms/delivery/work/ledger-work/events.md",
+            "repo://missing/activity-source.md",
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert any(issue.code == "activity.invalid" for issue in report.issues)
+
+
+def test_rebuilds_activity_from_existing_durable_records(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="historical-work",
+            title="Recover historical activity",
+            actor_id="owner",
+        )
+    )
+    workspace.start_session(
+        StartSessionInput(
+            id="historical-session",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="historical-work",
+        )
+    )
+    (root / ".agora" / "activity.md").unlink()
+
+    result = workspace.rebuild_activity()
+
+    assert result["rebuilt"] > 0
+    records = workspace.list_activity(session_id="historical-session")
+    assert [item.type for item in records] == ["session.prepared"]
+    assert records[0].actor == "project:developer"
+    assert records[0].work_id == "historical-work"
+    assert records[0].source.endswith("/SESSION.md")
+    assert workspace.validate().ok is True
+
+
+def test_activity_list_requires_a_swarm_for_a_work_filter(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    workspace.initialize(InitInput())
+
+    with pytest.raises(ValueError, match="--work requires --swarm"):
+        workspace.list_activity(work_id="ambiguous-work")
 
 
 def test_validation_reports_multiple_workspace_integrity_errors(

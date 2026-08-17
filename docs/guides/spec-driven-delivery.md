@@ -48,8 +48,10 @@ stateDiagram-v2
 ```
 
 The clarification and completion edges are separate gates. Clarification requires all criteria and
-required artifacts recorded on the work item; completion additionally requires successful evidence
-and Spec Owner approval.
+the `spec` artifact. The gate declares that stage-specific requirement explicitly, so implementation
+plans and verification reports may be declared on the work from the beginning without blocking
+clarification. Completion requires the work's full artifact contract, successful evidence, and Spec
+Owner approval.
 
 ## Register and assign the pair
 
@@ -76,8 +78,15 @@ agora swarm assign --swarm webhook-retries \
 ## Draft and clarify the specification
 
 Create work in `drafting`. The bundled clarification gate interprets the criteria as questions that
-must be resolved in the specification. Keep only clarification-time outputs in `--required-artifact`;
-otherwise implementation outputs would be required before the work could become `clarified`.
+must be resolved in the specification. For a guided terminal experience, use `agora work start`; it
+selects a compatible assigned actor, collects criteria one at a time, reviews the complete plan, and
+optionally registers an existing spec before writing.
+
+```bash
+agora work start --swarm webhook-retries
+```
+
+The declarative equivalent remains available for automation:
 
 ```bash
 agora work create \
@@ -89,7 +98,9 @@ agora work create \
   --criterion "retry-schedule:The retry schedule and maximum attempts are explicit" \
   --criterion "delivery-identity:The receiver can identify repeated delivery attempts" \
   --criterion "terminal-behavior:The terminal failure behavior is explicit" \
-  --required-artifact spec
+  --required-artifact spec \
+  --required-artifact implementation-plan \
+  --required-artifact verification-report
 ```
 
 Write the actual specification in the product repository, then register it. Agora stores its URI
@@ -110,8 +121,9 @@ agora work transition --swarm webhook-retries --work retry-contract \
   --to clarified --by spec-owner
 ```
 
-The transition fails if even one criterion or the `spec` artifact is missing. No separate approval
-is needed here because the Spec Owner is the actor making the clarification decision.
+The transition fails if even one criterion or the `spec` artifact is missing. Later required
+artifacts are deferred by the clarification gate and enforced at completion. No separate approval is
+needed here because the Spec Owner is the actor making the clarification decision.
 
 ## Plan and implement against the spec
 
@@ -120,6 +132,11 @@ The Developer owns the next three forward transitions:
 ```bash
 agora work transition --swarm webhook-retries --work retry-contract \
   --to planned --by implementation-agent
+
+agora artifact add --swarm webhook-retries --work retry-contract \
+  --kind implementation-plan --uri repo://docs/plans/webhook-retries.md \
+  --by implementation-agent
+
 agora work transition --swarm webhook-retries --work retry-contract \
   --to implementing --by implementation-agent
 ```
@@ -141,13 +158,16 @@ $agora-execute Continue webhook-retries/retry-contract as implementation-agent.
 Implement the clarified specification without changing its scope, test it, and record evidence.
 ```
 
-Record implementation outputs even though only the `spec` kind is mandatory in the bundled pack:
+Record the implementation outputs and the required verification report:
 
 ```bash
 agora artifact add --swarm webhook-retries --work retry-contract \
   --kind source-code --uri repo://src/webhooks/retry.py --by implementation-agent
 agora artifact add --swarm webhook-retries --work retry-contract \
   --kind test-report --uri ci://webhook-service/builds/77/tests --by implementation-agent
+agora artifact add --swarm webhook-retries --work retry-contract \
+  --kind verification-report --uri repo://docs/reports/webhook-retries.md \
+  --by implementation-agent
 
 agora work transition --swarm webhook-retries --work retry-contract \
   --to verifying --by implementation-agent

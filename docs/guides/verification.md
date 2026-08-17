@@ -13,7 +13,8 @@ agora validate
 agora --project /path/to/project validate
 ```
 
-The report is JSON. `ok` is false and the process exits with status `1` when an error is present.
+The terminal report is human-readable. When captured or redirected, the same report is JSON. `ok` is
+false and the process exits with status `1` when an error is present.
 The `checked` object reports how many records of each kind were successfully parsed, including
 `commands` and `adapters`.
 

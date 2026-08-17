@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import agora.cli as cli
 from agora.cli import main
 from agora.model import (
     AddActorInput,
@@ -19,6 +20,11 @@ from agora.model import (
     TransitionWorkInput,
 )
 from agora.workspace import AgoraWorkspace
+
+
+class TtyInput(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def _scrum_workspace(
@@ -154,6 +160,71 @@ def test_retries_a_failed_session_without_overwriting_it(tmp_path: Path, monkeyp
         failed.id,
         "retry-increment",
     }
+
+
+def test_diagnoses_output_limit_and_marks_a_successful_retry_recovered(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _scrum_workspace(
+        tmp_path,
+        monkeypatch,
+        launcher=lambda command, cwd, environment: 125,
+    )
+    with pytest.raises(RuntimeError, match="output-limit"):
+        workspace.run_next(
+            RunNextInput(actor_id="developer", runner="/bin/false", max_output_bytes=2048)
+        )
+    failed = workspace.list_sessions("failed")[0]
+
+    diagnosis = workspace.diagnose_session(failed.id)
+
+    assert diagnosis["status"] == "failed"
+    assert diagnosis["termination_reason"] == "output-limit"
+    assert diagnosis["recommended_command"].endswith("--max-output-bytes 4096")
+
+    retry_workspace = AgoraWorkspace(
+        cwd=workspace.project_root(), launcher=lambda command, cwd, environment: 0
+    )
+    retry = retry_workspace.resume_session(ResumeSessionInput(session_id=failed.id))
+    recovered = retry_workspace.diagnose_session(failed.id)
+
+    assert recovered["status"] == "recovered"
+    assert recovered["recovered_by"] == retry.id
+    assert retry_workspace.status().attention["failed-sessions"] == []
+
+
+def test_guided_continue_reviews_and_launches_one_agent_action(tmp_path: Path, monkeypatch) -> None:
+    workspace = _scrum_workspace(
+        tmp_path,
+        monkeypatch,
+        launcher=lambda command, cwd, environment: 0,
+    )
+    output = io.StringIO()
+    args = type(
+        "Args",
+        (),
+        {
+            "yes": False,
+            "actor": None,
+            "swarm": "delivery",
+            "work": "increment",
+            "runner": "/bin/true",
+            "until_blocked": False,
+            "max_steps": 20,
+        },
+    )()
+
+    result = cli._run_continue_wizard(
+        workspace,
+        args,
+        input_stream=TtyInput("y\n"),
+        output_stream=output,
+    )
+
+    assert result["applied"] is True
+    assert len(workspace.list_sessions()) == 1
+    assert "Agora Continue | Next governed action" in output.getvalue()
+    assert "Governed action completed" in output.getvalue()
 
 
 def test_agent_can_persist_governed_mutations_while_its_session_runs(
@@ -352,6 +423,11 @@ def test_run_loop_emits_safe_structured_step_events(tmp_path: Path, monkeypatch)
     assert events[1].after_state == "planned"
     assert events[1].session.status == "completed"
     assert events[2].stop_reason == "max-steps"
+    stopped = workspace.list_activity(type_="run-loop.stopped")
+    assert len(stopped) == 1
+    assert stopped[0].summary == "Stopped after 1 session(s): max-steps"
+    assert stopped[0].session_id == events[1].session.id
+    assert stopped[0].source.endswith("/SUMMARY.md")
 
 
 def test_run_loop_stops_when_runner_records_no_governed_progress(

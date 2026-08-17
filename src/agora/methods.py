@@ -86,6 +86,11 @@ def load_method_contract(root: Path) -> MethodContract:
 
     gates = _load_gates(root)
     for gate in gates.values():
+        if gate.required_artifacts is not None:
+            if len(set(gate.required_artifacts)) != len(gate.required_artifacts):
+                raise ValueError(f"Gate {gate.id} required-artifacts must be unique")
+            for artifact in gate.required_artifacts:
+                assert_slug(artifact, f"Gate {gate.id} required artifact")
         unknown_approval_roles = [
             role for role in gate.required_approval_roles if role not in required_roles
         ]
@@ -134,6 +139,11 @@ def _load_gates(root: Path) -> dict[str, GatePolicy]:
             ),
             require_required_artifacts=_boolean(
                 document.attributes, "require-required-artifacts", default=True
+            ),
+            required_artifacts=(
+                _string_list(document.attributes, "required-artifacts", default=[])
+                if "required-artifacts" in document.attributes
+                else None
             ),
             require_successful_evidence=_boolean(
                 document.attributes, "require-successful-evidence", default=True

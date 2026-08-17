@@ -36,6 +36,10 @@ do not exist as one static agent file in this repository.
 - [Visual adoption guide](adoption.md): choose an installation, execution environment, first
   workflow, and team adoption level through diagrams and minimal commands.
 - [Quickstart](guides/quickstart.md): initialize a complete mixed human and agentic workspace.
+- [Guided setup and adoption](guides/guided-setup.md): configure a project one reviewed decision at
+  a time, or reproduce the same plan non-interactively.
+- [Operational agent loop](guides/operational-loop.md): create guided work, continue one bounded
+  action, diagnose failures, and stop at human authority.
 - [Getting started](getting-started.md): follow the governed workflow from installation to completed
   work.
 - [Installation and customization](guides/installation-and-customization.md): configure user,
@@ -59,6 +63,8 @@ do not exist as one static agent file in this repository.
   cross-host leases.
 - [Operations and validation](guides/operations-and-validation.md): query state, inspect events, and
   audit durable records.
+- [Activity Ledger](guides/activity-ledger.md): follow linked work, session, and Tool Run activity
+  from a concise chronology to its durable evidence and bounded logs.
 - [Operational agent loop](guides/operational-loop.md): derive next actions, run bounded external
   actors, stop at human authority, and resume durable failures.
 - [Complete verification](guides/verification.md): run format, lint, tests, documentation, samples,

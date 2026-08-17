@@ -2,7 +2,18 @@
 
 Agora keeps operational state in Markdown, but daily users and automation should not need to scan
 every directory manually. Query commands read the same files used by lifecycle operations and emit
-structured JSON without creating a second state store.
+deterministic views without creating a second state store. A human terminal receives a concise,
+colored view; pipes, redirections, IDEs, and process capture receive the same data as structured JSON
+automatically. No output-format flag is required.
+
+```mermaid
+flowchart LR
+    C[Same Agora command] --> T{stdout is a terminal?}
+    T -->|yes| H[Human view with color and hierarchy]
+    T -->|no| J[Complete deterministic JSON]
+    H --> S[Filesystem and Git remain the source of truth]
+    J --> S
+```
 
 ## Project status
 
@@ -22,7 +33,8 @@ and failed tool runs.
 
 ## Domain queries
 
-Every list command returns JSON records in deterministic filesystem order:
+Every list command returns records in deterministic filesystem order. They are rendered for a
+terminal and remain JSON when captured or piped:
 
 ```bash
 agora actor list
@@ -43,7 +55,8 @@ agora delegation status-changes --delegation specialist-task
 agora session list --status prepared
 ```
 
-Filters match persisted values exactly. An empty result is an empty JSON array, not an error.
+Filters match persisted values exactly. An empty machine result is an empty JSON array, not an
+error; the terminal view instead reports that no items were found.
 
 ## Event inspection
 
@@ -96,7 +109,7 @@ It checks:
 - Project, swarm, and work event syntax and timestamps.
 
 Validation continues after an invalid record so one run can report multiple independent issues. The
-JSON response contains `checked` counts and issues with `severity`, stable `code`, `path`, and
+The captured JSON response contains `checked` counts and issues with `severity`, stable `code`, `path`, and
 `message` fields.
 
 Errors set `ok` to `false` and make the CLI exit with status `1`. Warnings remain visible but do not
