@@ -196,8 +196,9 @@ do not exist as one static agent file in this repository.
   risk-backed exception, and complete the governed transition.
 - [Operational queries](../samples/operational-query/README.md): summarize and validate a generated
   workspace without a database.
-- [Operational loop](../samples/operational-loop/README.md): launch an external actor subprocess,
-  persist progress while it runs, stop at a human gate, and complete the lifecycle.
+- [Operational loop](../samples/operational-loop/README.md): preview actor authority and runtime,
+  launch an external actor subprocess with interactive controller events, stop at a human gate, and
+  complete the lifecycle.
 - [Interruptions and cancellation](../samples/interruptions/README.md): exercise durable status
   histories and parent-child authority.
 - [Project upgrade](../samples/project-upgrade/README.md): migrate a legacy Codex project while

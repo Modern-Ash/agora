@@ -949,6 +949,37 @@ class RunNextInput:
 
 
 @dataclass(frozen=True)
+class RunPreview:
+    task: OperationalTask
+    work_title: str
+    work_description: str
+    method: str
+    actor_capabilities: list[str]
+    integration: str
+    provider: str
+    model: str
+    authentication_required: bool
+    runtime_source: Literal["configured", "override", "not-applicable"]
+    timeout_seconds: int | None
+    max_output_bytes: int | None
+
+
+@dataclass(frozen=True)
+class RunLoopEvent:
+    kind: Literal["step-selected", "session-finished", "loop-stopped"]
+    step: int
+    max_steps: int
+    task: OperationalTask | None = None
+    session: SessionRecord | None = None
+    before_state: str | None = None
+    after_state: str | None = None
+    stop_reason: (
+        Literal["human-attention", "no-agent-action", "no-governed-progress", "max-steps"] | None
+    ) = None
+    next_actions: list[OperationalTask] | None = None
+
+
+@dataclass(frozen=True)
 class RunLoopResult:
     sessions: list[SessionRecord]
     stop_reason: Literal["human-attention", "no-agent-action", "no-governed-progress", "max-steps"]

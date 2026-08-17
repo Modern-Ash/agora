@@ -11,11 +11,14 @@ agora next
 agora next --actor implementation-agent
 agora inbox
 agora inbox --actor owner
+agora run --actor implementation-agent --explain
 ```
 
 `next` returns role-authorized outgoing transitions, gate blockers, existing sessions, blocked-work
 resumption, and vacant assignments. `inbox` uses the same derivation but returns human-owned work.
-Neither command mutates state.
+`run --explain` resolves the exact action that `run` would select and adds the actor capabilities,
+LLM runtime, authentication requirement, timeout, and output boundary. None of these commands
+mutates state or creates a session.
 
 ```mermaid
 flowchart TD
@@ -31,8 +34,9 @@ flowchart TD
 ```
 
 Forward transitions have priority over declared rework edges. At Scrum `reviewing`, for example,
-verification is selected before returning to implementation. A rework actor can still be selected
-explicitly with `--actor`.
+verification is selected before returning to implementation. An actor filter cannot hide a
+higher-priority human decision on the same work item; Agora stops at the human gate instead of
+repeatedly launching the rework actor.
 
 ## Run one actor step
 
@@ -90,6 +94,51 @@ These limits prevent an unattended local process from running forever or produci
 captured output. They are not a filesystem, network, syscall, credential, or resource sandbox.
 Run untrusted workloads through a reviewed container, VM, CI runner, or organization wrapper and
 pass that structured command through `--runner`.
+
+## Understand a run while it happens
+
+On an interactive terminal, Agora prints a non-mutating safety preview before launching the LLM:
+
+```text
+AGORA PLAN  Safe execution preview
+  Work       Build the visual console [studio/visual-console]
+  Actor      project:agent (ai-agent) as developer
+  Authority  implementation | local actor identity
+  Runtime    codex/openai/configured-by-codex (configured)
+  Boundary   implementing -> verifying | 3600s | 4 MiB output
+```
+
+The animated Agora mark then retains the work title, objective, current Method Pack state, actor,
+role, capabilities, authentication mode, provider, model, timeout, and output limit. A bounded loop
+also leaves one durable-looking terminal line for each controller decision:
+
+```text
+AGORA [1/6] SELECT  project:agent (developer) | implementing -> verifying
+AGORA [1/6] SESSION completed | implementing -> verifying | run-studio-visual
+AGORA [stop] HUMAN ATTENTION | human decision: project:owner (spec-owner)
+```
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as Agora controller
+    participant L as Configured LLM CLI
+    participant F as Filesystem and Git
+    U->>A: agora run --until-blocked
+    A-->>U: Preview actor, authority, runtime, and bounds
+    A->>L: Launch bounded session with AGORA_CONTEXT
+    L->>F: Persist permitted artifacts, evidence, or transitions
+    L-->>A: Bounded process result
+    A-->>U: Session and state-change event
+    A->>A: Recompute Method Pack policy
+    A-->>U: Stop reason and next human decision
+```
+
+Agora deliberately does not display chain-of-thought, credentials, environment secrets, or raw
+provider output in this view. The console contains only policy and lifecycle facts that Agora owns.
+Full bounded process output remains in the session's `RESULT.md` for explicit audit. Interactive
+output is written to `stderr`; the final structured JSON stays on `stdout` for scripts and IDEs.
+Pipes and CI do not render animation. Set `AGORA_NO_PROGRESS=1` to disable it explicitly.
 
 ## Run until human attention or a blocker
 
