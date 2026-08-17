@@ -158,13 +158,14 @@ agora work criterion-satisfy --swarm checkout-flow --work timeout-retry \
 agora work criterion-satisfy --swarm checkout-flow --work timeout-retry \
   --criterion failure-visible --by request-manager
 
-agora approval add --swarm checkout-flow --work timeout-retry \
-  --role service-request-manager --by request-manager \
-  --note "Service request accepted against its exit conditions"
-
-agora work transition --swarm checkout-flow --work timeout-retry \
-  --to done --by request-manager
+agora work finish --swarm checkout-flow --work timeout-retry --by request-manager
 ```
+
+The stage-less criterion commands are the adoption shortcut available to the Service Request
+Manager, which is authorized for the full progression. A stricter team can record `implemented`
+through Delivery, `verified` through the Flow Manager, and `accepted` through the Service Request
+Manager. `work finish` reviews the exit policy, records explicit approval, and moves the item to
+`done`.
 
 The last transition fails closed if any criterion, required artifact kind, successful evidence, or
 Service Request Manager approval is missing.

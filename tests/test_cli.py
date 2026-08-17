@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 
 from agora.cli import main
@@ -22,6 +23,35 @@ def test_cli_init_defaults_to_spec_driven(tmp_path: Path, monkeypatch) -> None:
 
     assert errors.getvalue() == ""
     assert '"default_method": "spec-driven"' in output.getvalue()
+
+
+def test_lists_activity_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert main(["init"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+    output.seek(0)
+    output.truncate(0)
+    assert (
+        main(
+            ["activity", "list", "--type", "project.initialized", "--limit", "1"],
+            cwd=tmp_path,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
+    payload = json.loads(output.getvalue())
+    assert payload[0]["type"] == "project.initialized"
+    assert payload[0]["source"] == "repo://.agora/project.md"
+    assert errors.getvalue() == ""
+
+    output.seek(0)
+    output.truncate(0)
+    assert main(["activity", "rebuild"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+    assert json.loads(output.getvalue())["rebuilt"] == 1
 
 
 def test_targets_a_project_outside_the_current_environment(tmp_path: Path, monkeypatch) -> None:

@@ -208,13 +208,14 @@ agora work criterion-satisfy --swarm payment-idempotency --work idempotency-key 
 agora work criterion-satisfy --swarm payment-idempotency --work idempotency-key \
   --criterion contract-documented --by product-owner
 
-agora approval add --swarm payment-idempotency --work idempotency-key \
-  --role product-owner --by product-owner \
-  --note "Increment accepted against the product goal"
-
-agora work transition --swarm payment-idempotency --work idempotency-key \
-  --to completed --by product-owner
+agora work finish --swarm payment-idempotency --work idempotency-key --by product-owner
 ```
+
+Omitting `--stage` in the criterion commands is the guided-adoption shortcut: because the Product
+Owner is authorized for every Scrum criterion stage, Agora records the complete ordered progression.
+Teams wanting phase-by-phase traceability can have the Developer record `implemented`, the Scrum
+Master record `verified`, and the Product Owner record `accepted`. `work finish` then presents the
+evidence, obtains explicit Product Owner approval, and applies the terminal transition.
 
 Completion succeeds only when every criterion is satisfied, every required artifact kind is present,
 successful evidence exists, Product Owner approval is recorded, and the Product Owner role permits

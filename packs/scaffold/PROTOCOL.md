@@ -8,9 +8,12 @@ project: "{{PROJECT_NAME}}"
 1. Read `.agora/project.md`, this protocol, the constitution, and the active Method Pack.
 2. Identify the active swarm, assigned role, current work state, and allowed tools.
 3. Do not act outside the capabilities and permissions of the assignment.
-4. Record material interactions and decisions in the active swarm.
+4. Record material interactions and decisions in the active swarm. Use `.agora/activity.md` and
+   `agora activity list` as the linked project chronology; do not edit generated ledger entries.
 5. Register produced artifacts and evidence before requesting completion.
 6. Use a handoff when responsibility moves between a human, AI agent, service, or swarm.
+   An AI executor may assist a human role holder without changing the assignment; assistance never
+   grants ownership or human approval authority.
 7. Use a delegation record when linked child work is proposed, accepted, or collected.
 8. Stop and request approval when a policy or gate cannot be satisfied.
 9. Use installed Tool Pack operations for governed external actions and retain their results.
@@ -21,6 +24,9 @@ project: "{{PROJECT_NAME}}"
     and evidence policy before preparation and again before launch.
 13. When `.agora/coordination.md` selects an external lease, do not bypass the Agora mutation path;
     local and distributed writer coordination are cumulative.
+14. During a running session, record concise material milestones through `agora session progress`.
+    Do not persist chain-of-thought, hidden reasoning, credentials, or raw provider output there.
 
 The repository and its active branch are the shared source of truth. Chat history is not durable
-project state unless its relevant outcome is recorded in Agora files.
+project state unless its relevant outcome is recorded in Agora files. `RESULT.md` retains bounded
+runtime output, while `SUMMARY.md` and the Activity Ledger provide the reviewable execution trail.

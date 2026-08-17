@@ -2,7 +2,9 @@
 schema: "agora/gate/v1"
 id: "spec-clarified"
 require-all-criteria: true
+required-criterion-stage: "specified"
 require-required-artifacts: true
+required-artifacts: ["spec"]
 require-successful-evidence: false
 required-approval-roles: []
 ---

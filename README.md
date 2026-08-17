@@ -107,6 +107,36 @@ method with human, AI, and swarm role holders without changing the current proje
 See [Installation and customization](docs/guides/installation-and-customization.md) for user-level
 configuration, upgrades, editable installs, and team rollout options.
 
+## Guided setup
+
+The recommended first experience is an interactive review of runtime, model, Method Pack, starter
+team, actor security, Git branch, and persistence scope:
+
+```bash
+cd my-project
+agora setup
+```
+
+For an existing Git repository, `agora adopt` runs the read-only preflight before showing or
+applying the plan. Both wizards collect one decision at a time and write nothing before final
+confirmation. See the [guided setup guide](docs/guides/guided-setup.md).
+
+Create and advance daily work without assembling long commands:
+
+```bash
+agora work start
+agora continue
+agora work finish
+```
+
+`work start` selects a ready swarm and compatible assigned actor, collects acceptance criteria one
+at a time, and writes only after review. `continue` previews one bounded action. At a human boundary
+it lets the role holder act directly, use a capability-compatible AI executor without surrendering
+the role, or create a formal handoff when responsibility truly changes. `work finish` reviews
+criteria, artifacts, evidence, Git policy, and approvals before recording explicit acceptance and
+the Method Pack completion transition. The declarative commands remain the stable automation
+surface.
+
 ## Start a governed project
 
 ### Adopt an existing repository
@@ -229,10 +259,12 @@ sequenceDiagram
     O->>F: Review and commit durable records
 ```
 
-Use the controller to inspect progress, run non-human actors until human authority is required, and
-review the human inbox:
+Use the guided controller for one reviewed action at a time. The explicit controller remains
+available for bounded automation:
 
 ```bash
+agora continue
+agora work finish
 agora next
 agora run --until-blocked --max-steps 10
 agora inbox

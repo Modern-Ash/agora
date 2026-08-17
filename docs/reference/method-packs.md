@@ -41,6 +41,8 @@ required-roles: ["owner", "maker", "validator"]
 work-states: ["proposed", "active", "review", "released"]
 terminal-state: "released"
 wip-limits: {"active": 2, "review": 1}
+criterion-stages: ["specified", "implemented", "verified", "accepted"]
+criterion-stage-roles: {"specified":["owner"],"implemented":["owner","maker"],"verified":["owner","validator"],"accepted":["owner"]}
 ---
 
 # Release Flow
@@ -59,6 +61,8 @@ Describe the lifecycle, its intent, and its completion expectations here.
 | `work-states` | Non-empty array of unique state ids |
 | `terminal-state` | Must identify one of the declared states |
 | `wip-limits` | Optional map of state ids to positive integer limits |
+| `criterion-stages` | Ordered, non-empty acceptance progress stages; legacy default is `satisfied` |
+| `criterion-stage-roles` | Optional map from a criterion stage to the roles allowed to record it |
 
 Every declared state must be reachable from the first state. The terminal state cannot have outgoing
 transitions. For a legacy pack without `transitions/`, Agora derives edges between adjacent states;
@@ -175,8 +179,13 @@ schema: "agora/gate/v1"
 id: "completion"
 require-all-criteria: true
 require-required-artifacts: true
+required-artifacts: ["verification-report"]
+required-criterion-stage: "accepted"
 require-successful-evidence: true
 required-approval-roles: ["owner"]
+required-evidence-types: ["automated-test-run", "code-review"]
+require-clean-git: true
+require-git-commit: true
 ---
 
 # Completion gate
@@ -184,7 +193,25 @@ required-approval-roles: ["owner"]
 Explain what this policy protects and what evidence reviewers should inspect.
 ```
 
-The three Boolean requirements may be enabled independently. Each role in
+The Boolean requirements may be enabled independently. When `required-artifacts` is present,
+the gate requires exactly those artifact kinds for that transition. When it is omitted,
+`require-required-artifacts: true` retains the compatible behavior of requiring every artifact
+declared by the work item. This lets an early clarification gate require only `spec` while the
+completion gate still enforces the work's full artifact contract.
+
+`required-criterion-stage` lets an early gate require `specified` while completion requires
+`accepted`. Record one ordered stage with `agora work criterion-satisfy --stage <stage>`; a stage
+cannot skip its predecessors. When `criterion-stage-roles` names a stage, the actor must hold one of
+those roles as well as `criterion.satisfy` authority. Omitting `--stage` remains the
+adoption-friendly shortcut, but the acting role must be authorized for every configured stage.
+Legacy packs without the mapping retain their existing action-based behavior.
+
+`required-evidence-types` requires a successful record for each named evidence type. The optional
+Git policies require a clean tree and/or a `git-commit` artifact with a `git://<full-sha>` URI that
+exists and is an ancestor of `HEAD`. Bundled methods leave the Git options disabled so teams can
+adopt Agora before choosing repository completion policy.
+
+Each role in
 `required-approval-roles` must have an approval recorded by its assigned actor or the target of a
 valid single-use Approval Delegation. The approving role needs `approval.add`; the grantor
 additionally needs `approval.delegate` and `approval.delegation.revoke`. See

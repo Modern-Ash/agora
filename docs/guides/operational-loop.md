@@ -4,6 +4,36 @@ Agora can derive the next permitted action from Method Pack state and run assign
 through Codex, Claude, or a structured external runner. The controller remains provider-neutral and
 stops before replacing a human decision.
 
+## Recommended guided loop
+
+For daily interactive use, start with one command:
+
+```bash
+agora continue
+```
+
+Agora selects or lets you choose one eligible work item, displays its actor, role, phase, runtime,
+timeout, output boundary, and current blockers, then asks before launching exactly one non-human
+action. At a human boundary, the wizard offers three explicit paths: keep the decision human, use a
+compatible AI executor while the human retains the role, or create a durable handoff when the role
+holder really changes. It never offers AI assistance for the terminal acceptance edge.
+`agora continue --until-blocked` remains bounded and stops at the same human boundary. Automation
+may use `agora continue --yes` or the lower-level `run` commands.
+
+```mermaid
+flowchart LR
+    H[Human role holder] -->|keeps responsibility| D{Next decision}
+    D -->|human review| G[Gate decision]
+    D -->|bounded assistance| X[Compatible AI executor]
+    X -->|artifacts and evidence| H
+    H -->|formal responsibility change| F[Durable handoff]
+```
+
+An executor is not a hidden handoff. `SESSION.md` and `CONTEXT.md` record both identities,
+`AGORA_ACTOR` remains the responsible role holder, and `AGORA_EXECUTOR` names the runtime actor.
+Executor capabilities must cover the responsible role requirements. Ownership and human approval
+remain with the assigned actor.
+
 ## Inspect before execution
 
 ```bash
@@ -64,8 +94,11 @@ Agora exports:
 ```text
 AGORA_PROJECT
 AGORA_SESSION
+AGORA_SESSION_ID
+AGORA_PROGRESS
 AGORA_CONTEXT
 AGORA_ACTOR
+AGORA_EXECUTOR
 AGORA_SWARM
 AGORA_WORK
 ```
@@ -89,6 +122,20 @@ The values are written to `SESSION.md` and included in signed session authorizat
 with code `124`; an output violation exits with code `125`. Both leave the session as `failed`, set
 an explicit `termination-reason`, and persist bounded standard output and error in `RESULT.md`.
 `agora resume` inherits the failed session boundaries unless replacements are supplied.
+
+Inspect one session without opening its raw provider output:
+
+```bash
+agora session show --session run-delivery-change-20260816t120000z
+agora session diagnose --session run-delivery-change-20260816t120000z
+```
+
+`session diagnose` classifies timeout, output-limit, launcher, and nonzero-exit failures, reports
+captured-output utilization, detects a successful retry, and prints the bounded recovery command.
+Interactive `agora continue` shows that diagnosis and asks before retrying with the recommended
+timeout or output boundary. The failed session is preserved and the retry receives a new id.
+Recovered failures remain in the audit history but no longer appear as unresolved attention in
+`agora status`.
 
 These limits prevent an unattended local process from running forever or producing unbounded
 captured output. They are not a filesystem, network, syscall, credential, or resource sandbox.
@@ -137,8 +184,54 @@ sequenceDiagram
 Agora deliberately does not display chain-of-thought, credentials, environment secrets, or raw
 provider output in this view. The console contains only policy and lifecycle facts that Agora owns.
 Full bounded process output remains in the session's `RESULT.md` for explicit audit. Interactive
-output is written to `stderr`; the final structured JSON stays on `stdout` for scripts and IDEs.
+output is written to `stderr`; scripts, pipes, and IDE capture receive the final structured JSON on
+`stdout`, while a terminal receives the concise human result.
+
+During a live session, the fixed console block includes one `Now:` line. It rotates slowly through
+the active lifecycle boundary, role authority, output limit, and the durable records Agora is
+watching. When the Activity Ledger receives a new artifact, criterion, evidence, tool, or transition
+event, that real governed event temporarily replaces the contextual heartbeat. The line never
+streams provider reasoning or raw model output, and its position remains stable so long sessions do
+not flood the terminal.
+
+The bound executor can replace the generic heartbeat with a concise durable milestone:
+
+```bash
+agora session progress \
+  --session "$AGORA_SESSION_ID" \
+  --by "$AGORA_EXECUTOR" \
+  --summary "Automated tests passed; registering verification evidence"
+```
+
+Agora appends the message to the session's `PROGRESS.md` and emits `session.progress` in the Activity
+Ledger. Summaries are length-bounded, executor-bound, and must describe observable work rather than
+chain-of-thought, private reasoning, secrets, or raw provider output.
 Pipes and CI do not render animation. Set `AGORA_NO_PROGRESS=1` to disable it explicitly.
+
+Every prepared and finished session is also linked from `.agora/activity.md`. Inspect the concise
+chronology without opening provider output:
+
+```bash
+agora activity list --swarm delivery --work change-api
+```
+
+Completed sessions add a deterministic `SUMMARY.md`; follow its `repo://` source to reach the
+bounded `RESULT.md` only when deeper audit is necessary. See the
+[Activity Ledger guide](activity-ledger.md).
+
+## Review and close work
+
+At a terminal Method Pack boundary, use:
+
+```bash
+agora work finish
+```
+
+The wizard presents criterion stages, required artifacts, successful evidence, configured evidence
+types, Git policy, child-work obligations, and missing approvals. It refuses to invent an approval
+while delivery evidence is incomplete. Once the responsible reviewer explicitly confirms and adds a
+note, Agora records the approval and asks before applying the terminal transition. The underlying
+`approval add` and `work transition` commands remain available for automation and signed flows.
 
 ## Run until human attention or a blocker
 

@@ -23,6 +23,7 @@ from agora.model import (
     DecomposeWorkInput,
     DelegateApprovalInput,
     DelegationActorInput,
+    GatePolicy,
     HandoffActorInput,
     InitInput,
     InstallMethodInput,
@@ -75,6 +76,7 @@ def test_persists_defaults_and_materializes_a_codex_project(
     assert (root / ".agora" / "methods" / "scrum" / "METHOD.md").exists()
     assert (root / ".agora" / "methods" / "kanban" / "METHOD.md").exists()
     assert (root / ".agora" / "environments" / "README.md").exists()
+    assert (root / ".agora" / "activity.md").exists()
     assert (root / ".agents" / "skills" / "agora-objective" / "SKILL.md").exists()
     assert "conventional-commits/v1.0.0" in (root / ".agora" / "STANDARDS.md").read_text()
     assert 'integration: "codex"' in (root / ".agora" / "project.md").read_text()
@@ -393,15 +395,38 @@ def test_governs_human_ai_and_nested_swarm_actors(
                 target_state="completed",
             )
         )
-    with pytest.raises(PermissionError, match="not allowed to perform criterion.satisfy"):
+    with pytest.raises(PermissionError, match="cannot mark criterion stages: specified"):
         workspace.satisfy_criterion(
             WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="delivery-swarm"),
             "installable",
+            "specified",
         )
 
     workspace.satisfy_criterion(
         WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="owner"),
         "installable",
+        "specified",
+    )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="delivery-swarm"),
+        "installable",
+        "implemented",
+    )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="facilitator"),
+        "installable",
+        "verified",
+    )
+    with pytest.raises(PermissionError, match="cannot mark criterion stages: accepted"):
+        workspace.satisfy_criterion(
+            WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="delivery-swarm"),
+            "installable",
+            "accepted",
+        )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="first-slice", work_id="bootstrap", actor_id="owner"),
+        "installable",
+        "accepted",
     )
     workspace.add_artifact(
         AddArtifactInput(
@@ -840,6 +865,149 @@ def test_prepares_and_launches_a_session_with_actor_runtime_override(
     assert "Model: `governance-model`" in context
     assert "Roles: `scrum-master`" in context
     assert "session.completed" in (root / ".agora" / "events.md").read_text()
+    summary = root / ".agora" / "sessions" / "governance-session" / "SUMMARY.md"
+    assert summary.is_file()
+    assert 'schema: "agora/session-summary/v1"' in summary.read_text()
+    activity = session_workspace.list_activity(session_id="governance-session")
+    assert [item.type for item in activity] == ["session.prepared", "session.completed"]
+    assert activity[-1].actor == "project:facilitator"
+    assert activity[-1].source.endswith("/SUMMARY.md")
+
+
+def test_human_role_holder_can_use_a_capability_compatible_ai_executor(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.add_actor(
+        AddActorInput(
+            id="owner-assistant",
+            name="Owner AI Assistant",
+            kind="ai-agent",
+            capabilities=["backlog-management", "acceptance"],
+            scope="project",
+            integration="generic",
+            provider="local-runtime",
+            model="owner-assistant-model",
+        )
+    )
+    calls: list[dict[str, str]] = []
+
+    def launch(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
+        calls.append(environment)
+        return 0
+
+    session_workspace = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launch)
+    session = session_workspace.start_session(
+        StartSessionInput(
+            id="owner-assisted-session",
+            actor_id="owner",
+            executor_id="owner-assistant",
+            swarm_id="delivery",
+            runner="/bin/true --assistant",
+            launch=True,
+        )
+    )
+
+    assert session.actor == "project:owner"
+    assert session.executor == "project:owner-assistant"
+    assert session.model == "owner-assistant-model"
+    assert calls[0]["AGORA_ACTOR"] == "project:owner"
+    assert calls[0]["AGORA_EXECUTOR"] == "project:owner-assistant"
+    assert workspace.show_swarm("delivery").assignments["product-owner"] == "project:owner"
+    context = Path(session.context_path).read_text()
+    assert "## Responsible actor" in context
+    assert "Identity: `project:owner`" in context
+    assert "## Executor" in context
+    assert "Identity: `project:owner-assistant`" in context
+
+
+def test_session_rejects_executor_without_role_capabilities(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+
+    with pytest.raises(ValueError, match="not capability-compatible"):
+        workspace.start_session(
+            StartSessionInput(
+                id="invalid-assisted-session",
+                actor_id="owner",
+                executor_id="developer",
+                swarm_id="delivery",
+                runner="/bin/true",
+            )
+        )
+
+
+def test_optional_git_gate_requires_clean_tree_commit_and_review_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = tmp_path / "project"
+    root.mkdir()
+    subprocess.run(["git", "init", "--initial-branch", "main"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "agora@example.com"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Agora Tests"], cwd=root, check=True)
+    source = root / "feature.txt"
+    source.write_text("implemented\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-m", "feat: implement feature"], cwd=root, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    workspace = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="increment",
+            title="Ship reviewed code",
+            actor_id="owner",
+        )
+    )
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="developer",
+            kind="git-commit",
+            uri=f"git://{commit}",
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="developer",
+            type="code-review",
+            result="success",
+            artifact_refs=[f"git://{commit}"],
+        )
+    )
+    subprocess.run(["git", "add", ".agora"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-m", "chore: record Agora evidence"], cwd=root, check=True)
+    work = workspace.show_work("delivery", "increment")
+    gate = GatePolicy(
+        id="release-ready",
+        require_all_criteria=False,
+        require_required_artifacts=False,
+        require_successful_evidence=False,
+        require_clean_git=True,
+        require_git_commit=True,
+        required_evidence_types=["code-review"],
+    )
+
+    workspace._assert_work_gate(root, work, gate, gate.id)
+
+    source.write_text("uncommitted\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="working-tree-not-clean"):
+        workspace._assert_work_gate(root, work, gate, gate.id)
 
 
 def test_governs_and_persists_external_tool_invocations(
@@ -874,6 +1042,9 @@ def test_governs_and_persists_external_tool_invocations(
     result = root / ".agora" / "tool-runs" / "repository-status" / "RESULT.md"
     assert "M README.md" in result.read_text()
     assert "tool.completed" in (root / ".agora" / "events.md").read_text()
+    tool_activity = tool_workspace.list_activity(tool_run_id="repository-status")
+    assert [item.type for item in tool_activity] == ["tool.prepared", "tool.completed"]
+    assert tool_activity[-1].source.endswith("/RESULT.md")
 
     commit = tool_workspace.invoke_tool(
         InvokeToolInput(
@@ -2888,6 +3059,88 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert len(work_events) == 1
     assert work_events[0].scope == "work:delivery/observable-work"
     assert workspace.validate().ok is True
+
+
+def test_activity_ledger_filters_work_chronology_and_validates_sources(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="ledger-work",
+            title="Make activity reviewable",
+            actor_id="owner",
+        )
+    )
+
+    records = workspace.list_activity(
+        swarm_id="delivery",
+        work_id="ledger-work",
+        type_="work.created",
+    )
+
+    assert len(records) == 1
+    assert records[0].actor == "project:owner"
+    assert records[0].summary == "state=specified actor=project:owner"
+    assert records[0].source == ("repo://.agora/swarms/delivery/work/ledger-work/events.md")
+    assert workspace.validate().checked["activity-ledgers"] == 1
+
+    ledger = root / ".agora" / "activity.md"
+    ledger.write_text(
+        ledger.read_text().replace(
+            "repo://.agora/swarms/delivery/work/ledger-work/events.md",
+            "repo://missing/activity-source.md",
+        ),
+        encoding="utf-8",
+    )
+    report = workspace.validate()
+    assert any(issue.code == "activity.invalid" for issue in report.issues)
+
+
+def test_rebuilds_activity_from_existing_durable_records(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="historical-work",
+            title="Recover historical activity",
+            actor_id="owner",
+        )
+    )
+    workspace.start_session(
+        StartSessionInput(
+            id="historical-session",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="historical-work",
+        )
+    )
+    (root / ".agora" / "activity.md").unlink()
+
+    result = workspace.rebuild_activity()
+
+    assert result["rebuilt"] > 0
+    records = workspace.list_activity(session_id="historical-session")
+    assert [item.type for item in records] == ["session.prepared"]
+    assert records[0].actor == "project:developer"
+    assert records[0].work_id == "historical-work"
+    assert records[0].source.endswith("/SESSION.md")
+    assert workspace.validate().ok is True
+
+
+def test_activity_list_requires_a_swarm_for_a_work_filter(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    workspace.initialize(InitInput())
+
+    with pytest.raises(ValueError, match="--work requires --swarm"):
+        workspace.list_activity(work_id="ambiguous-work")
 
 
 def test_validation_reports_multiple_workspace_integrity_errors(

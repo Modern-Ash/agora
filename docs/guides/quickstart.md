@@ -1,5 +1,9 @@
 # Quickstart
 
+For human onboarding, prefer [`agora setup`](guided-setup.md) or `agora adopt`. They collect and
+review the same inputs sequentially, then delegate to the transactional quickstart implementation.
+Use this guide for direct CLI automation and the underlying behavior.
+
 `agora quickstart` creates the smallest runnable Agora project without privileging one development
 method, LLM provider, or programming language. It initializes the project, creates one human and one
 AI actor, creates a swarm, and assigns every required role declared by the selected Method Pack.
@@ -64,7 +68,7 @@ Markdown, events, or Git-managed verification evidence. By default they live und
 ~/.config/agora-quickstart-keys/<project-hash>/
 ```
 
-The JSON result reports the exact `key_directory`. Choose an external location explicitly when
+The captured JSON result reports the exact `key_directory`. Choose an external location explicitly when
 needed:
 
 ```bash

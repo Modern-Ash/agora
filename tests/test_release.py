@@ -25,7 +25,7 @@ def test_release_versions_remain_synchronized() -> None:
     )
     package_version = version_line.split('"')[1]
 
-    assert project_version == "0.3.2"
+    assert project_version == "0.4.0"
     assert package_version == project_version
     assert f'version = "{project_version}"' in (ROOT / "uv.lock").read_text()
 

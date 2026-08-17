@@ -294,6 +294,8 @@ def session_authorization_payload(record: SessionRecord) -> bytes:
         "context-sha256": record.context_sha256,
         "created-at": record.created_at,
     }
+    if record.executor is not None and record.executor != record.actor:
+        value["executor"] = record.executor
     return (
         json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode()

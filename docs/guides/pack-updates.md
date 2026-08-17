@@ -47,7 +47,7 @@ By default Agora searches the registry recorded in `SOURCE.md`. Use `--registry`
 pack intentionally to another visible source. When both user and project registries share that id,
 the original registry scope is preferred.
 
-The JSON result reports the current and target versions, whether local content differs from its
+The captured JSON result reports the current and target versions, whether local content differs from its
 source, and every Method or Tool Pack in dependency-first update order. Preview performs no writes.
 
 Agora rejects downgrades and a catalog that changes pack content without changing the pack version.

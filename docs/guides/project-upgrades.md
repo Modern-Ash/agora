@@ -12,7 +12,7 @@ agora upgrade
 agora --project /path/to/project upgrade
 ```
 
-The JSON result reports `from_version`, `to_version`, every proposed `create` or `update`, and
+The captured JSON result reports `from_version`, `to_version`, every proposed `create` or `update`, and
 customization warnings. Preview mode does not create directories, backups, events, or manifests.
 Commit or stash unrelated work before applying so the resulting diff remains easy to review.
 

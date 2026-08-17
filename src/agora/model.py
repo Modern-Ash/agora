@@ -87,8 +87,13 @@ class GatePolicy:
     id: str
     require_all_criteria: bool = True
     require_required_artifacts: bool = True
+    required_artifacts: list[str] | None = None
+    required_criterion_stage: str | None = None
     require_successful_evidence: bool = True
     required_approval_roles: list[str] = field(default_factory=list)
+    require_clean_git: bool = False
+    require_git_commit: bool = False
+    required_evidence_types: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -165,6 +170,8 @@ class MethodContract:
     transitions: list[TransitionRule]
     gates: dict[str, GatePolicy]
     wip_limits: dict[str, int]
+    criterion_stages: list[str] = field(default_factory=lambda: ["satisfied"])
+    criterion_stage_roles: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -201,6 +208,7 @@ class WorkRecord:
     status_at: str | None = None
     delegation_id: str | None = None
     parent_work_ref: str | None = None
+    criterion_statuses: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -294,6 +302,7 @@ class SessionRecord:
     authorization_sha256: str | None = None
     authorization_signature: str | None = None
     preparation_action_id: str | None = None
+    executor: str | None = None
 
 
 @dataclass(frozen=True)
@@ -319,6 +328,8 @@ class AdoptionInput:
     swarm_id: str = "quickstart"
     base_branch: str | None = None
     allow_dirty: bool = False
+    integration: Integration | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -904,6 +915,20 @@ class EventRecord:
 
 
 @dataclass(frozen=True)
+class ActivityRecord:
+    timestamp: str
+    type: str
+    summary: str
+    actor: str | None
+    swarm_id: str | None
+    work_id: str | None
+    session_id: str | None
+    tool_run_id: str | None
+    source: str
+    path: str
+
+
+@dataclass(frozen=True)
 class WorkspaceStatus:
     project: str
     integration: Integration
@@ -933,11 +958,14 @@ class OperationalTask:
     blockers: list[str]
     session_id: str | None
     reason: str
+    executor: str | None = None
+    executor_kind: ActorKind | None = None
 
 
 @dataclass(frozen=True)
 class RunNextInput:
     actor_id: str | None = None
+    executor_id: str | None = None
     swarm_id: str | None = None
     work_id: str | None = None
     session_id: str | None = None
@@ -962,6 +990,9 @@ class RunPreview:
     runtime_source: Literal["configured", "override", "not-applicable"]
     timeout_seconds: int | None
     max_output_bytes: int | None
+    executor: str | None = None
+    executor_kind: ActorKind | None = None
+    executor_capabilities: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1364,6 +1395,11 @@ class QuickstartInput:
     key_directory: str | None = None
     base_branch: str | None = None
     allow_dirty: bool = False
+    integration: Integration | None = None
+    provider: str | None = None
+    model: str | None = None
+    max_delegation_depth: int | None = None
+    entrypoint: Literal["quickstart", "setup", "adopt"] = "quickstart"
 
 
 @dataclass(frozen=True)
@@ -1519,6 +1555,7 @@ class PrepareWorkTransitionInput(TransitionWorkInput):
 class PrepareCriterionInput(WorkActorInput):
     id: str = ""
     criterion_id: str = ""
+    stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1650,6 +1687,7 @@ class StartSessionInput:
     force: bool = False
     timeout_seconds: int = DEFAULT_SESSION_TIMEOUT_SECONDS
     max_output_bytes: int = DEFAULT_SESSION_MAX_OUTPUT_BYTES
+    executor_id: str | None = None
 
 
 @dataclass(frozen=True)

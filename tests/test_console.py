@@ -5,7 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 import agora.cli as cli
-from agora.console import ActivityContext, ConsoleActivity, _fit_terminal_line, _orbit_frame
+from agora.console import (
+    ActivityContext,
+    ConsoleActivity,
+    ConsoleResult,
+    _fit_terminal_line,
+    _orbit_frame,
+)
 from agora.model import RunLoopEvent
 
 
@@ -23,6 +29,10 @@ def _context() -> ActivityContext:
         "project:agent (developer) | studio/visual",
         "Authority: implementation | local actor identity",
         ("AGORA PLAN  Safe execution preview", "  Runtime    codex/openai/model"),
+        (
+            "Runtime active within implementing -> verifying",
+            "Watching durable evidence and transitions",
+        ),
     )
 
 
@@ -41,6 +51,7 @@ def test_console_shows_preflight_context_and_finishes_on_tty(
     assert "codex/openai/model" in rendered
     assert "Build visual console" in rendered
     assert "Authority: implementation" in rendered
+    assert "Now: Runtime active" in rendered
     assert "| A |" in rendered
     assert "AGORA [finished]" in rendered
 
@@ -99,6 +110,62 @@ def test_console_renders_governed_step_events_without_provider_output(
     assert "provider output" not in rendered
 
 
+def test_console_rotates_one_stable_live_detail_line() -> None:
+    output = TtyBuffer()
+    activity = ConsoleActivity(output, _context(), interval_seconds=0.1)
+    activity.context = _context()
+
+    activity._render(0)
+    activity._render(18)
+
+    rendered = output.getvalue()
+    assert "Now: Runtime active within implementing -> verifying" in rendered
+    assert "Now: Watching durable evidence and transitions" in rendered
+
+
+def test_console_prioritizes_governed_live_events_over_rotation() -> None:
+    output = TtyBuffer()
+    context = ActivityContext(
+        **{
+            **_context().__dict__,
+            "live_detail_provider": lambda: "Evidence recorded · type=verification result=success",
+        }
+    )
+    activity = ConsoleActivity(output, context, interval_seconds=1)
+
+    activity._render(0)
+
+    assert "Now: Evidence recorded · type=verification result=success" in output.getvalue()
+    assert "provider reasoning" not in output.getvalue()
+
+
+def test_live_detail_provider_reports_only_new_durable_activity() -> None:
+    previous = SimpleNamespace(
+        timestamp="2026-08-17T12:00:00Z",
+        type="session.prepared",
+        summary="Prepared session",
+        source="repo://.agora/sessions/old/SESSION.md",
+    )
+    current = SimpleNamespace(
+        timestamp="2026-08-17T12:00:01Z",
+        type="artifact.added",
+        summary="kind=verification-report uri=repo://reports/verification.md",
+        source="repo://.agora/swarms/delivery/work/item/artifacts.md",
+    )
+    responses = iter(([previous], [current]))
+    workspace = SimpleNamespace(list_activity=lambda **kwargs: next(responses))
+
+    detail = cli._governed_activity_provider(
+        workspace,
+        swarm_id="delivery",
+        work_id="item",
+    )()
+
+    assert detail == (
+        "Artifact registered · kind=verification-report uri=repo://reports/verification.md"
+    )
+
+
 def test_console_stays_silent_off_tty_or_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,6 +201,68 @@ def test_cli_keeps_interactive_progress_out_of_json_stdout(
     assert output.getvalue() == '{\n  "ok": true\n}\n'
     assert "AGORA [finished]" in progress.getvalue()
     assert output.getvalue().count("AGORA") == 0
+
+
+def test_cli_renders_status_for_a_human_terminal(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    assert cli.main(["init"], cwd=tmp_path, stdout=io.StringIO()) == 0
+    output = TtyBuffer()
+
+    result = cli.main(["status"], cwd=tmp_path, stdout=output)
+
+    rendered = output.getvalue()
+    assert result == 0
+    assert "Agora status" in rendered
+    assert "Project" in rendered
+    assert "Attention" in rendered
+    assert "\x1b[" in rendered
+    assert "{" not in rendered
+
+
+def test_cli_uses_compact_human_output_for_mutations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TERM", "xterm-256color")
+    output = TtyBuffer()
+
+    result = cli.main(["init"], cwd=tmp_path, stdout=output)
+
+    rendered = output.getvalue()
+    assert result == 0
+    assert "Init" in rendered
+    assert "Default Method" in rendered
+    assert "{" not in rendered
+
+
+def test_console_renders_actionable_session_diagnosis() -> None:
+    output = TtyBuffer()
+
+    ConsoleResult(output).render(
+        "session diagnose",
+        {
+            "id": "failed-run",
+            "status": "recovered",
+            "actor": "project:agent",
+            "swarm_id": "delivery",
+            "work_id": "increment",
+            "termination_reason": "output-limit",
+            "diagnosis": "Recovered by session retry-run.",
+            "output_bytes": 4194371,
+            "max_output_bytes": 4194304,
+            "output_percent": 100.0,
+            "recovered_by": "retry-run",
+            "recommended_command": "agora next --swarm delivery",
+        },
+    )
+
+    rendered = output.getvalue()
+    assert "Session diagnosis" in rendered
+    assert "output-limit" in rendered
+    assert "retry-run" in rendered
+    assert "agora next --swarm delivery" in rendered
 
 
 def test_console_fits_terminal_lines_and_orbit_moves() -> None:

@@ -20,7 +20,11 @@ flowchart LR
 ```
 
 For a shorter first experience that creates the actors and swarm automatically, start with the
-[Visual adoption guide](adoption.md) or use `agora quickstart` as shown below.
+[Visual adoption guide](adoption.md) or run the guided setup:
+
+```bash
+agora setup
+```
 
 ## 1. Install Agora
 
@@ -34,18 +38,19 @@ agora --help
 
 During development, replace `agora` with `uv run agora` to execute the checkout directly.
 
-For a ready swarm using the selected Method Pack, the short path is:
+For a ready swarm using the selected Method Pack, the recommended path is:
 
 ```bash
 mkdir payment-service
 cd payment-service
-agora quickstart --objective "Deliver the first governed increment"
+agora setup
 agora validate
 ```
 
-This creates project-local `owner` and `agent` actors and assigns every required method role. Use
-`--secure` only for local authenticated exploration, or continue below for explicit production
-identity and runtime configuration. See [Quickstart](guides/quickstart.md).
+The wizard reviews the runtime, model, Method Pack, objective, starter actors, security mode, and
+persistence scope before creating anything. It creates project-local `owner` and `agent` actors and
+assigns every required method role. See [Guided setup](guides/guided-setup.md). Use
+`agora quickstart` for the equivalent direct primitive.
 
 ## 2. Choose an agent environment and lifecycle
 
@@ -79,7 +84,13 @@ agora doctor
 Initialization creates `.agora/` and installs the selected environment adapter. With the Codex
 integration, the project also receives `.agents/skills/agora-*/SKILL.md` files.
 
-For an existing Git repository, perform the read-only readiness check first:
+For an existing Git repository, use the adoption wizard:
+
+```bash
+agora adopt
+```
+
+For automation, perform the read-only readiness check and direct bootstrap explicitly:
 
 ```bash
 agora adopt --check --id first-feature --base main

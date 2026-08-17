@@ -64,7 +64,7 @@ def main() -> None:
                 acceptance_criteria=[
                     ("compatible", "Existing totals remain unchanged and discounts are bounded")
                 ],
-                required_artifacts=["specification"],
+                required_artifacts=["spec"],
             )
         )
         specification = root / "docs" / "specs" / "percentage-discount.md"
@@ -78,7 +78,7 @@ def main() -> None:
                 swarm_id=quickstart.swarm.id,
                 work_id="discount-feature",
                 actor_id="owner",
-                kind="specification",
+                kind="spec",
                 uri="repo://docs/specs/percentage-discount.md",
             )
         )

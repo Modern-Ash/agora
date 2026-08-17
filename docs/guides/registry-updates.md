@@ -33,7 +33,7 @@ agora registry update --id team-catalog --scope user
 ```
 
 The preview reads the persisted index URL from `SOURCE.md`, selects the highest semantic release,
-and verifies its signature policy. It does not download the archive. The JSON result reports current
+and verifies its signature policy. It does not download the archive. The captured JSON result reports current
 and target versions, checksum, signature status, scope, and whether an update is available.
 
 Select a particular release instead of latest:
