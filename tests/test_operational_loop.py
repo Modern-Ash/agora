@@ -1,4 +1,5 @@
 import io
+import json
 import shlex
 import sys
 from pathlib import Path
@@ -209,6 +210,148 @@ def test_bounded_run_loop_stops_at_human_attention(tmp_path: Path, monkeypatch) 
     assert result.stop_reason == "human-attention"
     assert workspace.show_work("delivery", "increment").state == "verifying"
     assert result.next_actions[0].actor == "project:owner"
+
+
+def test_actor_filter_cannot_hide_higher_priority_human_gate(tmp_path: Path, monkeypatch) -> None:
+    workspace = _scrum_workspace(tmp_path, monkeypatch)
+    for state, actor in (
+        ("planned", "developer"),
+        ("implementing", "developer"),
+        ("reviewing", "developer"),
+        ("verifying", "facilitator"),
+    ):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="increment",
+                actor_id=actor,
+                target_state=state,
+            )
+        )
+
+    result = workspace.run_until_blocked(
+        RunNextInput(actor_id="developer", swarm_id="delivery", work_id="increment"),
+        max_steps=6,
+    )
+
+    assert result.sessions == []
+    assert result.stop_reason == "human-attention"
+    assert result.next_actions[0].actor == "project:owner"
+    preview = workspace.preview_run(
+        RunNextInput(actor_id="developer", swarm_id="delivery", work_id="increment")
+    )
+    assert preview.task.actor == "project:owner"
+    assert preview.runtime_source == "not-applicable"
+    assert preview.integration == "not-applicable"
+    assert preview.timeout_seconds is None
+    assert preview.max_output_bytes is None
+    with pytest.raises(ValueError, match="human attention from project:owner"):
+        workspace.run_next(
+            RunNextInput(actor_id="developer", swarm_id="delivery", work_id="increment")
+        )
+
+
+def test_run_preview_exposes_authority_runtime_and_bounds_without_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _scrum_workspace(tmp_path, monkeypatch)
+
+    preview = workspace.preview_run(
+        RunNextInput(
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="increment",
+            timeout_seconds=45,
+            max_output_bytes=8192,
+        )
+    )
+
+    assert preview.task.actor == "project:developer"
+    assert preview.task.role == "developer"
+    assert preview.task.state == "specified"
+    assert preview.task.target_states == ["planned"]
+    assert preview.work_title == "Ship an increment"
+    assert preview.method == "scrum"
+    assert preview.actor_capabilities == ["implementation"]
+    assert preview.integration == "generic"
+    assert preview.provider == "test-provider"
+    assert preview.model == "configured-by-integration"
+    assert preview.authentication_required is False
+    assert preview.runtime_source == "configured"
+    assert preview.timeout_seconds == 45
+    assert preview.max_output_bytes == 8192
+    assert workspace.list_sessions() == []
+
+
+def test_cli_explain_returns_preview_json_without_starting_a_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _scrum_workspace(tmp_path, monkeypatch)
+    output = io.StringIO()
+
+    result = main(
+        [
+            "run",
+            "--actor",
+            "developer",
+            "--swarm",
+            "delivery",
+            "--work",
+            "increment",
+            "--timeout-seconds",
+            "30",
+            "--max-output-bytes",
+            "4096",
+            "--explain",
+        ],
+        cwd=workspace.project_root(),
+        stdout=output,
+    )
+
+    payload = json.loads(output.getvalue())
+    assert result == 0
+    assert payload["task"]["actor"] == "project:developer"
+    assert payload["task"]["target_states"] == ["planned"]
+    assert payload["actor_capabilities"] == ["implementation"]
+    assert payload["timeout_seconds"] == 30
+    assert payload["max_output_bytes"] == 4096
+    assert workspace.list_sessions() == []
+
+
+def test_run_loop_emits_safe_structured_step_events(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+
+    def launch(command, cwd, environment):
+        actor_workspace = AgoraWorkspace(cwd=root)
+        actor_workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id=environment["AGORA_SWARM"],
+                work_id=environment["AGORA_WORK"],
+                actor_id=environment["AGORA_ACTOR"],
+                target_state="planned",
+            )
+        )
+        return 0
+
+    workspace = _scrum_workspace(tmp_path, monkeypatch, launcher=launch)
+    events = []
+
+    result = workspace.run_until_blocked(
+        RunNextInput(actor_id="developer", runner="/bin/true"),
+        max_steps=1,
+        observer=events.append,
+    )
+
+    assert result.stop_reason == "max-steps"
+    assert [event.kind for event in events] == [
+        "step-selected",
+        "session-finished",
+        "loop-stopped",
+    ]
+    assert events[0].before_state == "specified"
+    assert events[1].after_state == "planned"
+    assert events[1].session.status == "completed"
+    assert events[2].stop_reason == "max-steps"
 
 
 def test_run_loop_stops_when_runner_records_no_governed_progress(

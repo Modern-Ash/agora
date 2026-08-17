@@ -185,6 +185,10 @@ The external runtime remains responsible for model authentication and execution.
 use non-interactive native commands by default. `agora next` derives ordered actions from Method Pack
 transitions, while bounded `agora run --until-blocked` recomputes durable state after every session
 and stops at human attention, missing authority, unchanged governance state, or its step limit.
+`agora run --explain` exposes the selected task, actor authority, configured runtime, authentication
+mode, and execution bounds without preparing a session. Interactive runs observe structured
+controller events for selection, session completion, state movement, and stop conditions; they do
+not stream provider reasoning or bypass the persisted session result.
 
 Session preparation and finalization use short project locks. Agora releases the lock before the
 external runtime starts so that actor-owned Agora commands can persist work while `SESSION.md` is

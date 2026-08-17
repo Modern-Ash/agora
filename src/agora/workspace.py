@@ -202,8 +202,10 @@ from agora.model import (
     RevokeTransparencyTrustKeyInput,
     RotateActorKeyInput,
     RotateOrganizationTrustRootInput,
+    RunLoopEvent,
     RunLoopResult,
     RunNextInput,
+    RunPreview,
     SessionAuthorizationRecord,
     SessionRecord,
     SetActorRuntimeInput,
@@ -7753,26 +7755,13 @@ class AgoraWorkspace:
         return tasks[:limit]
 
     def run_next(self, data: RunNextInput) -> SessionRecord:
-        tasks = self.next_actions(
-            actor_id=data.actor_id,
-            swarm_id=data.swarm_id,
-            human_only=False,
-            limit=1000,
-        )
-        candidates = [
-            task
-            for task in tasks
-            if task.kind in {"execute-work", "retry-session"}
-            and (data.work_id is None or task.work_id == data.work_id)
-        ]
-        if data.actor_id is None and candidates and candidates[0].actor_kind == "human":
-            raise ValueError(f"Next action requires human attention from {candidates[0].actor}")
-        eligible = [
-            task for task in candidates if task.actor is not None and task.actor_kind != "human"
-        ]
-        if not eligible:
+        task, _ = self._select_run_task(data)
+        if task is None:
             raise ValueError("No eligible non-human operational action is available")
-        task = eligible[0]
+        if task.actor_kind == "human":
+            raise ValueError(f"Next action requires human attention from {task.actor}")
+        if task.actor is None:
+            raise ValueError("No eligible non-human operational action is available")
         if any(blocker.endswith("is already running") for blocker in task.blockers):
             raise ValueError(task.blockers[-1])
         if task.session_id is not None:
@@ -7817,7 +7806,98 @@ class AgoraWorkspace:
             )
         )
 
-    def run_until_blocked(self, data: RunNextInput, *, max_steps: int = 20) -> RunLoopResult:
+    def preview_run(self, data: RunNextInput) -> RunPreview:
+        """Describe the exact next governed action without preparing or launching it."""
+        task, _ = self._select_run_task(data)
+        if task is None or task.actor is None or task.swarm_id is None or task.work_id is None:
+            raise ValueError("No governed operational action is available")
+        root = self.project_root()
+        actor = self._find_actor(root, task.actor)
+        swarm = self.show_swarm(task.swarm_id)
+        work = self.show_work(task.swarm_id, task.work_id)
+        project = self._load_project_configuration(root)
+        runtime_applicable = actor.kind != "human"
+        return RunPreview(
+            task=task,
+            work_title=work.title,
+            work_description=work.description,
+            method=swarm.method,
+            actor_capabilities=actor.capabilities,
+            integration=(actor.integration or project.integration)
+            if runtime_applicable
+            else "not-applicable",
+            provider=(actor.provider or project.provider)
+            if runtime_applicable
+            else "not-applicable",
+            model=(actor.model or project.model) if runtime_applicable else "not-applicable",
+            authentication_required=actor.authentication_required,
+            runtime_source=("override" if data.runner is not None else "configured")
+            if runtime_applicable
+            else "not-applicable",
+            timeout_seconds=(data.timeout_seconds or DEFAULT_SESSION_TIMEOUT_SECONDS)
+            if runtime_applicable
+            else None,
+            max_output_bytes=(data.max_output_bytes or DEFAULT_SESSION_MAX_OUTPUT_BYTES)
+            if runtime_applicable
+            else None,
+        )
+
+    def _select_run_task(
+        self, data: RunNextInput
+    ) -> tuple[OperationalTask | None, list[OperationalTask]]:
+        """Select work globally first so an actor filter cannot hide a human gate."""
+        actions = self.next_actions(
+            actor_id=None,
+            swarm_id=data.swarm_id,
+            human_only=False,
+            limit=1000,
+        )
+        candidates = [
+            item
+            for item in actions
+            if item.kind in {"execute-work", "retry-session"}
+            and (data.work_id is None or item.work_id == data.work_id)
+        ]
+        selected_reference = None
+        if data.actor_id is not None:
+            selected_reference = self._find_actor(self.project_root(), data.actor_id).reference
+        scoped = [
+            item
+            for item in candidates
+            if selected_reference is None or item.actor == selected_reference
+        ]
+        eligible = [
+            item for item in scoped if item.actor is not None and item.actor_kind != "human"
+        ]
+        selected = eligible[0] if eligible else None
+
+        if selected is not None:
+            same_work = [
+                item
+                for item in candidates
+                if item.swarm_id == selected.swarm_id and item.work_id == selected.work_id
+            ]
+            if same_work and same_work[0].actor_kind == "human":
+                return same_work[0], actions
+            return selected, actions
+
+        if selected_reference is None:
+            human = next((item for item in candidates if item.actor_kind == "human"), None)
+            if human is not None:
+                return human, actions
+        elif data.work_id is not None:
+            human = next((item for item in candidates if item.actor_kind == "human"), None)
+            if human is not None:
+                return human, actions
+        return None, actions
+
+    def run_until_blocked(
+        self,
+        data: RunNextInput,
+        *,
+        max_steps: int = 20,
+        observer: Callable[[RunLoopEvent], None] | None = None,
+    ) -> RunLoopResult:
         if max_steps < 1 or max_steps > 100:
             raise ValueError("Run loop max steps must be between 1 and 100")
         if data.prepare_only:
@@ -7828,27 +7908,28 @@ class AgoraWorkspace:
             raise ValueError("An explicit session id cannot be reused by a multi-step run loop")
 
         sessions: list[SessionRecord] = []
-        for index in range(max_steps):
-            actions = self.next_actions(
-                actor_id=data.actor_id,
-                swarm_id=data.swarm_id,
-                human_only=False,
-                limit=1000,
-            )
-            candidates = [
-                item
-                for item in actions
-                if item.kind in {"execute-work", "retry-session"}
-                and (data.work_id is None or item.work_id == data.work_id)
-            ]
-            if data.actor_id is None and candidates and candidates[0].actor_kind == "human":
-                return RunLoopResult(
-                    sessions=sessions,
-                    stop_reason="human-attention",
+
+        def finish(reason: str, actions: list[OperationalTask]) -> RunLoopResult:
+            observer and observer(
+                RunLoopEvent(
+                    kind="loop-stopped",
+                    step=len(sessions),
+                    max_steps=max_steps,
+                    stop_reason=reason,  # type: ignore[arg-type]
                     next_actions=actions,
                 )
-            eligible = [item for item in candidates if item.actor_kind != "human"]
-            if not eligible:
+            )
+            return RunLoopResult(
+                sessions=sessions,
+                stop_reason=reason,  # type: ignore[arg-type]
+                next_actions=actions,
+            )
+
+        for index in range(max_steps):
+            selected, actions = self._select_run_task(data)
+            if selected is not None and selected.actor_kind == "human":
+                return finish("human-attention", actions)
+            if selected is None:
                 reason = (
                     "human-attention"
                     if any(
@@ -7856,37 +7937,45 @@ class AgoraWorkspace:
                     )
                     else "no-agent-action"
                 )
-                return RunLoopResult(
-                    sessions=sessions,
-                    stop_reason=reason,
-                    next_actions=actions,
+                return finish(reason, actions)
+            before_work = self.show_work(selected.swarm_id or "", selected.work_id or "")
+            observer and observer(
+                RunLoopEvent(
+                    kind="step-selected",
+                    step=index + 1,
+                    max_steps=max_steps,
+                    task=selected,
+                    before_state=before_work.state,
                 )
-            selected = eligible[0]
+            )
             before = self._operational_task_sha256(selected)
             step_input = data if index == 0 else replace(data, session_id=None)
-            sessions.append(self.run_next(step_input))
+            session = self.run_next(step_input)
+            sessions.append(session)
+            after_work = self.show_work(selected.swarm_id or "", selected.work_id or "")
+            observer and observer(
+                RunLoopEvent(
+                    kind="session-finished",
+                    step=index + 1,
+                    max_steps=max_steps,
+                    task=selected,
+                    session=session,
+                    before_state=before_work.state,
+                    after_state=after_work.state,
+                )
+            )
             after = self._operational_task_sha256(selected)
             if before == after:
-                return RunLoopResult(
-                    sessions=sessions,
-                    stop_reason="no-governed-progress",
-                    next_actions=self.next_actions(
-                        actor_id=data.actor_id,
-                        swarm_id=data.swarm_id,
-                        human_only=False,
-                        limit=1000,
+                return finish(
+                    "no-governed-progress",
+                    self.next_actions(
+                        actor_id=None, swarm_id=data.swarm_id, human_only=False, limit=1000
                     ),
                 )
 
-        return RunLoopResult(
-            sessions=sessions,
-            stop_reason="max-steps",
-            next_actions=self.next_actions(
-                actor_id=data.actor_id,
-                swarm_id=data.swarm_id,
-                human_only=False,
-                limit=1000,
-            ),
+        return finish(
+            "max-steps",
+            self.next_actions(actor_id=None, swarm_id=data.swarm_id, human_only=False, limit=1000),
         )
 
     def _operational_task_sha256(self, task: OperationalTask) -> str:

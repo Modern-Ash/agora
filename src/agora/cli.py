@@ -1,10 +1,12 @@
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
+from agora.console import ActivityContext, ConsoleActivity
 from agora.model import (
     ACTOR_KINDS,
     DEFAULT_SESSION_MAX_OUTPUT_BYTES,
@@ -77,7 +79,9 @@ from agora.model import (
     RevokeTransparencyTrustKeyInput,
     RotateActorKeyInput,
     RotateOrganizationTrustRootInput,
+    RunLoopEvent,
     RunNextInput,
+    RunPreview,
     SetActorRuntimeInput,
     StartSessionInput,
     SyncOrganizationTrustInput,
@@ -108,7 +112,15 @@ def main(
     try:
         namespace = parser.parse_args(arguments)
         workspace = AgoraWorkspace(cwd=project or cwd)
-        result = _dispatch(workspace, namespace)
+        with ConsoleActivity(error_output, _activity_context(workspace, namespace)) as activity:
+            if namespace.command == "run" and namespace.until_blocked:
+                result = _dispatch(
+                    workspace,
+                    namespace,
+                    run_observer=activity.handle_run_event,
+                )
+            else:
+                result = _dispatch(workspace, namespace)
         if result is not None:
             _print_json(output, result)
         if isinstance(result, (AdoptionReport, ValidationReport)) and not result.ok:
@@ -119,6 +131,92 @@ def main(
     except (FileExistsError, FileNotFoundError, PermissionError, RuntimeError, ValueError) as error:
         print(str(error), file=error_output)
         return 1
+
+
+def _run_input(args: argparse.Namespace) -> RunNextInput:
+    return RunNextInput(
+        actor_id=args.actor,
+        swarm_id=args.swarm,
+        work_id=args.work,
+        session_id=args.id,
+        runner=args.runner,
+        prepare_only=args.prepare_only,
+        signature=args.signature,
+        timeout_seconds=args.timeout_seconds,
+        max_output_bytes=args.max_output_bytes,
+    )
+
+
+def _activity_context(
+    workspace: AgoraWorkspace, args: argparse.Namespace
+) -> ActivityContext | None:
+    if args.command != "run" or args.prepare_only or args.explain:
+        return None
+    try:
+        preview = workspace.preview_run(_run_input(args))
+    except (FileNotFoundError, PermissionError, RuntimeError, ValueError):
+        return ActivityContext(
+            "Resolving governed action",
+            args.work or "Next governed work",
+            "Agora is checking durable state and actor authority",
+            "Phase: preflight",
+            args.actor or "next eligible actor",
+        )
+    return _preview_activity_context(preview, args)
+
+
+def _preview_activity_context(preview: RunPreview, args: argparse.Namespace) -> ActivityContext:
+    task = preview.task
+    targets = ", ".join(task.target_states) or "governed action"
+    capabilities = ", ".join(preview.actor_capabilities) or "none declared"
+    authentication = (
+        "signed authentication required"
+        if preview.authentication_required
+        else "local actor identity"
+    )
+    runtime = (
+        "human action; no LLM launch"
+        if preview.runtime_source == "not-applicable"
+        else f"{preview.integration}/{preview.provider}/{preview.model}"
+    )
+    reference = f"{task.swarm_id}/{task.work_id}"
+    headline = (
+        f"Governed agent loop, max {args.max_steps} steps"
+        if args.until_blocked
+        else "Governed agent action"
+    )
+    preflight = [
+        "AGORA PLAN  Safe execution preview",
+        f"  Work       {preview.work_title} [{reference}]",
+        f"  Actor      {task.actor} ({task.actor_kind}) as {task.role}",
+        f"  Authority  {capabilities} | {authentication}",
+        f"  Runtime    {runtime} ({preview.runtime_source})",
+    ]
+    boundary = f"  Boundary   {task.state} -> {targets}"
+    if preview.timeout_seconds is not None and preview.max_output_bytes is not None:
+        boundary += (
+            f" | {preview.timeout_seconds}s | {_format_bytes(preview.max_output_bytes)} output"
+        )
+    preflight.append(boundary)
+    if task.blockers:
+        preflight.append(f"  Blockers   {'; '.join(task.blockers)}")
+    return ActivityContext(
+        headline=headline,
+        subject=preview.work_title,
+        summary=preview.work_description,
+        phase=f"Phase: {task.state} -> {targets}",
+        detail=f"{task.actor} ({task.role}) | {reference} | {preview.method}",
+        safety=f"Authority: {capabilities} | {authentication} | {runtime}",
+        preflight=tuple(preflight),
+    )
+
+
+def _format_bytes(value: int) -> str:
+    if value >= 1024 * 1024:
+        return f"{value / (1024 * 1024):g} MiB"
+    if value >= 1024:
+        return f"{value / 1024:g} KiB"
+    return f"{value} B"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -221,6 +319,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--signature", help="Signature for an already prepared session")
     run.add_argument("--timeout-seconds", type=int)
     run.add_argument("--max-output-bytes", type=int)
+    run.add_argument(
+        "--explain",
+        action="store_true",
+        help="Explain the next governed action and security boundary without executing it",
+    )
     run.add_argument(
         "--until-blocked",
         action="store_true",
@@ -1098,7 +1201,12 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
+def _dispatch(
+    workspace: AgoraWorkspace,
+    args: argparse.Namespace,
+    *,
+    run_observer: Callable[[RunLoopEvent], None] | None = None,
+) -> Any:
     if args.command == "coordination" and args.coordination_command == "configure":
         return workspace.configure_coordination(
             ConfigureCoordinationInput(
@@ -1201,19 +1309,19 @@ def _dispatch(workspace: AgoraWorkspace, args: argparse.Namespace) -> Any:
             limit=args.limit,
         )
     if args.command == "run":
-        run_input = RunNextInput(
-            actor_id=args.actor,
-            swarm_id=args.swarm,
-            work_id=args.work,
-            session_id=args.id,
-            runner=args.runner,
-            prepare_only=args.prepare_only,
-            signature=args.signature,
-            timeout_seconds=args.timeout_seconds,
-            max_output_bytes=args.max_output_bytes,
-        )
+        run_input = _run_input(args)
+        if args.explain:
+            if args.prepare_only:
+                raise ValueError("--explain cannot be combined with --prepare-only")
+            if args.signature is not None:
+                raise ValueError("--explain does not accept a session signature")
+            return workspace.preview_run(run_input)
         if args.until_blocked:
-            return workspace.run_until_blocked(run_input, max_steps=args.max_steps)
+            return workspace.run_until_blocked(
+                run_input,
+                max_steps=args.max_steps,
+                observer=run_observer,
+            )
         return workspace.run_next(run_input)
     if args.command == "resume":
         return workspace.resume_session(
