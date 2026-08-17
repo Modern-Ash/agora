@@ -10,6 +10,8 @@ import agora.cli as cli
 from agora.cli import main
 from agora.model import (
     AddActorInput,
+    AddArtifactInput,
+    AddEvidenceInput,
     AssignActorInput,
     CreateSwarmInput,
     CreateWorkInput,
@@ -18,6 +20,7 @@ from agora.model import (
     RunNextInput,
     StartSessionInput,
     TransitionWorkInput,
+    WorkActorInput,
 )
 from agora.workspace import AgoraWorkspace
 
@@ -227,6 +230,154 @@ def test_guided_continue_reviews_and_launches_one_agent_action(tmp_path: Path, m
     assert "Governed action completed" in output.getvalue()
 
 
+def test_guided_continue_can_use_ai_executor_without_handing_off_human_role(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = tmp_path / "project"
+    root.mkdir()
+    workspace = AgoraWorkspace(cwd=root, launcher=lambda command, cwd, environment: 0)
+    workspace.initialize(
+        InitInput(
+            integration="generic",
+            provider="test-provider",
+            model="test-model",
+            default_method="spec-driven",
+        )
+    )
+    for actor in (
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["specification", "acceptance"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="developer",
+            name="Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        ),
+        AddActorInput(
+            id="owner-assistant",
+            name="Owner Assistant",
+            kind="ai-agent",
+            capabilities=["specification", "acceptance"],
+            scope="project",
+        ),
+    ):
+        workspace.add_actor(actor)
+    workspace.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Clarify the increment", create_branch=False)
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="spec-owner", actor_id="owner")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="developer")
+    )
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="increment",
+            title="Clarify the increment",
+            actor_id="owner",
+            acceptance_criteria=[("accepted", "The increment is accepted")],
+        )
+    )
+    args = type(
+        "Args",
+        (),
+        {
+            "yes": False,
+            "actor": None,
+            "executor": None,
+            "swarm": "delivery",
+            "work": "increment",
+            "runner": "/bin/true",
+            "until_blocked": False,
+            "max_steps": 20,
+        },
+    )()
+    output = io.StringIO()
+
+    result = cli._run_continue_wizard(
+        workspace,
+        args,
+        input_stream=TtyInput("2\n\ny\n"),
+        output_stream=output,
+    )
+    session = workspace.list_sessions()[0]
+
+    assert result["applied"] is True
+    assert session.actor == "project:owner"
+    assert session.executor == "project:owner-assistant"
+    assert workspace.show_swarm("delivery").assignments["spec-owner"] == "project:owner"
+    assert "Ask an AI actor to assist" in output.getvalue()
+
+
+def test_guided_finish_records_explicit_human_approval_and_completion(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _scrum_workspace(tmp_path, monkeypatch)
+    for target, actor in (
+        ("planned", "developer"),
+        ("implementing", "developer"),
+        ("reviewing", "developer"),
+        ("verifying", "facilitator"),
+    ):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="increment",
+                actor_id=actor,
+                target_state=target,
+            )
+        )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
+        "accepted",
+    )
+    report = tmp_path / "project" / "test-report.md"
+    report.write_text("# Passing test report\n", encoding="utf-8")
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="developer",
+            kind="source-code",
+            uri="repo://test-report.md",
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="developer",
+            type="test-run",
+            result="success",
+            artifact_refs=["repo://test-report.md"],
+        )
+    )
+    output = io.StringIO()
+    wizard = cli.Wizard(TtyInput("y\nReviewed in the browser\ny\n"), output, brand="Agora Finish")
+
+    result = cli._finish_work_interactively(
+        workspace,
+        swarm_id="delivery",
+        work_id="increment",
+        actor_hint="project:owner",
+        wizard=wizard,
+    )
+
+    assert result["status"] == "completed"
+    assert workspace.show_work("delivery", "increment").state == "completed"
+    assert "Human review" in output.getvalue()
+    assert "Work completed" in output.getvalue()
+
+
 def test_agent_can_persist_governed_mutations_while_its_session_runs(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -234,6 +385,12 @@ def test_agent_can_persist_governed_mutations_while_its_session_runs(
 
     def launch(command, cwd, environment):
         actor_workspace = AgoraWorkspace(cwd=root)
+        progress = actor_workspace.record_session_progress(
+            environment["AGORA_SESSION_ID"],
+            environment["AGORA_EXECUTOR"],
+            "Implementation plan persisted; advancing the work state",
+        )
+        assert Path(environment["AGORA_PROGRESS"]) == Path(progress["path"])
         actor_workspace.transition_work(
             TransitionWorkInput(
                 swarm_id=environment["AGORA_SWARM"],
@@ -249,6 +406,13 @@ def test_agent_can_persist_governed_mutations_while_its_session_runs(
 
     assert completed.status == "completed"
     assert workspace.show_work("delivery", "increment").state == "planned"
+    progress = workspace.list_activity(
+        swarm_id="delivery", work_id="increment", type_="session.progress"
+    )
+    assert [item.summary for item in progress] == [
+        "Implementation plan persisted; advancing the work state"
+    ]
+    assert "private reasoning" in (Path(completed.path) / "PROGRESS.md").read_text()
     assert workspace.lock_status().active is False
 
 

@@ -6,6 +6,8 @@ version: "1.0.0"
 dependencies: []
 required-roles: ["product-owner", "scrum-master", "developer"]
 work-states: ["specified", "planned", "implementing", "reviewing", "verifying", "completed"]
+criterion-stages: ["specified", "implemented", "verified", "accepted"]
+criterion-stage-roles: {"specified":["product-owner"],"implemented":["product-owner","developer"],"verified":["product-owner","scrum-master"],"accepted":["product-owner"]}
 terminal-state: "completed"
 wip-limits: {"implementing":2,"reviewing":2}
 ---

@@ -155,6 +155,54 @@ def test_spec_clarification_defers_later_required_artifacts(tmp_path: Path, monk
     assert clarified.artifact_kinds == ["spec"]
 
 
+def test_spec_driven_tracks_criterion_progress_without_transferring_acceptance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    _form_swarm(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="increment",
+            title="Track phased acceptance",
+            actor_id="owner",
+            acceptance_criteria=[("observable", "The behavior is observable")],
+            required_artifacts=["spec"],
+        )
+    )
+
+    specified = workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
+        criterion_id="observable",
+        stage="specified",
+    )
+    assert specified.criterion_statuses == {"observable": ["specified"]}
+    assert specified.satisfied_criteria == []
+
+    with pytest.raises(ValueError, match="cannot reach verified before: implemented"):
+        workspace.satisfy_criterion(
+            WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
+            criterion_id="observable",
+            stage="verified",
+        )
+
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="owner",
+            kind="spec",
+            uri="repo://docs/specs/increment.md",
+        )
+    )
+    clarified = workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery", work_id="increment", actor_id="owner", target_state="clarified"
+        )
+    )
+    assert clarified.state == "clarified"
+
+
 def test_spec_driven_walks_to_completion_with_evidence_and_approval(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -14,6 +14,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
+from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -38,6 +39,8 @@ from agora.filesystem import (
     write_new,
 )
 from agora.git import (
+    commit_exists,
+    commit_is_ancestor,
     create_branch,
     current_branch,
     delete_branch,
@@ -78,6 +81,7 @@ from agora.markdown import (
     record_attribute,
     render_markdown,
     string_attribute,
+    string_list_record_attribute,
     strings_attribute,
 )
 from agora.methods import load_method_contract
@@ -3593,6 +3597,131 @@ class AgoraWorkspace:
                 )
         return candidates
 
+    def executor_candidates(self, swarm_id: str, role_id: str) -> list[dict[str, str]]:
+        """Return non-human actors that can assist without taking responsibility."""
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        responsible_reference = swarm.assignments.get(role_id)
+        if responsible_reference is None:
+            raise FileNotFoundError(f"Role {role_id} is not assigned in swarm {swarm.id}")
+        responsible = self._find_actor(root, responsible_reference)
+        candidates: list[dict[str, str]] = []
+        for actor in self.list_actors():
+            if actor.reference == responsible.reference or actor.kind == "human":
+                continue
+            try:
+                self._assert_represented_swarm_operational(root, actor)
+                self._assert_executor_for_roles(root, swarm.method, [role_id], responsible, actor)
+            except (FileNotFoundError, RuntimeError, ValueError):
+                continue
+            candidates.append(
+                {
+                    "actor": actor.reference,
+                    "name": actor.name,
+                    "kind": actor.kind,
+                    "capabilities": ", ".join(actor.capabilities) or "none declared",
+                }
+            )
+        return candidates
+
+    def handoff_candidates(self, swarm_id: str, role_id: str) -> list[dict[str, str]]:
+        """Return actors that may formally receive a swarm role."""
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        current = swarm.assignments.get(role_id)
+        if current is None:
+            raise FileNotFoundError(f"Role {role_id} is not assigned in swarm {swarm.id}")
+        candidates: list[dict[str, str]] = []
+        for actor in self.list_actors():
+            if actor.reference == current:
+                continue
+            try:
+                self._assert_actor_role_compatibility(root, swarm.method, role_id, actor)
+                self._assert_swarm_actor_delegation(root, swarm, role_id, actor)
+            except (FileNotFoundError, RuntimeError, ValueError):
+                continue
+            candidates.append(
+                {
+                    "actor": actor.reference,
+                    "name": actor.name,
+                    "kind": actor.kind,
+                    "capabilities": ", ".join(actor.capabilities) or "none declared",
+                }
+            )
+        return candidates
+
+    def is_terminal_work_target(self, swarm_id: str, target_states: list[str]) -> bool:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        return contract.terminal_state in target_states
+
+    def completion_readiness(self, swarm_id: str, work_id: str) -> dict[str, Any]:
+        """Describe a Method Pack completion edge without mutating the work item."""
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        transitions = [
+            item
+            for item in contract.transitions
+            if item.source == work.state and item.target == contract.terminal_state
+        ]
+        if not transitions:
+            raise ValueError(
+                f"Work {swarm.id}/{work.id} has no completion transition from {work.state}"
+            )
+        transition = transitions[0]
+        blockers: list[str] = []
+        try:
+            self._assert_child_work_closed(root, swarm, work)
+            self._assert_no_active_approval_delegations(work)
+            self._assert_wip_limit(swarm, work, transition.target, contract.wip_limits)
+        except (RuntimeError, ValueError) as error:
+            blockers.append(str(error))
+        gate = contract.gates.get(transition.gate) if transition.gate is not None else None
+        assessment = (
+            self._work_gate_assessment(root, work, gate, transition.gate)
+            if gate is not None and transition.gate is not None
+            else {
+                "gate": None,
+                "unsatisfied": [],
+                "required_criterion_stage": "satisfied",
+                "missing_artifacts": [],
+                "has_success": True,
+                "evidence_missing": False,
+                "missing_evidence_types": [],
+                "missing_approvals": [],
+                "git_issues": [],
+            }
+        )
+        non_approval_gate_issues = any(
+            (
+                assessment["unsatisfied"],
+                assessment["missing_artifacts"],
+                assessment["evidence_missing"],
+                assessment["missing_evidence_types"],
+                assessment["git_issues"],
+            )
+        )
+        return {
+            "swarm_id": swarm.id,
+            "work_id": work.id,
+            "title": work.title,
+            "method": swarm.method,
+            "state": work.state,
+            "target_state": contract.terminal_state,
+            "roles": transition.roles,
+            "blockers": blockers,
+            "gate": assessment,
+            "ready_for_human_approval": not blockers and not non_approval_gate_issues,
+            "ready_to_complete": (
+                not blockers
+                and not non_approval_gate_issues
+                and not assessment["missing_approvals"]
+            ),
+        }
+
     def list_handoffs(self, swarm_id: str) -> list[HandoffRecord]:
         root = self.project_root()
         swarm = self._load_swarm(root, swarm_id)
@@ -3678,6 +3807,7 @@ class AgoraWorkspace:
             state=contract.work_states[0],
             acceptance_criteria=criteria,
             satisfied_criteria=[],
+            criterion_statuses={criterion_id: [] for criterion_id in criteria},
             required_artifacts=list(dict.fromkeys(data.required_artifacts)),
             artifact_kinds=[],
             evidence_results=[],
@@ -3897,6 +4027,10 @@ class AgoraWorkspace:
             for item in work.acceptance_criteria
             if gate.require_all_criteria
             and item not in work.satisfied_criteria
+            and (
+                gate.required_criterion_stage is None
+                or gate.required_criterion_stage not in work.criterion_statuses.get(item, [])
+            )
             and item not in coverage[0]
         }
         outstanding_artifacts = {
@@ -4000,21 +4134,29 @@ class AgoraWorkspace:
         return [record for record in records if gate_id is None or record.gate_id == gate_id]
 
     @_locked_mutation("project")
-    def satisfy_criterion(self, data: WorkActorInput, criterion_id: str) -> WorkRecord:
+    def satisfy_criterion(
+        self, data: WorkActorInput, criterion_id: str, stage: str | None = None
+    ) -> WorkRecord:
         root = self.project_root()
-        swarm, actor, work = self._validate_satisfy_criterion(root, data, criterion_id)
+        swarm, actor, work, contract = self._validate_satisfy_criterion(
+            root, data, criterion_id, stage
+        )
         if actor.authentication_required:
             raise PermissionError(
                 f"Actor {actor.reference} requires a signed lifecycle action; "
                 "prepare criterion.satisfy before applying it"
             )
-        return self._apply_satisfy_criterion(swarm, actor, work, criterion_id)
+        return self._apply_satisfy_criterion(
+            swarm, actor, work, criterion_id, stage, contract.criterion_stages
+        )
 
     @_locked_mutation("project")
     def prepare_satisfy_criterion(self, data: PrepareCriterionInput) -> LifecycleActionRecord:
         assert_slug(data.id, "Lifecycle Action id")
         root = self.project_root()
-        swarm, actor, work = self._validate_satisfy_criterion(root, data, data.criterion_id)
+        swarm, actor, work, _ = self._validate_satisfy_criterion(
+            root, data, data.criterion_id, data.stage
+        )
         assert_actor_identity_available(actor)
         self._assert_current_actor_key(actor)
         return self._prepare_lifecycle_action(
@@ -4024,19 +4166,54 @@ class AgoraWorkspace:
             actor=actor,
             swarm=swarm,
             work=work,
-            parameters={"criterion": data.criterion_id},
+            parameters={"criterion": data.criterion_id, "stage": data.stage or ""},
         )
 
     def _validate_satisfy_criterion(
-        self, root: Path, data: WorkActorInput, criterion_id: str
-    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord]:
+        self,
+        root: Path,
+        data: WorkActorInput,
+        criterion_id: str,
+        stage: str | None = None,
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, MethodContract]:
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "criterion.satisfy")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
         if criterion_id not in work.acceptance_criteria:
             raise FileNotFoundError(f"Acceptance criterion not found: {criterion_id}")
-        return swarm, actor, work
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        if stage is not None:
+            assert_slug(stage, "Criterion stage")
+            if stage not in contract.criterion_stages:
+                raise ValueError(
+                    f"Criterion stage {stage} is not defined by Method Pack {contract.id}: "
+                    f"{', '.join(contract.criterion_stages)}"
+                )
+            completed = work.criterion_statuses.get(criterion_id, [])
+            stage_index = contract.criterion_stages.index(stage)
+            missing_previous = [
+                item for item in contract.criterion_stages[:stage_index] if item not in completed
+            ]
+            if missing_previous:
+                raise ValueError(
+                    f"Criterion {criterion_id} cannot reach {stage} before: "
+                    f"{', '.join(missing_previous)}"
+                )
+        requested_stages = contract.criterion_stages if stage is None else [stage]
+        actor_roles = self._actor_roles(swarm, actor.reference)
+        unauthorized_stages = [
+            item
+            for item in requested_stages
+            if (allowed_roles := contract.criterion_stage_roles.get(item)) is not None
+            and not any(role in allowed_roles for role in actor_roles)
+        ]
+        if unauthorized_stages:
+            raise PermissionError(
+                f"Actor {actor.reference} cannot mark criterion stages: "
+                f"{', '.join(unauthorized_stages)}"
+            )
+        return swarm, actor, work, contract
 
     def _apply_satisfy_criterion(
         self,
@@ -4044,13 +4221,24 @@ class AgoraWorkspace:
         actor: ActorRecord,
         work: WorkRecord,
         criterion_id: str,
+        stage: str | None,
+        criterion_stages: list[str],
     ) -> WorkRecord:
-        work.satisfied_criteria = list(dict.fromkeys([*work.satisfied_criteria, criterion_id]))
+        stages = criterion_stages if stage is None else [stage]
+        work.criterion_statuses[criterion_id] = list(
+            dict.fromkeys([*work.criterion_statuses.get(criterion_id, []), *stages])
+        )
+        if stage is None or stage == criterion_stages[-1]:
+            work.satisfied_criteria = list(dict.fromkeys([*work.satisfied_criteria, criterion_id]))
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
+        event_type = "work.criterion-satisfied" if stage is None else "work.criterion-stage-marked"
+        detail = f"criterion={criterion_id} actor={actor.reference}"
+        if stage is not None:
+            detail += f" stage={stage}"
         self._append_work_event(
             work,
-            "work.criterion-satisfied",
-            f"criterion={criterion_id} actor={actor.reference}",
+            event_type,
+            detail,
         )
         return work
 
@@ -4192,6 +4380,15 @@ class AgoraWorkspace:
         return {row[1] for row in rows}
 
     @staticmethod
+    def _work_artifact_rows(work: WorkRecord) -> list[tuple[str, str]]:
+        document = read_markdown(Path(work.path) / "artifacts.md")
+        rows = AgoraWorkspace._markdown_table_rows(
+            document.body,
+            ("Kind", "URI", "Produced by", "Timestamp"),
+        )
+        return [(row[0], row[1]) for row in rows]
+
+    @staticmethod
     def _work_evidence_rows(work: WorkRecord) -> list[tuple[str, str, list[str]]]:
         document = read_markdown(Path(work.path) / "evidence.md")
         rows = AgoraWorkspace._markdown_table_rows(
@@ -4230,6 +4427,15 @@ class AgoraWorkspace:
     def _assert_artifact_reference(root: Path, uri: str) -> None:
         if not uri.strip():
             raise ValueError("Artifact URI cannot be empty")
+        if uri.startswith("git://"):
+            commit = uri.removeprefix("git://")
+            if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+                raise ValueError(f"Git artifact URI must contain a full commit SHA: {uri}")
+            if not is_git_repository(root):
+                raise ValueError(f"Git artifact requires a Git repository: {uri}")
+            if not commit_exists(root, commit):
+                raise FileNotFoundError(f"Git artifact commit does not exist: {uri}")
+            return
         if not uri.startswith("repo://"):
             return
         value = uri.removeprefix("repo://")
@@ -4986,7 +5192,8 @@ class AgoraWorkspace:
             None
         )
         criterion_context: (
-            tuple[PrepareCriterionInput, SwarmRecord, ActorRecord, WorkRecord] | None
+            tuple[PrepareCriterionInput, SwarmRecord, ActorRecord, WorkRecord, MethodContract]
+            | None
         ) = None
         artifact_context: (
             tuple[PrepareArtifactInput, SwarmRecord, ActorRecord, WorkRecord] | None
@@ -5035,6 +5242,7 @@ class AgoraWorkspace:
                 tuple[
                     ProjectConfiguration,
                     SwarmRecord,
+                    ActorRecord,
                     ActorRecord,
                     list[str],
                     WorkRecord | None,
@@ -5150,6 +5358,7 @@ class AgoraWorkspace:
             session = StartSessionInput(
                 id=record.parameters["session"],
                 actor_id=record.actor,
+                executor_id=record.parameters.get("executor") or record.actor,
                 swarm_id=record.swarm_id,
                 work_id=record.work_id,
                 runner=record.parameters["runner"] or None,
@@ -5161,7 +5370,7 @@ class AgoraWorkspace:
                 ),
             )
             context = self._validate_session_preparation(root, session)
-            _, swarm, actor, _, work, _, _, _, _, _, session_id, _, _ = context
+            _, swarm, actor, _, _, work, _, _, _, _, _, session_id, _, _ = context
             if session_id != record.parameters["session"]:
                 raise ValueError(f"Lifecycle Action session context is not canonical: {record.id}")
             session_preparation_context = (session, context)
@@ -5196,11 +5405,12 @@ class AgoraWorkspace:
                 work_id=record.work_id,
                 actor_id=record.actor,
                 criterion_id=record.parameters["criterion"],
+                stage=record.parameters.get("stage") or None,
             )
-            swarm, actor, work = self._validate_satisfy_criterion(
-                root, criterion, criterion.criterion_id
+            swarm, actor, work, contract = self._validate_satisfy_criterion(
+                root, criterion, criterion.criterion_id, criterion.stage
             )
-            criterion_context = (criterion, swarm, actor, work)
+            criterion_context = (criterion, swarm, actor, work, contract)
         elif record.action == "artifact.add":
             if record.work_id is None:
                 raise ValueError(f"Lifecycle Action has no artifact work: {record.id}")
@@ -5502,8 +5712,15 @@ class AgoraWorkspace:
             self._apply_gate_waiver(waiver, swarm, actor, work, record.id)
         elif record.action == "criterion.satisfy":
             assert criterion_context is not None
-            criterion, swarm, actor, work = criterion_context
-            self._apply_satisfy_criterion(swarm, actor, work, criterion.criterion_id)
+            criterion, swarm, actor, work, contract = criterion_context
+            self._apply_satisfy_criterion(
+                swarm,
+                actor,
+                work,
+                criterion.criterion_id,
+                criterion.stage,
+                contract.criterion_stages,
+            )
         elif record.action == "artifact.add":
             assert artifact_context is not None
             artifact, swarm, actor, work = artifact_context
@@ -5830,7 +6047,7 @@ class AgoraWorkspace:
             self._assert_no_active_approval_delegations(work)
         self._assert_wip_limit(swarm, work, data.target_state, contract.wip_limits)
         if transition.gate is not None:
-            self._assert_work_gate(work, contract.gates[transition.gate], transition.gate)
+            self._assert_work_gate(root, work, contract.gates[transition.gate], transition.gate)
         return swarm, actor, work
 
     def _apply_work_transition(
@@ -6859,7 +7076,7 @@ class AgoraWorkspace:
             if not data.launch:
                 return record
             running = self._mark_session_running(record)
-        return self._run_session_process(root, running, actor, context[1], context[4])
+        return self._run_session_process(root, running, actor, context[3], context[1], context[5])
 
     @_locked_mutation("project")
     def prepare_session(self, data: PrepareSessionInput) -> LifecycleActionRecord:
@@ -6872,7 +7089,7 @@ class AgoraWorkspace:
             raise ValueError("Prepared session.prepare cannot replace an existing session")
         root = self.project_root()
         context = self._validate_session_preparation(root, data.session)
-        _, swarm, actor, _, work, _, _, _, _, _, session_id, _, _ = context
+        _, swarm, actor, executor, _, work, _, _, _, _, _, session_id, _, _ = context
         assert_actor_identity_available(actor)
         self._assert_current_actor_key(actor)
         return self._prepare_lifecycle_action(
@@ -6884,6 +7101,7 @@ class AgoraWorkspace:
             work=work,
             parameters={
                 "session": session_id,
+                "executor": executor.reference,
                 "runner": data.session.runner or "",
                 "timeout-seconds": str(data.session.timeout_seconds),
                 "max-output-bytes": str(data.session.max_output_bytes),
@@ -6895,6 +7113,7 @@ class AgoraWorkspace:
     ) -> tuple[
         ProjectConfiguration,
         SwarmRecord,
+        ActorRecord,
         ActorRecord,
         list[str],
         WorkRecord | None,
@@ -6918,13 +7137,18 @@ class AgoraWorkspace:
         roles = self._actor_roles(swarm, actor.reference)
         if not roles:
             raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+        executor = self._find_actor(root, data.executor_id or actor.reference)
+        assert_actor_identity_available(executor)
+        self._assert_current_actor_key(executor)
+        self._assert_represented_swarm_operational(root, executor)
+        self._assert_executor_for_roles(root, swarm.method, roles, actor, executor)
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
         if work is not None:
             self._assert_work_mutable(root, swarm, work)
 
-        integration = actor.integration or project.integration
-        provider = actor.provider or project.provider
-        model = actor.model or project.model
+        integration = executor.integration or project.integration
+        provider = executor.provider or project.provider
+        model = executor.model or project.model
         self._assert_session_execution_boundaries(
             data.timeout_seconds,
             data.max_output_bytes,
@@ -6947,6 +7171,7 @@ class AgoraWorkspace:
             root,
             project,
             actor,
+            executor,
             swarm,
             roles,
             work,
@@ -6958,6 +7183,7 @@ class AgoraWorkspace:
             project,
             swarm,
             actor,
+            executor,
             roles,
             work,
             integration,
@@ -6978,6 +7204,7 @@ class AgoraWorkspace:
             ProjectConfiguration,
             SwarmRecord,
             ActorRecord,
+            ActorRecord,
             list[str],
             WorkRecord | None,
             Integration,
@@ -6995,6 +7222,7 @@ class AgoraWorkspace:
             _,
             swarm,
             actor,
+            executor,
             roles,
             work,
             integration,
@@ -7010,6 +7238,7 @@ class AgoraWorkspace:
         record = SessionRecord(
             id=session_id,
             actor=actor.reference,
+            executor=executor.reference,
             swarm_id=swarm.id,
             work_id=work.id if work else None,
             roles=roles,
@@ -7029,17 +7258,37 @@ class AgoraWorkspace:
         )
         write_new(context_path, context_contents, data.force)
         write_new(session_path / "SESSION.md", self._render_session(record), data.force)
+        write_new(
+            session_path / "PROGRESS.md",
+            render_markdown(
+                MarkdownDocument(
+                    attributes={
+                        "schema": "agora/session-progress/v1",
+                        "session": session_id,
+                    },
+                    body=(
+                        f"# Session progress {session_id}\n\n"
+                        "Durable, concise execution milestones. This log must not contain "
+                        "private reasoning."
+                    ),
+                )
+            ),
+            data.force,
+        )
         append_entry(
             root / ".agora" / "events.md",
             (
                 f"- {self._timestamp()} | session.prepared | session={session_id} "
-                f"actor={actor.reference} swarm={swarm.id}"
+                f"actor={actor.reference} executor={executor.reference} swarm={swarm.id}"
             ),
         )
         self._append_activity(
             root,
             "session.prepared",
-            (f"Prepared {integration}/{provider}/{model} session for roles {', '.join(roles)}"),
+            (
+                f"Prepared {integration}/{provider}/{model} session for roles "
+                f"{', '.join(roles)}; responsible={actor.reference}; executor={executor.reference}"
+            ),
             actor=actor.reference,
             swarm_id=swarm.id,
             work_id=work.id if work is not None else None,
@@ -7093,14 +7342,19 @@ class AgoraWorkspace:
                 raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
             if roles != record.roles:
                 raise ValueError(f"Prepared session roles no longer match assignments: {record.id}")
+            executor = self._find_actor(root, record.executor or record.actor)
+            assert_actor_identity_available(executor)
+            self._assert_current_actor_key(executor)
+            self._assert_represented_swarm_operational(root, executor)
+            self._assert_executor_for_roles(root, swarm.method, roles, actor, executor)
             work = self._load_work(swarm, record.work_id) if record.work_id is not None else None
             if work is not None:
                 self._assert_work_mutable(root, swarm, work)
             project = self._load_project_configuration(root)
             expected_runtime = (
-                actor.integration or project.integration,
-                actor.provider or project.provider,
-                actor.model or project.model,
+                executor.integration or project.integration,
+                executor.provider or project.provider,
+                executor.model or project.model,
             )
             if (record.integration, record.provider, record.model) != expected_runtime:
                 raise ValueError(
@@ -7141,7 +7395,7 @@ class AgoraWorkspace:
                 }
             )
             running = self._mark_session_running(authorized)
-        return self._run_session_process(root, running, actor, swarm, work)
+        return self._run_session_process(root, running, actor, executor, swarm, work)
 
     def _mark_session_running(self, record: SessionRecord) -> SessionRecord:
         running = SessionRecord(**{**record.__dict__, "status": "running", "exit_code": None})
@@ -7153,6 +7407,7 @@ class AgoraWorkspace:
         root: Path,
         running: SessionRecord,
         actor: ActorRecord,
+        executor: ActorRecord,
         swarm: SwarmRecord,
         work: WorkRecord | None,
     ) -> SessionRecord:
@@ -7161,8 +7416,11 @@ class AgoraWorkspace:
             **os.environ,
             "AGORA_PROJECT": str(root),
             "AGORA_SESSION": str(session_path / "SESSION.md"),
+            "AGORA_SESSION_ID": running.id,
+            "AGORA_PROGRESS": str(session_path / "PROGRESS.md"),
             "AGORA_CONTEXT": running.context_path,
             "AGORA_ACTOR": actor.reference,
+            "AGORA_EXECUTOR": executor.reference,
             "AGORA_SWARM": swarm.id,
         }
         if work is not None:
@@ -7234,7 +7492,8 @@ class AgoraWorkspace:
                 (
                     f"Session {status}; exit-code="
                     f"{exit_code if exit_code is not None else 'unavailable'}; "
-                    f"output-bytes={finished.output_bytes}; result-sha256={result_sha256}"
+                    f"output-bytes={finished.output_bytes}; executor={executor.reference}; "
+                    f"result-sha256={result_sha256}"
                 ),
                 actor=actor.reference,
                 swarm_id=swarm.id,
@@ -7296,6 +7555,56 @@ class AgoraWorkspace:
         root = self.project_root()
         return self._load_session(root / ".agora" / "sessions" / session_id)
 
+    @_locked_mutation("project")
+    def record_session_progress(
+        self, session_id: str, executor_id: str, summary: str
+    ) -> dict[str, str]:
+        """Append a bounded milestone without persisting provider reasoning."""
+        assert_slug(session_id, "Session id")
+        normalized = " ".join(summary.split())
+        if not normalized:
+            raise ValueError("Session progress summary cannot be empty")
+        if len(normalized) > 240:
+            raise ValueError("Session progress summary cannot exceed 240 characters")
+        if "|" in normalized:
+            raise ValueError("Session progress summary cannot contain a pipe character")
+        root = self.project_root()
+        record = self._load_session(root / ".agora" / "sessions" / session_id)
+        if record.status != "running":
+            raise ValueError(f"Session progress requires a running session: {record.id}")
+        executor = self._find_actor(root, executor_id)
+        expected_executor = record.executor or record.actor
+        if executor.reference != expected_executor:
+            raise PermissionError(
+                f"Only bound executor {expected_executor} may report progress for {record.id}"
+            )
+        progress_path = Path(record.path) / "PROGRESS.md"
+        self._validate_session_progress(record)
+        timestamp = self._timestamp()
+        append_entry(
+            progress_path,
+            f"- {timestamp} | executor={executor.reference} | {normalized}",
+        )
+        self._append_activity(
+            root,
+            "session.progress",
+            normalized,
+            actor=record.actor,
+            swarm_id=record.swarm_id,
+            work_id=record.work_id,
+            session_id=record.id,
+            source=progress_path,
+            timestamp=timestamp,
+        )
+        return {
+            "session": record.id,
+            "responsible": record.actor,
+            "executor": executor.reference,
+            "summary": normalized,
+            "timestamp": timestamp,
+            "path": str(progress_path),
+        }
+
     def diagnose_session(self, session_id: str) -> dict[str, object]:
         record = self.show_session(session_id)
         sessions = self.list_sessions()
@@ -7307,6 +7616,8 @@ class AgoraWorkspace:
             "launcher-error": "The configured runtime could not be launched.",
             "nonzero-exit": "The runtime exited without completing successfully.",
         }
+        recommended_timeout_seconds = record.timeout_seconds
+        recommended_max_output_bytes = record.max_output_bytes
         if recovered_by is not None:
             diagnosis = f"Recovered by session {recovered_by.id}."
             recommended_command = f"agora next --swarm {record.swarm_id}"
@@ -7316,17 +7627,23 @@ class AgoraWorkspace:
             )
             command = ["agora", "resume", "--session", record.id]
             if record.termination_reason == "output-limit":
+                recommended_max_output_bytes = min(
+                    record.max_output_bytes * 2, MAX_SESSION_MAX_OUTPUT_BYTES
+                )
                 command.extend(
                     [
                         "--max-output-bytes",
-                        str(min(record.max_output_bytes * 2, MAX_SESSION_MAX_OUTPUT_BYTES)),
+                        str(recommended_max_output_bytes),
                     ]
                 )
             elif record.termination_reason == "timeout":
+                recommended_timeout_seconds = min(
+                    record.timeout_seconds * 2, MAX_SESSION_TIMEOUT_SECONDS
+                )
                 command.extend(
                     [
                         "--timeout-seconds",
-                        str(min(record.timeout_seconds * 2, MAX_SESSION_TIMEOUT_SECONDS)),
+                        str(recommended_timeout_seconds),
                     ]
                 )
             recommended_command = shlex.join(command)
@@ -7353,6 +7670,8 @@ class AgoraWorkspace:
             "max_output_bytes": record.max_output_bytes,
             "output_percent": round((record.output_bytes / record.max_output_bytes) * 100, 1),
             "timeout_seconds": record.timeout_seconds,
+            "recommended_timeout_seconds": recommended_timeout_seconds,
+            "recommended_max_output_bytes": recommended_max_output_bytes,
             "recovered_by": recovered_by.id if recovered_by is not None else None,
             "retries": [
                 {
@@ -8074,7 +8393,7 @@ class AgoraWorkspace:
         task, _ = self._select_run_task(data)
         if task is None:
             raise ValueError("No eligible non-human operational action is available")
-        if task.actor_kind == "human":
+        if task.actor_kind == "human" and data.executor_id is None:
             raise ValueError(f"Next action requires human attention from {task.actor}")
         if task.actor is None:
             raise ValueError("No eligible non-human operational action is available")
@@ -8084,6 +8403,10 @@ class AgoraWorkspace:
             existing = self._load_session(
                 self.project_root() / ".agora" / "sessions" / task.session_id
             )
+            if data.executor_id is not None:
+                requested = self._find_actor(self.project_root(), data.executor_id).reference
+                if requested != (existing.executor or existing.actor):
+                    raise ValueError("A persisted session must resume with its bound executor")
             if existing.status == "prepared":
                 if data.runner is not None:
                     raise ValueError("A prepared session must launch with its bound runner")
@@ -8113,6 +8436,7 @@ class AgoraWorkspace:
             StartSessionInput(
                 id=session_id,
                 actor_id=task.actor,
+                executor_id=data.executor_id,
                 swarm_id=task.swarm_id or "",
                 work_id=task.work_id,
                 runner=data.runner,
@@ -8129,23 +8453,26 @@ class AgoraWorkspace:
             raise ValueError("No governed operational action is available")
         root = self.project_root()
         actor = self._find_actor(root, task.actor)
+        executor = self._find_actor(root, data.executor_id or actor.reference)
         swarm = self.show_swarm(task.swarm_id)
         work = self.show_work(task.swarm_id, task.work_id)
         project = self._load_project_configuration(root)
-        runtime_applicable = actor.kind != "human"
+        roles = self._actor_roles(swarm, actor.reference)
+        self._assert_executor_for_roles(root, swarm.method, roles, actor, executor)
+        runtime_applicable = executor.kind != "human"
         return RunPreview(
             task=task,
             work_title=work.title,
             work_description=work.description,
             method=swarm.method,
             actor_capabilities=actor.capabilities,
-            integration=(actor.integration or project.integration)
+            integration=(executor.integration or project.integration)
             if runtime_applicable
             else "not-applicable",
-            provider=(actor.provider or project.provider)
+            provider=(executor.provider or project.provider)
             if runtime_applicable
             else "not-applicable",
-            model=(actor.model or project.model) if runtime_applicable else "not-applicable",
+            model=(executor.model or project.model) if runtime_applicable else "not-applicable",
             authentication_required=actor.authentication_required,
             runtime_source=("override" if data.runner is not None else "configured")
             if runtime_applicable
@@ -8156,6 +8483,9 @@ class AgoraWorkspace:
             max_output_bytes=(data.max_output_bytes or DEFAULT_SESSION_MAX_OUTPUT_BYTES)
             if runtime_applicable
             else None,
+            executor=executor.reference,
+            executor_kind=executor.kind,
+            executor_capabilities=executor.capabilities,
         )
 
     def _select_run_task(
@@ -8183,7 +8513,10 @@ class AgoraWorkspace:
             if selected_reference is None or item.actor == selected_reference
         ]
         eligible = [
-            item for item in scoped if item.actor is not None and item.actor_kind != "human"
+            item
+            for item in scoped
+            if item.actor is not None
+            and (item.actor_kind != "human" or data.executor_id is not None)
         ]
         selected = eligible[0] if eligible else None
 
@@ -8373,6 +8706,7 @@ class AgoraWorkspace:
             StartSessionInput(
                 id=replacement_id,
                 actor_id=previous.actor,
+                executor_id=previous.executor or previous.actor,
                 swarm_id=previous.swarm_id,
                 work_id=previous.work_id,
                 runner=runner,
@@ -8421,8 +8755,8 @@ class AgoraWorkspace:
             self._assert_wip_limit(swarm, work, target, contract.wip_limits)
             gate_id = transition.gate
             if gate_id is not None:
-                self._assert_work_gate(work, contract.gates[gate_id], gate_id)
-        except ValueError as error:
+                self._assert_work_gate(root, work, contract.gates[gate_id], gate_id)
+        except (RuntimeError, ValueError) as error:
             blockers.append(str(error))
         return blockers
 
@@ -8497,6 +8831,7 @@ class AgoraWorkspace:
             "status-changes": 0,
             "sessions": 0,
             "session-results": 0,
+            "session-progress": 0,
             "lifecycle-actions": 0,
             "tool-runs": 0,
             "event-files": 0,
@@ -9560,6 +9895,27 @@ class AgoraWorkspace:
                         path,
                         f"Satisfied criteria are not declared: {', '.join(unknown_criteria)}",
                     )
+                unknown_status_criteria = sorted(
+                    set(work.criterion_statuses) - set(work.acceptance_criteria)
+                )
+                if unknown_status_criteria:
+                    issue(
+                        "work.criterion-statuses-invalid",
+                        path,
+                        "Criterion statuses are recorded for undeclared criteria: "
+                        + ", ".join(unknown_status_criteria),
+                    )
+                if contract is not None:
+                    for criterion_id, stages in work.criterion_statuses.items():
+                        unknown_stages = sorted(set(stages) - set(contract.criterion_stages))
+                        expected_prefix = contract.criterion_stages[: len(stages)]
+                        if unknown_stages or stages != expected_prefix:
+                            issue(
+                                "work.criterion-stage-invalid",
+                                path,
+                                f"Criterion {criterion_id} stages must be an ordered prefix of "
+                                f"{', '.join(contract.criterion_stages)}",
+                            )
                 artifact_path = Path(work.path) / "artifacts.md"
                 evidence_path = Path(work.path) / "evidence.md"
                 try:
@@ -10233,6 +10589,7 @@ class AgoraWorkspace:
                     f"Session id {session.id} does not match directory {path.parent.name}",
                 )
             session_actor = resolve_actor(session.actor, path)
+            session_executor = resolve_actor(session.executor or session.actor, path)
             if (
                 session_actor is not None
                 and session_actor.authentication_required
@@ -10274,6 +10631,26 @@ class AgoraWorkspace:
                         path,
                         f"Session records unknown roles: {', '.join(unknown_roles)}",
                     )
+                if session_actor is not None and session_executor is not None:
+                    assigned_roles = self._actor_roles(swarm, session_actor.reference)
+                    if session.status in {"prepared", "running"} and sorted(
+                        assigned_roles
+                    ) != sorted(session.roles):
+                        issue(
+                            "session.responsibility-invalid",
+                            path,
+                            "Session roles no longer match the responsible actor assignment",
+                        )
+                    try:
+                        self._assert_executor_for_roles(
+                            root,
+                            swarm.method,
+                            session.roles,
+                            session_actor,
+                            session_executor,
+                        )
+                    except (FileNotFoundError, ValueError) as error:
+                        issue("session.executor-invalid", path, str(error))
             if (
                 session.work_id is not None
                 and (
@@ -10309,6 +10686,14 @@ class AgoraWorkspace:
                     "session-summary.invalid",
                     summary_path,
                     lambda session=session: self._validate_session_summary(session),
+                )
+            progress_path = path.parent / "PROGRESS.md"
+            if progress_path.is_file():
+                inspect(
+                    "session-progress",
+                    "session-progress.invalid",
+                    progress_path,
+                    lambda session=session: self._validate_session_progress(session),
                 )
 
         for directory in _child_directories(root / ".agora" / "actions"):
@@ -10679,6 +11064,7 @@ class AgoraWorkspace:
                         expected = (
                             action.id,
                             action.actor,
+                            action.parameters.get("executor") or action.actor,
                             action.swarm_id,
                             action.work_id,
                             action.precondition_sha256,
@@ -10686,6 +11072,7 @@ class AgoraWorkspace:
                         actual = (
                             session.preparation_action_id,
                             session.actor,
+                            session.executor or session.actor,
                             session.swarm_id,
                             session.work_id,
                             session.context_sha256,
@@ -10704,7 +11091,11 @@ class AgoraWorkspace:
             ):
                 work = work_records[(action.swarm_id, action.work_id)]
                 if action.action == "criterion.satisfy":
-                    if action.parameters["criterion"] not in work.satisfied_criteria:
+                    criterion_id = action.parameters["criterion"]
+                    stage = action.parameters.get("stage")
+                    if (stage and stage not in work.criterion_statuses.get(criterion_id, [])) or (
+                        not stage and criterion_id not in work.satisfied_criteria
+                    ):
                         issue(
                             "lifecycle-action.criterion-mismatch",
                             Path(work.path) / "WORK.md",
@@ -11660,6 +12051,41 @@ class AgoraWorkspace:
         if actor.kind not in allowed_kinds:
             raise ValueError(f"Actor kind {actor.kind} is not allowed for role {role_id}")
 
+    @staticmethod
+    def _assert_executor_for_roles(
+        root: Path,
+        method: str,
+        role_ids: list[str],
+        responsible: ActorRecord,
+        executor: ActorRecord,
+    ) -> None:
+        if executor.reference == responsible.reference:
+            return
+        if executor.kind == "human":
+            raise ValueError(
+                "A distinct session executor must be an AI agent, service, automation, or swarm"
+            )
+        compatible: list[str] = []
+        requirements: dict[str, list[str]] = {}
+        for role_id in role_ids:
+            role_path = root / ".agora" / "methods" / method / "roles" / f"{role_id}.md"
+            if not role_path.is_file():
+                raise FileNotFoundError(f"Role {role_id} is not defined by method {method}")
+            role = read_markdown(role_path)
+            required = strings_attribute(role.attributes, "required-capabilities")
+            requirements[role_id] = required
+            if all(item in executor.capabilities for item in required):
+                compatible.append(role_id)
+        if not compatible:
+            details = "; ".join(
+                f"{role} requires {', '.join(required) or 'no capabilities'}"
+                for role, required in requirements.items()
+            )
+            raise ValueError(
+                f"Executor {executor.reference} is not capability-compatible with the responsible "
+                f"roles: {details}"
+            )
+
     def _assert_swarm_actor_delegation(
         self,
         root: Path,
@@ -12139,11 +12565,20 @@ class AgoraWorkspace:
             status_at=optional_string_attribute(document.attributes, "status-at"),
             delegation_id=optional_string_attribute(document.attributes, "delegation"),
             parent_work_ref=optional_string_attribute(document.attributes, "parent-work"),
+            criterion_statuses=(
+                string_list_record_attribute(document.attributes, "criterion-statuses")
+                if "criterion-statuses" in document.attributes
+                else {}
+            ),
         )
 
     def _render_work(self, work: WorkRecord) -> str:
         checklist = "\n".join(
-            f"- [{'x' if item in work.satisfied_criteria else ' '}] **{item}:** {description}"
+            (
+                f"- [{'x' if item in work.satisfied_criteria else ' '}] **{item}:** "
+                f"{description}; stages: "
+                f"{', '.join(work.criterion_statuses.get(item, [])) or 'none'}"
+            )
             for item, description in work.acceptance_criteria.items()
         )
         artifacts = "\n".join(f"- {item}" for item in work.required_artifacts) or "- none"
@@ -12159,6 +12594,7 @@ class AgoraWorkspace:
             "status-at": work.status_at,
             "acceptance-criteria": work.acceptance_criteria,
             "satisfied-criteria": work.satisfied_criteria,
+            "criterion-statuses": work.criterion_statuses,
             "required-artifacts": work.required_artifacts,
             "child-work-refs": work.child_work_refs,
             "budget-limits": work.budget_limits,
@@ -12561,6 +12997,7 @@ class AgoraWorkspace:
             session = StartSessionInput(
                 id=parameters["session"],
                 actor_id=actor.reference,
+                executor_id=parameters.get("executor") or actor.reference,
                 swarm_id=swarm.id,
                 work_id=work.id if work is not None else None,
                 runner=parameters["runner"] or None,
@@ -12743,7 +13180,7 @@ class AgoraWorkspace:
             "approval.delegate": {"delegation", "role", "target", "reason"},
             "approval.delegation.revoke": {"delegation", "reason"},
             "artifact.add": {"kind", "uri"},
-            "criterion.satisfy": {"criterion"},
+            "criterion.satisfy": {"criterion", "stage"},
             "delegation.accept": {"delegation"},
             "delegation.block": {"delegation", "reason"},
             "delegation.cancel": {"delegation", "reason"},
@@ -12777,6 +13214,7 @@ class AgoraWorkspace:
             "handoff.create": {"role", "from", "to", "reason"},
             "session.prepare": {
                 "session",
+                "executor",
                 "runner",
                 "timeout-seconds",
                 "max-output-bytes",
@@ -12808,14 +13246,18 @@ class AgoraWorkspace:
             and parameter_keys.issubset(expected_parameters)
         )
         legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
-        legacy_session_parameters = action == "session.prepare" and parameter_keys == {
-            "session",
-            "runner",
+        legacy_criterion_parameters = action == "criterion.satisfy" and parameter_keys == {
+            "criterion"
         }
+        legacy_session_parameters = action == "session.prepare" and parameter_keys in (
+            {"session", "runner"},
+            {"session", "runner", "timeout-seconds", "max-output-bytes"},
+        )
         if (
             parameter_keys != expected_parameters
             and not legacy_delegation_parameters
             and not legacy_approval_parameters
+            and not legacy_criterion_parameters
             and not legacy_session_parameters
         ):
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
@@ -12861,6 +13303,10 @@ class AgoraWorkspace:
                 )
         if action == "session.prepare":
             assert_slug(parameters["session"], "Lifecycle Action session id")
+            if parameters.get("executor") and ":" not in parameters["executor"]:
+                raise ValueError(f"Lifecycle Action session executor must be scoped: {path}")
+        if action == "criterion.satisfy" and parameters.get("stage"):
+            assert_slug(parameters["stage"], "Lifecycle Action criterion stage")
         if action == "swarm.assign":
             assert_slug(parameters["role"], "Lifecycle Action assignment role")
             if ":" not in parameters["target"]:
@@ -13135,6 +13581,7 @@ class AgoraWorkspace:
             "schema": "agora/session/v1",
             "id": record.id,
             "actor": record.actor,
+            "executor": record.executor or record.actor,
             "swarm": record.swarm_id,
             "work": record.work_id,
             "roles": record.roles,
@@ -13225,9 +13672,13 @@ class AgoraWorkspace:
             raise ValueError(f"Unfinished Session cannot have a termination reason: {path}")
         if status == "completed" and termination_reason is not None:
             raise ValueError(f"Completed Session cannot have a termination reason: {path}")
+        actor_reference = string_attribute(document.attributes, "actor")
         record = SessionRecord(
             id=string_attribute(document.attributes, "id"),
-            actor=string_attribute(document.attributes, "actor"),
+            actor=actor_reference,
+            executor=(
+                optional_string_attribute(document.attributes, "executor") or actor_reference
+            ),
             swarm_id=string_attribute(document.attributes, "swarm"),
             work_id=optional_string_attribute(document.attributes, "work"),
             roles=strings_attribute(document.attributes, "roles"),
@@ -13309,6 +13760,7 @@ class AgoraWorkspace:
                     "session": record.id,
                     "status": record.status,
                     "actor": record.actor,
+                    "executor": record.executor or record.actor,
                     "swarm": record.swarm_id,
                     "work": record.work_id,
                     "roles": record.roles,
@@ -13372,11 +13824,34 @@ class AgoraWorkspace:
         if hashlib.sha256(result_path.read_bytes()).hexdigest() != result_sha256:
             raise ValueError(f"Session summary result digest mismatch: {path}")
 
+    @staticmethod
+    def _validate_session_progress(record: SessionRecord) -> None:
+        path = Path(record.path) / "PROGRESS.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/session-progress/v1", path)
+        if string_attribute(document.attributes, "session") != record.id:
+            raise ValueError(f"Session progress id does not match SESSION.md: {path}")
+        expected_executor = record.executor or record.actor
+        for line in document.body.splitlines():
+            if not line.startswith("- "):
+                continue
+            match = re.fullmatch(
+                r"- (\S+) \| executor=([^\s|]+) \| (.+)",
+                line,
+            )
+            if match is None:
+                raise ValueError(f"Session progress entry is malformed: {path}")
+            if match.group(2) != expected_executor:
+                raise ValueError(f"Session progress executor does not match SESSION.md: {path}")
+            if len(match.group(3)) > 240:
+                raise ValueError(f"Session progress summary exceeds 240 characters: {path}")
+
     def _render_session_context(
         self,
         root: Path,
         project: ProjectConfiguration,
         actor: ActorRecord,
+        executor: ActorRecord,
         swarm: SwarmRecord,
         roles: list[str],
         work: WorkRecord | None,
@@ -13393,8 +13868,15 @@ class AgoraWorkspace:
             root, swarm.id, work.id if work is not None else None
         )
         represented_paths: list[Path] = []
-        if actor.represented_swarm is not None:
-            for represented_id in self._delegated_swarm_ids(root, actor.represented_swarm):
+        represented_roots = list(
+            dict.fromkeys(
+                item
+                for item in (actor.represented_swarm, executor.represented_swarm)
+                if item is not None
+            )
+        )
+        for represented_root_id in represented_roots:
+            for represented_id in self._delegated_swarm_ids(root, represented_root_id):
                 represented_root = root / ".agora" / "swarms" / represented_id
                 represented_paths.extend(
                     [
@@ -13449,10 +13931,15 @@ class AgoraWorkspace:
             f"## Project\n\n- Name: {project.project}\n- Root: `{root}`\n\n"
             f"## Runtime\n\n- Integration: `{integration}`\n- Provider: `{provider}`\n"
             f"- Model: `{model}`\n\n"
-            f"## Actor\n\n- Identity: `{actor.reference}`\n- Kind: `{actor.kind}`\n"
+            f"## Responsible actor\n\n- Identity: `{actor.reference}`\n- Kind: `{actor.kind}`\n"
             f"- Roles: {', '.join(f'`{role}`' for role in roles)}\n"
             f"- Capabilities: {', '.join(f'`{item}`' for item in actor.capabilities)}\n"
             f"- Represented swarm: `{actor.represented_swarm or 'none'}`\n\n"
+            f"## Executor\n\n- Identity: `{executor.reference}`\n- Kind: `{executor.kind}`\n"
+            f"- Capabilities: {', '.join(f'`{item}`' for item in executor.capabilities)}\n"
+            f"- Represented swarm: `{executor.represented_swarm or 'none'}`\n"
+            "- Authority: bounded by the responsible actor's assigned roles; execution does not "
+            "transfer ownership or approval authority.\n\n"
             f"## Swarm\n\n- Id: `{swarm.id}`\n- Method: `{swarm.method}`\n"
             f"- Objective: {swarm.objective}\n\n{work_context}"
             f"## Required reading\n\n{reading}\n\n"
@@ -13462,6 +13949,11 @@ class AgoraWorkspace:
             "3. Use the Agora CLI to persist state, artifacts, evidence, and material outcomes.\n"
             "4. Do not treat unrecorded conversation history as durable project state.\n"
             "5. Stop when policy, permissions, or a gate cannot be satisfied.\n"
+            "6. Act as the executor named above; do not claim ownership or human approval on "
+            "behalf of the responsible actor.\n"
+            "7. Report only meaningful execution milestones with `agora session progress "
+            '--session $AGORA_SESSION_ID --by $AGORA_EXECUTOR --summary "..."`; never report '
+            "chain-of-thought or private reasoning.\n"
         )
 
     def _related_delegation_paths(
@@ -13854,7 +14346,34 @@ class AgoraWorkspace:
                 f"WIP limit reached for {target_state}: limit={limit}, active={active}"
             )
 
-    def _assert_work_gate(self, work: WorkRecord, gate: GatePolicy, gate_id: str) -> None:
+    def _assert_work_gate(
+        self, root: Path, work: WorkRecord, gate: GatePolicy, gate_id: str
+    ) -> None:
+        assessment = self._work_gate_assessment(root, work, gate, gate_id)
+        if any(
+            (
+                assessment["unsatisfied"],
+                assessment["missing_artifacts"],
+                assessment["evidence_missing"],
+                assessment["missing_approvals"],
+                assessment["missing_evidence_types"],
+                assessment["git_issues"],
+            )
+        ):
+            raise ValueError(
+                f"Gate {gate_id} failed: "
+                f"unsatisfied=[{', '.join(assessment['unsatisfied'])}], "
+                f"required-criterion-stage={assessment['required_criterion_stage']}, "
+                f"missing-artifacts=[{', '.join(assessment['missing_artifacts'])}], "
+                f"successful-evidence={str(assessment['has_success']).lower()}, "
+                f"missing-evidence-types=[{', '.join(assessment['missing_evidence_types'])}], "
+                f"missing-approvals=[{', '.join(assessment['missing_approvals'])}], "
+                f"git=[{', '.join(assessment['git_issues'])}]"
+            )
+
+    def _work_gate_assessment(
+        self, root: Path, work: WorkRecord, gate: GatePolicy, gate_id: str
+    ) -> dict[str, Any]:
         waived_criteria, waived_artifacts, waived_evidence, waived_approvals = (
             self._gate_waiver_coverage(work, gate_id)
         )
@@ -13862,7 +14381,12 @@ class AgoraWorkspace:
             [
                 item
                 for item in work.acceptance_criteria
-                if item not in work.satisfied_criteria and item not in waived_criteria
+                if item not in work.satisfied_criteria
+                and (
+                    gate.required_criterion_stage is None
+                    or gate.required_criterion_stage not in work.criterion_statuses.get(item, [])
+                )
+                and item not in waived_criteria
             ]
             if gate.require_all_criteria
             else []
@@ -13885,13 +14409,51 @@ class AgoraWorkspace:
             for role in gate.required_approval_roles
             if role not in work.approval_roles and role not in waived_approvals
         ]
-        if unsatisfied or missing_artifacts or evidence_missing or missing_approvals:
-            raise ValueError(
-                f"Gate {gate_id} failed: unsatisfied=[{', '.join(unsatisfied)}], "
-                f"missing-artifacts=[{', '.join(missing_artifacts)}], "
-                f"successful-evidence={str(has_success).lower()}, "
-                f"missing-approvals=[{', '.join(missing_approvals)}]"
-            )
+        successful_evidence_types = {
+            type_ for type_, result, _ in self._work_evidence_rows(work) if result == "success"
+        }
+        missing_evidence_types = (
+            []
+            if waived_evidence
+            else [
+                type_
+                for type_ in gate.required_evidence_types
+                if type_ not in successful_evidence_types
+            ]
+        )
+        git_issues: list[str] = []
+        if gate.require_clean_git or gate.require_git_commit:
+            if not is_git_repository(root):
+                git_issues.append("project-is-not-a-git-repository")
+            else:
+                if gate.require_clean_git:
+                    changes = working_tree_changes(root)
+                    if changes:
+                        git_issues.append(f"working-tree-not-clean:{len(changes)}-change(s)")
+                if gate.require_git_commit:
+                    commit_references = [
+                        uri
+                        for kind, uri in self._work_artifact_rows(work)
+                        if kind == "git-commit" and uri.startswith("git://")
+                    ]
+                    associated = any(
+                        commit_exists(root, uri.removeprefix("git://"))
+                        and commit_is_ancestor(root, uri.removeprefix("git://"))
+                        for uri in commit_references
+                    )
+                    if not associated:
+                        git_issues.append("missing-ancestor-git-commit-artifact")
+        return {
+            "gate": gate_id,
+            "unsatisfied": unsatisfied,
+            "required_criterion_stage": gate.required_criterion_stage or "satisfied",
+            "missing_artifacts": missing_artifacts,
+            "has_success": has_success,
+            "evidence_missing": evidence_missing,
+            "missing_evidence_types": missing_evidence_types,
+            "missing_approvals": missing_approvals,
+            "git_issues": git_issues,
+        }
 
     @staticmethod
     def _required_artifacts_for_gate(work: WorkRecord, gate: GatePolicy) -> list[str]:

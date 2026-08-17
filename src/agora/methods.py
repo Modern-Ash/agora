@@ -7,6 +7,7 @@ from agora.markdown import (
     optional_string_attribute,
     read_markdown,
     string_attribute,
+    string_list_record_attribute,
     strings_attribute,
 )
 from agora.model import ACTOR_KINDS, GatePolicy, MethodContract, TransitionRule
@@ -27,6 +28,12 @@ def load_method_contract(root: Path) -> MethodContract:
     version, dependencies = pack_manifest_metadata(document.attributes, f"method/{method_id}")
     required_roles = strings_attribute(document.attributes, "required-roles")
     states = strings_attribute(document.attributes, "work-states")
+    criterion_stages = _string_list(document.attributes, "criterion-stages", default=["satisfied"])
+    criterion_stage_roles = (
+        string_list_record_attribute(document.attributes, "criterion-stage-roles")
+        if "criterion-stage-roles" in document.attributes
+        else {}
+    )
     terminal_state = string_attribute(document.attributes, "terminal-state")
     if not required_roles:
         raise ValueError(f"Method Pack {method_id} must define at least one required role")
@@ -38,6 +45,28 @@ def load_method_contract(root: Path) -> MethodContract:
         raise ValueError(
             f"Method Pack {method_id} terminal state {terminal_state} is not in work-states"
         )
+    if not criterion_stages or len(set(criterion_stages)) != len(criterion_stages):
+        raise ValueError(f"Method Pack {method_id} criterion-stages must be unique and non-empty")
+    for stage in criterion_stages:
+        assert_slug(stage, f"Method Pack {method_id} criterion stage")
+    unknown_role_stages = sorted(set(criterion_stage_roles) - set(criterion_stages))
+    if unknown_role_stages:
+        raise ValueError(
+            f"Method Pack {method_id} criterion-stage-roles uses unknown stages: "
+            + ", ".join(unknown_role_stages)
+        )
+    for stage, roles in criterion_stage_roles.items():
+        if not roles or len(set(roles)) != len(roles):
+            raise ValueError(
+                f"Method Pack {method_id} criterion stage {stage} roles must be unique "
+                "and non-empty"
+            )
+        unknown_roles = sorted(set(roles) - set(required_roles))
+        if unknown_roles:
+            raise ValueError(
+                f"Method Pack {method_id} criterion stage {stage} uses unknown roles: "
+                + ", ".join(unknown_roles)
+            )
 
     missing_roles = [
         role for role in required_roles if not (root / "roles" / f"{role}.md").is_file()
@@ -86,11 +115,22 @@ def load_method_contract(root: Path) -> MethodContract:
 
     gates = _load_gates(root)
     for gate in gates.values():
+        if (
+            gate.required_criterion_stage is not None
+            and gate.required_criterion_stage not in criterion_stages
+        ):
+            raise ValueError(
+                f"Gate {gate.id} requires unknown criterion stage: {gate.required_criterion_stage}"
+            )
         if gate.required_artifacts is not None:
             if len(set(gate.required_artifacts)) != len(gate.required_artifacts):
                 raise ValueError(f"Gate {gate.id} required-artifacts must be unique")
             for artifact in gate.required_artifacts:
                 assert_slug(artifact, f"Gate {gate.id} required artifact")
+        if len(set(gate.required_evidence_types)) != len(gate.required_evidence_types):
+            raise ValueError(f"Gate {gate.id} required-evidence-types must be unique")
+        for evidence_type in gate.required_evidence_types:
+            assert_slug(evidence_type, f"Gate {gate.id} required evidence type")
         unknown_approval_roles = [
             role for role in gate.required_approval_roles if role not in required_roles
         ]
@@ -118,6 +158,8 @@ def load_method_contract(root: Path) -> MethodContract:
         transitions=transitions,
         gates=gates,
         wip_limits=wip_limits,
+        criterion_stages=criterion_stages,
+        criterion_stage_roles=criterion_stage_roles,
     )
 
 
@@ -145,8 +187,16 @@ def _load_gates(root: Path) -> dict[str, GatePolicy]:
                 if "required-artifacts" in document.attributes
                 else None
             ),
+            required_criterion_stage=optional_string_attribute(
+                document.attributes, "required-criterion-stage"
+            ),
             require_successful_evidence=_boolean(
                 document.attributes, "require-successful-evidence", default=True
+            ),
+            require_clean_git=_boolean(document.attributes, "require-clean-git", default=False),
+            require_git_commit=_boolean(document.attributes, "require-git-commit", default=False),
+            required_evidence_types=_string_list(
+                document.attributes, "required-evidence-types", default=[]
             ),
             required_approval_roles=_string_list(
                 document.attributes, "required-approval-roles", default=[]

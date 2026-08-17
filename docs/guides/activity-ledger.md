@@ -35,6 +35,11 @@ Every captured JSON result contains the timestamp, event type, concise summary, 
 Tool Run, and a `repo://` source. Filters are read-only and can be combined. `--work` requires its
 owning `--swarm` so work identities stay unambiguous.
 
+Running actors may emit `session.progress` entries through `agora session progress`. These are
+bounded observable milestones linked to the session's `PROGRESS.md`, not streamed provider output or
+private reasoning. They let the CLI and Agora Studio explain current work without weakening the
+read-only Activity Ledger contract.
+
 For a project created before the Activity Ledger was installed, rebuild the chronology from its
 existing event, session, and Tool Run records:
 

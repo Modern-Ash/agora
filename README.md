@@ -126,12 +126,16 @@ Create and advance daily work without assembling long commands:
 ```bash
 agora work start
 agora continue
+agora work finish
 ```
 
 `work start` selects a ready swarm and compatible assigned actor, collects acceptance criteria one
-at a time, and writes only after review. `continue` previews and confirms one bounded agent action,
-or stops with human gate guidance. The declarative `work create`, `next`, and `run` commands remain
-the stable automation surface.
+at a time, and writes only after review. `continue` previews one bounded action. At a human boundary
+it lets the role holder act directly, use a capability-compatible AI executor without surrendering
+the role, or create a formal handoff when responsibility truly changes. `work finish` reviews
+criteria, artifacts, evidence, Git policy, and approvals before recording explicit acceptance and
+the Method Pack completion transition. The declarative commands remain the stable automation
+surface.
 
 ## Start a governed project
 
@@ -260,6 +264,7 @@ available for bounded automation:
 
 ```bash
 agora continue
+agora work finish
 agora next
 agora run --until-blocked --max-steps 10
 agora inbox

@@ -25,6 +25,17 @@ def ref_exists(cwd: Path, ref: str) -> bool:
     return _run_git(cwd, "show-ref", "--verify", "--quiet", ref, check=False).returncode == 0
 
 
+def commit_exists(cwd: Path, commit: str) -> bool:
+    return _run_git(cwd, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode == 0
+
+
+def commit_is_ancestor(cwd: Path, commit: str, descendant: str = "HEAD") -> bool:
+    return (
+        _run_git(cwd, "merge-base", "--is-ancestor", commit, descendant, check=False).returncode
+        == 0
+    )
+
+
 def path_is_ignored(cwd: Path, path: Path) -> bool:
     root = repository_root(cwd)
     try:

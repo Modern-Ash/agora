@@ -146,6 +146,13 @@ def main(
                     input_stream=input_stream,
                     output_stream=error_output,
                 )
+            elif namespace.command == "work" and namespace.work_command == "finish":
+                result = _run_work_finish_wizard(
+                    workspace,
+                    namespace,
+                    input_stream=input_stream,
+                    output_stream=error_output,
+                )
             elif namespace.command == "run" and namespace.until_blocked:
                 result = _dispatch(
                     workspace,
@@ -170,10 +177,12 @@ def _present_result(output: TextIO, args: argparse.Namespace, result: Any) -> No
     setup_guided = args.command == "setup" or (args.command == "adopt" and not args.check)
     continue_guided = args.command == "continue"
     work_start_guided = args.command == "work" and args.work_command == "start"
+    work_finish_guided = args.command == "work" and args.work_command == "finish"
     guided_dialogue_already_rendered = (
         (setup_guided and not args.non_interactive)
         or (continue_guided and not args.yes)
         or work_start_guided
+        or work_finish_guided
     )
     if is_human_terminal(output):
         if not guided_dialogue_already_rendered:
@@ -193,6 +202,7 @@ def _command_name(args: argparse.Namespace) -> str:
 def _run_input(args: argparse.Namespace) -> RunNextInput:
     return RunNextInput(
         actor_id=args.actor,
+        executor_id=getattr(args, "executor", None),
         swarm_id=args.swarm,
         work_id=args.work,
         session_id=args.id,
@@ -244,6 +254,7 @@ def _preview_activity_context(
     task = preview.task
     targets = ", ".join(task.target_states) or "governed action"
     capabilities = ", ".join(preview.actor_capabilities) or "none declared"
+    executor_capabilities = ", ".join(preview.executor_capabilities) or "none declared"
     authentication = (
         "signed authentication required"
         if preview.authentication_required
@@ -263,7 +274,8 @@ def _preview_activity_context(
     preflight = [
         "AGORA PLAN  Safe execution preview",
         f"  Work       {preview.work_title} [{reference}]",
-        f"  Actor      {task.actor} ({task.actor_kind}) as {task.role}",
+        f"  Responsible {task.actor} ({task.actor_kind}) as {task.role}",
+        f"  Executor   {preview.executor} ({preview.executor_kind})",
         f"  Authority  {capabilities} | {authentication}",
         f"  Runtime    {runtime} ({preview.runtime_source})",
     ]
@@ -277,7 +289,8 @@ def _preview_activity_context(
         preflight.append(f"  Blockers   {'; '.join(task.blockers)}")
     live_details = [
         f"Runtime active within {task.state} -> {targets}",
-        f"Boundary enforced for {task.role}: {capabilities}",
+        f"Executor capabilities: {executor_capabilities}",
+        f"Role boundary enforced for {task.role}: {capabilities}",
         "Watching durable artifacts, evidence, tool runs, and transitions",
     ]
     if preview.max_output_bytes is not None:
@@ -289,7 +302,10 @@ def _preview_activity_context(
         subject=preview.work_title,
         summary=preview.work_description,
         phase=f"Phase: {task.state} -> {targets}",
-        detail=f"{task.actor} ({task.role}) | {reference} | {preview.method}",
+        detail=(
+            f"responsible={task.actor} | executor={preview.executor} | "
+            f"{task.role} | {reference} | {preview.method}"
+        ),
         safety=f"Authority: {capabilities} | {authentication} | {runtime}",
         preflight=tuple(preflight),
         live_details=tuple(live_details),
@@ -339,6 +355,7 @@ def _activity_identity(record: Any) -> tuple[str, str, str]:
 def _activity_live_detail(type_: str, summary: str) -> str:
     labels = {
         "session.prepared": "Session prepared",
+        "session.progress": "Agent progress",
         "artifact.added": "Artifact registered",
         "evidence.added": "Evidence recorded",
         "work.criterion-satisfied": "Acceptance criterion recorded",
@@ -400,11 +417,19 @@ def _run_continue_wizard(
         task = next(item for item in tasks if item.id == selected)
 
     scope = f"{task.swarm_id}/{task.work_id}"
-    if task.actor_kind == "human" or task.actor is None:
+    executor_id = getattr(args, "executor", None)
+    diagnosis: dict[str, Any] | None = None
+    if task.kind == "retry-session" and task.session_id is not None:
+        failed_session = workspace.show_session(task.session_id)
+        diagnosis = workspace.diagnose_session(task.session_id)
+        if executor_id is None and failed_session.executor != failed_session.actor:
+            executor_id = failed_session.executor
+    if (task.actor_kind == "human" and executor_id is None) or task.actor is None:
         if interactive:
             wizard.heading(
                 "Human attention",
-                "Agora stopped before a human decision; no LLM session was launched.",
+                "The responsible role stays human. Choose how to continue without "
+                "losing that boundary.",
             )
             wizard.rows(
                 (
@@ -417,31 +442,173 @@ def _run_continue_wizard(
             )
             for blocker in task.blockers:
                 wizard.warning(blocker)
-            wizard.next_steps(
+            terminal_target = task.swarm_id is not None and workspace.is_terminal_work_target(
+                task.swarm_id, task.target_states
+            )
+            choices = [
+                Choice(
+                    "Review and finish this work"
+                    if terminal_target
+                    else "Handle this decision myself",
+                    "finish" if terminal_target else "human",
+                    "Review evidence, record approval, and close through the Method Pack."
+                    if terminal_target
+                    else "Stop here with the exact governed boundary and no LLM session.",
+                )
+            ]
+            executor_candidates: list[dict[str, str]] = []
+            if (
+                task.actor is not None
+                and task.role is not None
+                and task.swarm_id is not None
+                and not terminal_target
+            ):
+                executor_candidates = workspace.executor_candidates(task.swarm_id, task.role)
+                if executor_candidates:
+                    choices.append(
+                        Choice(
+                            "Ask an AI actor to assist",
+                            "assist",
+                            "The human keeps the role; a compatible actor executes "
+                            "this bounded step.",
+                        )
+                    )
+            handoff_candidates = (
+                workspace.handoff_candidates(task.swarm_id, task.role)
+                if task.actor is not None and task.role is not None and task.swarm_id is not None
+                else []
+            )
+            if handoff_candidates:
+                choices.append(
+                    Choice(
+                        "Transfer role responsibility",
+                        "handoff",
+                        "Create a durable handoff because the responsible actor should "
+                        "really change.",
+                    )
+                )
+            decision = wizard.choose("How should Agora proceed", choices)
+            if decision == "finish":
+                return _finish_work_interactively(
+                    workspace,
+                    swarm_id=task.swarm_id,
+                    work_id=task.work_id,
+                    actor_hint=task.actor,
+                    wizard=wizard,
+                )
+            if decision == "assist":
+                selected = wizard.choose(
+                    "Compatible AI executor",
+                    [
+                        Choice(
+                            f"{item['name']} ({item['kind']})",
+                            item["actor"],
+                            item["capabilities"],
+                        )
+                        for item in executor_candidates
+                    ],
+                )
+                executor_id = selected
+            elif decision == "handoff":
+                selected = wizard.choose(
+                    "New responsible actor",
+                    [
+                        Choice(
+                            f"{item['name']} ({item['kind']})",
+                            item["actor"],
+                            item["capabilities"],
+                        )
+                        for item in handoff_candidates
+                    ],
+                )
+                reason = wizard.text("Reason for transferring responsibility")
+                if not wizard.confirm("Create this formal role handoff", default=False):
+                    wizard.success("Handoff cancelled", "No project mutation was created.")
+                    return {"ok": True, "applied": False, "status": "cancelled"}
+                handoff = workspace.handoff_actor(
+                    HandoffActorInput(
+                        swarm_id=task.swarm_id,
+                        role_id=task.role,
+                        from_actor_id=task.actor,
+                        to_actor_id=selected,
+                        authorized_by=task.actor,
+                        reason=reason,
+                        work_id=task.work_id,
+                    )
+                )
+                wizard.success(
+                    "Responsibility transferred",
+                    f"{task.role} now belongs to {selected}; no LLM session was launched.",
+                )
+                wizard.next_steps(
+                    (("agora continue", "Inspect the next action under the new assignment."),)
+                )
+                return {
+                    "ok": True,
+                    "applied": True,
+                    "status": "handed-off",
+                    "handoff": handoff,
+                }
+            else:
+                wizard.next_steps(
+                    (
+                        (
+                            f"agora next --swarm {task.swarm_id}",
+                            "Review the exact gate obligations before recording the "
+                            "human decision.",
+                        ),
+                        (
+                            f"agora run --actor {task.actor} --swarm {task.swarm_id} "
+                            f"--work {task.work_id} --explain",
+                            "Inspect the role boundary without launching an LLM.",
+                        ),
+                    )
+                )
+                return {
+                    "ok": True,
+                    "applied": False,
+                    "status": "human-attention",
+                    "task": task,
+                }
+        else:
+            return {
+                "ok": True,
+                "applied": False,
+                "status": "human-attention",
+                "task": task,
+            }
+
+    timeout_seconds = None
+    max_output_bytes = None
+    if diagnosis is not None:
+        timeout_seconds = int(diagnosis["recommended_timeout_seconds"])
+        max_output_bytes = int(diagnosis["recommended_max_output_bytes"])
+        if interactive:
+            wizard.heading(
+                "Recover failed session",
+                "Agora preserves the failed record and creates a bounded retry.",
+            )
+            wizard.rows(
                 (
-                    (
-                        f"agora next --swarm {task.swarm_id}",
-                        "Review the exact gate obligations before recording the human decision.",
-                    ),
-                    (
-                        f"agora run --actor {task.actor} --swarm {task.swarm_id} "
-                        f"--work {task.work_id} --explain",
-                        "Inspect the human role boundary without launching an LLM.",
-                    ),
+                    ("Session", str(diagnosis["id"])),
+                    ("Cause", str(diagnosis["diagnosis"])),
+                    ("Previous output", _format_bytes(int(diagnosis["output_bytes"]))),
+                    ("Retry timeout", f"{timeout_seconds}s"),
+                    ("Retry output", _format_bytes(max_output_bytes)),
                 )
             )
-        return {
-            "ok": True,
-            "applied": False,
-            "status": "human-attention",
-            "task": task,
-        }
+            if not wizard.confirm("Retry with these reviewed bounds", default=True):
+                wizard.success("Retry cancelled", "The failed session remains unchanged.")
+                return {"ok": True, "applied": False, "status": "cancelled"}
 
     run_input = RunNextInput(
         actor_id=task.actor,
+        executor_id=executor_id,
         swarm_id=task.swarm_id,
         work_id=task.work_id,
         runner=args.runner,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
     )
     preview = workspace.preview_run(run_input)
     if interactive:
@@ -452,7 +619,8 @@ def _run_continue_wizard(
         wizard.rows(
             (
                 ("Work", scope),
-                ("Actor", f"{task.actor} ({task.role})"),
+                ("Responsible", f"{task.actor} ({task.role})"),
+                ("Executor", preview.executor or task.actor),
                 ("Phase", f"{task.state} -> {', '.join(task.target_states)}"),
                 ("Runtime", f"{preview.integration}/{preview.provider}/{preview.model}"),
                 ("Timeout", f"{preview.timeout_seconds}s"),
@@ -671,6 +839,210 @@ def _run_work_start_wizard(
         "status": "created",
         "work": work,
         "spec_registered": spec_uri is not None,
+    }
+
+
+def _run_work_finish_wizard(
+    workspace: AgoraWorkspace,
+    args: argparse.Namespace,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> dict[str, Any]:
+    if not input_stream.isatty():
+        raise ValueError(
+            "agora work finish needs an interactive terminal; use approval add and "
+            "work transition in automation"
+        )
+    wizard = Wizard(input_stream, output_stream, brand="Agora Finish")
+    candidates = [
+        item
+        for item in workspace.next_actions(swarm_id=args.swarm, limit=1000)
+        if item.work_id is not None
+        and item.swarm_id is not None
+        and workspace.is_terminal_work_target(item.swarm_id, item.target_states)
+        and (args.work is None or item.work_id == args.work)
+    ]
+    if not candidates:
+        raise ValueError("No work item is currently at a Method Pack completion boundary")
+    task = candidates[0]
+    if len(candidates) > 1:
+        selected = wizard.choose(
+            "Work to review",
+            [
+                Choice(
+                    f"{item.swarm_id}/{item.work_id}",
+                    item.id,
+                    f"{item.actor} ({item.role}) · {item.state} -> {', '.join(item.target_states)}",
+                )
+                for item in candidates
+            ],
+        )
+        task = next(item for item in candidates if item.id == selected)
+    return _finish_work_interactively(
+        workspace,
+        swarm_id=task.swarm_id or "",
+        work_id=task.work_id or "",
+        actor_hint=args.by or task.actor,
+        wizard=wizard,
+    )
+
+
+def _finish_work_interactively(
+    workspace: AgoraWorkspace,
+    *,
+    swarm_id: str,
+    work_id: str,
+    actor_hint: str | None,
+    wizard: Wizard,
+) -> dict[str, Any]:
+    readiness = workspace.completion_readiness(swarm_id, work_id)
+    gate = readiness["gate"]
+    wizard.heading(
+        "Human review",
+        "Agora will record approval only after you explicitly confirm the durable evidence.",
+    )
+    wizard.rows(
+        (
+            ("Work", f"{swarm_id}/{work_id}"),
+            ("Title", readiness["title"]),
+            ("Method", readiness["method"]),
+            ("Phase", f"{readiness['state']} -> {readiness['target_state']}"),
+            ("Gate", gate["gate"] or "none"),
+            ("Criterion stage", gate["required_criterion_stage"]),
+        )
+    )
+    review_rows = (
+        ("Criteria", gate["unsatisfied"]),
+        ("Artifacts", gate["missing_artifacts"]),
+        ("Evidence types", gate["missing_evidence_types"]),
+        ("Git", gate["git_issues"]),
+        ("Dependencies", readiness["blockers"]),
+    )
+    for label, missing in review_rows:
+        wizard.check(
+            label,
+            "ready" if not missing else "missing: " + ", ".join(missing),
+            ok=not missing,
+        )
+    wizard.check(
+        "Successful evidence",
+        "recorded" if not gate["evidence_missing"] else "missing",
+        ok=not gate["evidence_missing"],
+    )
+    if not readiness["ready_for_human_approval"]:
+        wizard.warning("Delivery evidence is incomplete; Agora did not record an approval.")
+        wizard.next_steps(
+            (
+                (
+                    f"agora next --swarm {swarm_id}",
+                    "Resolve the listed Method Pack obligations, then run agora work finish.",
+                ),
+            )
+        )
+        return {
+            "ok": True,
+            "applied": False,
+            "status": "evidence-incomplete",
+            "readiness": readiness,
+        }
+
+    approved_by: list[str] = []
+    for role_id in gate["missing_approvals"]:
+        role_candidates = sorted(
+            [
+                item
+                for item in workspace.action_candidates(swarm_id, "approval.add")
+                if item["role"] == role_id
+            ],
+            key=lambda item: (
+                item["actor"] != actor_hint if actor_hint is not None else False,
+                item["kind"] != "human",
+                item["actor"],
+            ),
+        )
+        if not role_candidates:
+            wizard.warning(
+                f"Approval {role_id} still needs its assigned actor; no approval was invented."
+            )
+            return {
+                "ok": True,
+                "applied": False,
+                "status": "approval-required",
+                "readiness": readiness,
+            }
+        candidate = role_candidates[0]
+        wizard.section(f"Approval: {role_id}")
+        wizard.rows((("Responsible", f"{candidate['actor']} ({candidate['kind']})"),))
+        if not wizard.confirm(
+            "I reviewed the implementation and evidence for this approval",
+            default=False,
+        ):
+            wizard.success("Review paused", "No approval or completion transition was recorded.")
+            return {"ok": True, "applied": False, "status": "review-paused"}
+        note = wizard.text("Approval note", default="Reviewed and accepted")
+        workspace.add_approval(
+            AddApprovalInput(
+                swarm_id=swarm_id,
+                work_id=work_id,
+                role_id=role_id,
+                actor_id=candidate["actor"],
+                note=note,
+            )
+        )
+        approved_by.append(candidate["actor"])
+
+    readiness = workspace.completion_readiness(swarm_id, work_id)
+    if not readiness["ready_to_complete"]:
+        wizard.warning("Approval was recorded, but the completion gate still needs attention.")
+        return {
+            "ok": True,
+            "applied": bool(approved_by),
+            "status": "completion-blocked",
+            "readiness": readiness,
+        }
+    transition_candidates = sorted(
+        [
+            item
+            for item in workspace.action_candidates(swarm_id, "work.transition")
+            if item["role"] in readiness["roles"]
+        ],
+        key=lambda item: (
+            item["actor"] != actor_hint if actor_hint is not None else False,
+            item["kind"] != "human",
+            item["actor"],
+        ),
+    )
+    if not transition_candidates:
+        raise PermissionError("No assigned actor can apply the Method Pack completion transition")
+    transition_actor = transition_candidates[0]["actor"]
+    if not wizard.confirm("Complete this work item", default=True):
+        wizard.success("Approval recorded", "The work remains at its review boundary.")
+        return {
+            "ok": True,
+            "applied": bool(approved_by),
+            "status": "approved",
+            "readiness": readiness,
+        }
+    completed = workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id=swarm_id,
+            work_id=work_id,
+            actor_id=transition_actor,
+            target_state=readiness["target_state"],
+        )
+    )
+    wizard.success(
+        "Work completed",
+        f"{swarm_id}/{work_id} reached {readiness['target_state']} through its Method Pack.",
+    )
+    wizard.next_steps((("agora continue", "Move to the next governed work item."),))
+    return {
+        "ok": True,
+        "applied": True,
+        "status": "completed",
+        "work": completed,
+        "approved_by": approved_by,
     }
 
 
@@ -1281,6 +1653,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "continue", help="Interactively inspect and perform the next governed action"
     )
     continue_action.add_argument("--actor")
+    continue_action.add_argument("--executor")
     continue_action.add_argument("--swarm")
     continue_action.add_argument("--work")
     continue_action.add_argument(
@@ -1297,6 +1670,7 @@ def _build_parser() -> argparse.ArgumentParser:
     continue_action.add_argument("--max-steps", type=int, default=20)
     run = commands.add_parser("run", help="Prepare or launch the next eligible agent action")
     run.add_argument("--actor")
+    run.add_argument("--executor")
     run.add_argument("--swarm")
     run.add_argument("--work")
     run.add_argument("--id")
@@ -1544,6 +1918,7 @@ def _build_parser() -> argparse.ArgumentParser:
     start = commands.add_parser("start", help="Prepare or launch a governed actor session")
     start.add_argument("--id")
     start.add_argument("--actor", required=True)
+    start.add_argument("--executor", help="AI, service, automation, or swarm executing for actor")
     start.add_argument("--swarm", required=True)
     start.add_argument("--work")
     start.add_argument("--runner", help="External command that executes the prepared session")
@@ -1891,6 +2266,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "start", help="Create governed work through an interactive reviewed workflow"
     )
     work_start.add_argument("--swarm", help="Ready swarm to use (otherwise choose interactively)")
+    work_finish = work.add_parser(
+        "finish", help="Review evidence, approve, and complete work interactively"
+    )
+    work_finish.add_argument("--swarm", help="Swarm to review")
+    work_finish.add_argument("--work", help="Work item to review")
+    work_finish.add_argument("--by", help="Responsible actor performing the review")
     work_create = work.add_parser("create", help="Create a work item")
     work_create.add_argument("--swarm", required=True)
     work_create.add_argument("--id", required=True)
@@ -1940,6 +2321,10 @@ def _build_parser() -> argparse.ArgumentParser:
     criterion.add_argument("--work", required=True)
     criterion.add_argument("--criterion", required=True)
     criterion.add_argument("--by", required=True)
+    criterion.add_argument(
+        "--stage",
+        help="Record one Method Pack criterion stage; omit to satisfy all stages",
+    )
     criterion_prepare = work.add_parser(
         "criterion-satisfy-prepare", help="Prepare a signed criterion satisfaction intent"
     )
@@ -1948,6 +2333,7 @@ def _build_parser() -> argparse.ArgumentParser:
     criterion_prepare.add_argument("--work", required=True)
     criterion_prepare.add_argument("--criterion", required=True)
     criterion_prepare.add_argument("--by", required=True)
+    criterion_prepare.add_argument("--stage")
 
     transition = work.add_parser("transition", help="Move work across an allowed method edge")
     transition.add_argument("--swarm", required=True)
@@ -2036,10 +2422,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "diagnose", help="Explain a session outcome and its safe recovery action"
     )
     session_diagnose.add_argument("--session", required=True)
+    session_progress = session.add_parser(
+        "progress", help="Record one concise execution milestone for a running session"
+    )
+    session_progress.add_argument("--session", required=True)
+    session_progress.add_argument("--by", required=True, help="Bound session executor")
+    session_progress.add_argument("--summary", required=True)
     session_prepare = session.add_parser("prepare", help="Prepare a signed session context intent")
     session_prepare.add_argument("--id", required=True, help="Lifecycle Action id")
     session_prepare.add_argument("--session", required=True)
     session_prepare.add_argument("--actor", required=True)
+    session_prepare.add_argument("--executor")
     session_prepare.add_argument("--swarm", required=True)
     session_prepare.add_argument("--work")
     session_prepare.add_argument("--runner")
@@ -2350,6 +2743,8 @@ def _dispatch(
         return workspace.show_session(args.session)
     if args.command == "session" and args.session_command == "diagnose":
         return workspace.diagnose_session(args.session)
+    if args.command == "session" and args.session_command == "progress":
+        return workspace.record_session_progress(args.session, args.by, args.summary)
     if args.command == "lock" and args.lock_command == "status":
         return workspace.lock_status(args.scope)
     if args.command == "upgrade":
@@ -2520,6 +2915,7 @@ def _dispatch(
             StartSessionInput(
                 id=args.id,
                 actor_id=args.actor,
+                executor_id=args.executor,
                 swarm_id=args.swarm,
                 work_id=args.work,
                 runner=args.runner,
@@ -2932,6 +3328,7 @@ def _dispatch(
         return workspace.satisfy_criterion(
             WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
             args.criterion,
+            args.stage,
         )
     if args.command == "work" and args.work_command == "criterion-satisfy-prepare":
         return workspace.prepare_satisfy_criterion(
@@ -2941,6 +3338,7 @@ def _dispatch(
                 work_id=args.work,
                 actor_id=args.by,
                 criterion_id=args.criterion,
+                stage=args.stage,
             )
         )
     if args.command == "work" and args.work_command == "transition":
@@ -3028,6 +3426,7 @@ def _dispatch(
                 session=StartSessionInput(
                     id=args.session,
                     actor_id=args.actor,
+                    executor_id=args.executor,
                     swarm_id=args.swarm,
                     work_id=args.work,
                     runner=args.runner,

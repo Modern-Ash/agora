@@ -81,6 +81,18 @@ def record_attribute(attributes: Attributes, key: str) -> dict[str, str]:
     return value
 
 
+def string_list_record_attribute(attributes: Attributes, key: str) -> dict[str, list[str]]:
+    value = attributes.get(key)
+    if not isinstance(value, dict) or any(
+        not isinstance(name, str)
+        or not isinstance(items, list)
+        or any(not isinstance(item, str) for item in items)
+        for name, items in value.items()
+    ):
+        raise ValueError(f"Expected string-array map attribute: {key}")
+    return value
+
+
 def optional_integer_record_attribute(attributes: Attributes, key: str) -> dict[str, int] | None:
     value = attributes.get(key)
     if value is None:

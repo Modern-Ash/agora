@@ -111,11 +111,11 @@ agora artifact add --swarm webhook-retries --work retry-contract \
   --kind spec --uri repo://docs/specs/webhook-retries.md --by spec-owner
 
 agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
-  --criterion retry-schedule --by spec-owner
+  --criterion retry-schedule --stage specified --by spec-owner
 agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
-  --criterion delivery-identity --by spec-owner
+  --criterion delivery-identity --stage specified --by spec-owner
 agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
-  --criterion terminal-behavior --by spec-owner
+  --criterion terminal-behavior --stage specified --by spec-owner
 
 agora work transition --swarm webhook-retries --work retry-contract \
   --to clarified --by spec-owner
@@ -175,6 +175,20 @@ agora work transition --swarm webhook-retries --work retry-contract \
 agora evidence add --swarm webhook-retries --work retry-contract \
   --type contract-test-run --result success \
   --artifact ci://webhook-service/builds/77/tests --by implementation-agent
+
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion retry-schedule --stage implemented --by implementation-agent
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion delivery-identity --stage implemented --by implementation-agent
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion terminal-behavior --stage implemented --by implementation-agent
+
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion retry-schedule --stage verified --by implementation-agent
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion delivery-identity --stage verified --by implementation-agent
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion terminal-behavior --stage verified --by implementation-agent
 ```
 
 Failed verification returns through the declared `verifying -> implementing` edge. Changing the
@@ -185,16 +199,19 @@ accepted specification instead requires a new draft rather than silently moving 
 The Spec Owner records final acceptance and owns the gated terminal transition:
 
 ```bash
-agora approval add --swarm webhook-retries --work retry-contract \
-  --role spec-owner --by spec-owner \
-  --note "Implementation verified against the clarified specification"
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion retry-schedule --stage accepted --by spec-owner
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion delivery-identity --stage accepted --by spec-owner
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion terminal-behavior --stage accepted --by spec-owner
 
-agora work transition --swarm webhook-retries --work retry-contract \
-  --to completed --by spec-owner
+agora work finish --swarm webhook-retries --work retry-contract --by spec-owner
 ```
 
-Completion requires every criterion to remain satisfied, all required artifacts to remain present,
-at least one successful evidence record, and Spec Owner approval.
+`work finish` reviews the completed criterion stages and durable evidence, then asks the Spec Owner
+to record the approval and terminal transition. The equivalent declarative `approval add` and
+`work transition` commands remain available for automation.
 
 ## What Agora models
 

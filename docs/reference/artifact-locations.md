@@ -103,6 +103,7 @@ Agora creates current collaboration state under `.agora/`. Common records includ
 .agora/delegations/<delegation>/DELEGATION.md
 .agora/sessions/<session>/SESSION.md
 .agora/sessions/<session>/CONTEXT.md
+.agora/sessions/<session>/PROGRESS.md
 .agora/sessions/<session>/RESULT.md
 .agora/swarms/<swarm>/work/<work>/usage/<usage>/USAGE.md
 .agora/tool-runs/<run>/RUN.md
