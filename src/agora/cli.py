@@ -1947,6 +1947,12 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_show = tool.add_parser("show", help="Show an installed project Tool Pack")
     tool_show.add_argument("--tool", required=True)
 
+    tool_credentials = tool.add_parser(
+        "credentials",
+        help="Report whether a Tool Pack can authenticate right now, and how (never a value)",
+    )
+    tool_credentials.add_argument("--tool", required=True)
+
     tool.add_parser("list", help="List installed project Tool Packs")
 
     tool_adapter = tool.add_parser(
@@ -2942,6 +2948,8 @@ def _dispatch(
         )
     if args.command == "tool" and args.tool_command == "show":
         return workspace.show_tool(args.tool)
+    if args.command == "tool" and args.tool_command == "credentials":
+        return workspace.resolve_tool_credentials(args.tool)
     if args.command == "tool" and args.tool_command == "list":
         return workspace.list_tools()
     if (

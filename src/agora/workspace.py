@@ -28,6 +28,7 @@ from agora.coordination import (
     load_coordination_policy,
     render_coordination_policy,
 )
+from agora.credentials import CredentialChainResolution, resolve_credential_chain
 from agora.filesystem import (
     agora_home,
     append_entry,
@@ -2825,6 +2826,18 @@ class AgoraWorkspace:
         path = self.project_root() / ".agora" / "tools" / tool_id
         contract = load_tool_contract(path)
         return self._tool_pack_record(contract, "project", path)
+
+    def resolve_tool_credentials(self, tool_id: str) -> CredentialChainResolution:
+        """Report whether this adapter can authenticate right now, and how.
+
+        Never reads, stores, or returns a credential value — only whether a
+        declared source (CLI session, env var presence, keychain, workload
+        identity) currently appears satisfied.
+        """
+        assert_slug(tool_id, "Tool id")
+        path = self.project_root() / ".agora" / "tools" / tool_id
+        contract = load_tool_contract(path)
+        return resolve_credential_chain(contract)
 
     def list_methods(self) -> list[MethodPackRecord]:
         method_root = self.project_root() / ".agora" / "methods"
@@ -14039,6 +14052,7 @@ class AgoraWorkspace:
             scope=scope,
             path=str(path),
             operations=sorted(contract.operations),
+            credential_sources=list(contract.credential_sources),
             provider=contract.provider,
             transport=contract.transport,
             implements=contract.implements,

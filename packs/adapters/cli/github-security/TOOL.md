@@ -9,6 +9,7 @@ executable: "gh"
 version-command: ["--version"]
 minimum-runtime-version: "2.82.1"
 authentication-reference: "github-cli-security-profile"
+credential-sources: ["cli-session", "env"]
 provider: "github"
 transport: "cli"
 implements: "security-scanning"

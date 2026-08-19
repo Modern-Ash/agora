@@ -181,6 +181,42 @@ Do not pass tokens, cookies, private keys, or connection strings through `--inpu
 are deliberately persisted. `authentication-reference` is only a non-secret label such as
 `jira-cli-work-profile`.
 
+## Credential Source Chain
+
+Every Tool Pack adapter declares an ordered `credential-sources` list in its `TOOL.md` front
+matter, chosen from four sources:
+
+| Source | Meaning |
+| --- | --- |
+| `cli-session` | The provider's own CLI is already logged in (`gh auth login`, `acli`/`twg` site selection, `gcloud auth login`) |
+| `env` | A single, provider-derived environment variable — `AGORA_<PROVIDER>_TOKEN` — is set |
+| `keychain` | The OS keychain holds the credential (not locally inspectable) |
+| `workload-identity` | Ambient identity — an IAM role or OIDC token — applies (not locally inspectable) |
+
+Agora resolves this chain the same way for every provider — it is the one standard connection
+pattern across GitHub, GitLab, Jira, Confluence, Terraform, AWS, and GCP — but it never reads,
+stores, transmits, or displays the credential value itself. It only reports which source, if any,
+currently appears satisfied:
+
+```bash
+agora tool credentials --tool jira
+```
+
+```json
+{
+  "tool_id": "jira",
+  "resolved_source": "cli-session",
+  "checks": [
+    {"source": "cli-session", "satisfied": true, "detail": "acli is on PATH; session state is not inspected"}
+  ]
+}
+```
+
+Actual authentication is always performed by the provider's own CLI, environment, keychain, or
+workload identity at `--launch` time — Agora only wraps `contract.executable` in a subprocess and
+inherits the caller's environment. Adding a new adapter means declaring its `credential-sources` in
+`TOOL.md`; it never means adding provider-specific credential-handling code to Agora's core.
+
 ## Two sources of truth
 
 Agora owns actor identity, role assignment, lifecycle gates, work evidence, approvals, tool-run

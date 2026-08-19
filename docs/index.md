@@ -14,7 +14,7 @@ agora init
 ```
 
 - [Get started](getting-started.md)
-- [Adopt into an existing project](guides/existing-project.md)
+- [Adopt into an existing project](adoption.md#adopt-an-existing-codebase)
 - [Architecture](architecture.md)
 - [Full documentation](README.md)
 - [Roadmap](roadmap.md)

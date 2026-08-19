@@ -9,6 +9,7 @@ executable: "twg"
 version-command: ["-v"]
 minimum-runtime-version: "1.2.5"
 authentication-reference: "twg-oauth-profile-or-environment"
+credential-sources: ["cli-session"]
 provider: "atlassian-confluence"
 transport: "cli"
 implements: "knowledge-base"

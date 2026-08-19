@@ -9,6 +9,7 @@ executable: "aws"
 version-command: ["--version"]
 minimum-runtime-version: "2.0.0"
 authentication-reference: "aws-cli-profile-or-workload-identity"
+credential-sources: ["cli-session", "env", "workload-identity"]
 provider: "aws"
 transport: "cli"
 implements: "cloud-infrastructure"

@@ -382,6 +382,7 @@ class ToolContract:
     executable: str
     authentication_reference: str | None
     operations: dict[str, ToolOperation]
+    credential_sources: list[str] = field(default_factory=lambda: ["cli-session"])
     provider: str | None = None
     transport: str | None = None
     implements: str | None = None
@@ -403,6 +404,7 @@ class ToolPackRecord:
     scope: Literal["user", "project"]
     path: str
     operations: list[str]
+    credential_sources: list[str] = field(default_factory=lambda: ["cli-session"])
     provider: str | None = None
     transport: str | None = None
     implements: str | None = None
