@@ -12,7 +12,7 @@ uv run python samples/gitlab-merge-requests-cli/run.py
 
 The sample prepares commands but does not launch them. Live execution requires GitLab CLI 1.109.0
 or newer and an externally authenticated profile or environment. Add `--launch` only after
-`agora tool doctor --tool gitlab-merge-requests` reports a compatible runtime.
+`agora tool adapter list --check` reports compatible adapter runtimes.
 
 The adapter implements `view`, `create`, `comment`, and `checks`. It deliberately omits list,
 approval, request-changes, and merge operations where native `glab` commands cannot preserve every

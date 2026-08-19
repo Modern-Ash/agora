@@ -12,7 +12,7 @@ uv run python samples/gitlab-ci-cli/run.py
 
 The sample prepares commands but does not launch them. Live execution requires GitLab CLI 1.109.0
 or newer and an externally authenticated profile or environment. Add `--launch` only after
-`agora tool doctor --tool gitlab-ci` reports a compatible runtime.
+`agora tool adapter list --check` reports compatible adapter runtimes.
 
 The adapter implements `list-runs`, `view-run`, and `cancel-run`. It requests JSON and bounded list
 results, includes job details without CI/CD variables or logs, and keeps cancellation under the

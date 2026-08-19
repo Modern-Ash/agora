@@ -13,7 +13,7 @@ uv run python samples/gitlab-issues-cli/run.py
 
 The sample prepares commands but does not launch them. Live execution requires GitLab CLI 1.109.0
 or newer and an externally authenticated profile or environment. Add `--launch` only after
-`agora tool doctor --tool gitlab-issues` reports a compatible runtime.
+`agora tool adapter list --check` reports compatible adapter runtimes.
 
 Use a full issue URL to target a project other than the repository selected by `glab`. The adapter
 implements `search`, `view`, `comment`, and `transition`; use a reviewed team wrapper when governed

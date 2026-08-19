@@ -209,6 +209,21 @@ events. A non-zero exit is recorded before the CLI reports failure. Exit code `1
 timeout and `125` denotes an output limit violation. Both limits and the selected environment are
 copied into `RUN.md` and included in signed actor authorizations.
 
+List runs or inspect one run together with its typed captured result:
+
+```bash
+agora tool runs
+agora tool result --run inspect-agora-42
+```
+
+A prepared run has a `null` result. A completed or failed run returns its bounded `stdout`, `stderr`,
+exit code, result kind, and durable result path.
+
+Inspection and full workspace validation bind the result back to the run. The `run`, `status`,
+`exit-code`, and `result-kind` front matter values must match `RUN.md`; a mismatch is rejected as
+`tool-result.invalid`. This prevents a copied or manually edited result from being attributed to a
+different governed invocation.
+
 These portable direct-process limits do not restrict filesystem, network, syscalls, credentials,
 memory, CPU, or detached descendants. Use a restricted external runner when those boundaries are
 required. See [Portable Tool execution boundaries](../guides/execution-boundaries.md).

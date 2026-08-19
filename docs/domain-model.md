@@ -249,6 +249,16 @@ environment, and input map. It may remain `prepared` for external delegation or 
 `RESULT.md` captures status, output, and exit code. The selected environment is included in signed
 launch authorization and revalidated immediately before execution.
 
+A **Tool Result** is the typed read model of a terminal `RESULT.md`. It contains the governing run
+id, `completed` or `failed` status, exit code, optional result kind, bounded standard output,
+bounded standard error, and durable path. Loading it verifies that run id, status, exit code, and
+result kind match `RUN.md`; a mismatch is a `tool-result.invalid` validation issue. A prepared Tool
+Run has no result and is represented by `result: null` through `agora tool result --run <id>`.
+
+Tool output is evidence about the external operation, not an automatic Agora lifecycle mutation.
+Consumers may parse a declared JSON result, register an artifact reference, or record successful
+evidence explicitly. The external provider remains authoritative for its own state.
+
 The bundled **Work Management Tool Pack** separates `issue.read`, `issue.write`, and
 `issue.transition` authority behind a stable `workctl` interface. External ticket state and Agora
 work state remain independent records; synchronization requires explicit governed operations.

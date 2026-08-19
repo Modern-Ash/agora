@@ -20,6 +20,7 @@ PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9-]*)\}")
 CONVENTIONAL_COMMIT_HEADER = re.compile(r"[A-Za-z][A-Za-z0-9-]*(?:\([^()\r\n]+\))?!?: \S.*")
 SUPPORTED_INPUT_RULES = {"conventional-commits/v1.0.0"}
 RUNTIME_VERSION_PATTERN = re.compile(r"(?<!\d)(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?!\d)")
+CREDENTIAL_SOURCES = ("cli-session", "env", "keychain", "workload-identity")
 DEFAULT_TOOL_TIMEOUT_SECONDS = 300
 MAX_TOOL_TIMEOUT_SECONDS = 3600
 DEFAULT_TOOL_MAX_OUTPUT_BYTES = 1048576
@@ -41,6 +42,7 @@ def load_tool_contract(root: Path) -> ToolContract:
     authentication_reference = optional_string_attribute(
         document.attributes, "authentication-reference"
     )
+    credential_sources = _credential_sources_attribute(document.attributes)
     provider = optional_string_attribute(document.attributes, "provider")
     transport = optional_string_attribute(document.attributes, "transport")
     implements = optional_string_attribute(document.attributes, "implements")
@@ -117,6 +119,7 @@ def load_tool_contract(root: Path) -> ToolContract:
         category=category,
         executable=executable,
         authentication_reference=authentication_reference,
+        credential_sources=credential_sources,
         operations=operations,
         provider=provider,
         transport=transport,
@@ -127,6 +130,18 @@ def load_tool_contract(root: Path) -> ToolContract:
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,
     )
+
+
+def _credential_sources_attribute(attributes: dict[str, object]) -> list[str]:
+    value = attributes.get("credential-sources", [CREDENTIAL_SOURCES[0]])
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+        raise ValueError("Tool credential-sources must be a non-empty string array")
+    if len(set(value)) != len(value):
+        raise ValueError("Tool credential-sources must not repeat a source")
+    unsupported = sorted(set(value) - set(CREDENTIAL_SOURCES))
+    if unsupported:
+        raise ValueError(f"Unsupported Tool credential source: {', '.join(unsupported)}")
+    return list(value)
 
 
 def _bounded_positive_integer_attribute(

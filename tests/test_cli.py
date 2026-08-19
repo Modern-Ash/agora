@@ -238,6 +238,64 @@ def test_tool_sync_dispatches_an_explicit_read_only_launch(tmp_path: Path, monke
     assert captured[0].inputs == {"project": "example/agora"}
 
 
+def test_shows_captured_tool_result_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agora.cli.AgoraWorkspace.show_tool_run",
+        lambda workspace, run_id: {
+            "run": run_id,
+            "status": "completed",
+            "stdout": '{"items": [{"key": "AGORA-42"}]}',
+        },
+    )
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert (
+        main(
+            ["tool", "result", "--run", "jira-search"],
+            cwd=tmp_path,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
+    payload = json.loads(output.getvalue())
+    assert payload["run"] == "jira-search"
+    assert "AGORA-42" in payload["stdout"]
+    assert errors.getvalue() == ""
+
+
+def test_reports_tool_credential_resolution_without_a_secret_value(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "agora.cli.AgoraWorkspace.resolve_tool_credentials",
+        lambda workspace, tool_id: {
+            "tool_id": tool_id,
+            "resolved_source": "env",
+            "checks": [{"source": "env", "satisfied": True, "detail": "AGORA_JIRA_TOKEN is set"}],
+        },
+    )
+    output = io.StringIO()
+    errors = io.StringIO()
+
+    assert (
+        main(
+            ["tool", "credentials", "--tool", "jira"],
+            cwd=tmp_path,
+            stdout=output,
+            stderr=errors,
+        )
+        == 0
+    )
+
+    payload = json.loads(output.getvalue())
+    assert payload["tool_id"] == "jira"
+    assert payload["resolved_source"] == "env"
+    assert errors.getvalue() == ""
+
+
 def test_filters_cli_adapters_by_checked_runtime_compatibility(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(

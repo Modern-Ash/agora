@@ -47,7 +47,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), clone Ago
 CLI in an isolated tool environment:
 
 ```bash
-git clone https://github.com/fabianaguero/agora.git
+git clone https://github.com/Modern-Ash/agora.git
 cd agora
 uv tool install .
 agora --help
@@ -71,7 +71,7 @@ from the checkout by the editable installation.
 Install development dependencies and run the CLI through uv:
 
 ```bash
-git clone https://github.com/fabianaguero/agora.git
+git clone https://github.com/Modern-Ash/agora.git
 cd agora
 uv sync --extra dev
 uv run agora --help

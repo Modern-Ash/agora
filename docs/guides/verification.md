@@ -97,6 +97,10 @@ The runner continues through independent failures and returns status `1` if any 
 The sample matrix covers human and AI actors, recursive swarms, delegation, handoffs, interruptions,
 signed remote registry distribution, custom methods, tools, operational queries, and Codex, Claude,
 and generic adapters. It prepares contexts but does not launch an LLM or make provider API requests.
+Some integration samples launch deterministic local child processes so the normal executable,
+timeout, output capture, and result-inspection paths are exercised. In particular, `jira-cli`
+places an ACLI-compatible simulator on a temporary `PATH`; it never contacts Jira Cloud and its
+temporary runtime is not installed for the user.
 
 Use quiet output in CI:
 
@@ -139,6 +143,26 @@ environment job receives only `id-token: write`, downloads those exact files, an
 PyPI Trusted Publishing. Checkout credentials remain disabled and every action is pinned to an
 immutable SHA. The PyPI project must authorize this repository, workflow, and `pypi` environment as
 its trusted publisher before the first tag is released.
+
+The trusted publisher identity is an exact tuple, not a repository URL redirect. For this project it
+must match:
+
+| Claim | Expected value |
+| --- | --- |
+| GitHub owner | `Modern-Ash` |
+| Repository | `agora` |
+| Workflow | `release.yml` |
+| Environment | `pypi` |
+
+After transferring the repository between owners or organizations, update the publisher in the PyPI
+project settings before retrying the failed environment job. A valid GitHub OIDC token from the new
+owner is rejected with `invalid-publisher` while PyPI still stores the old owner or repository. The
+debug claims emitted by the publishing action should be compared with the intended configuration;
+they should not be copied blindly when an unexpected workflow, ref, or environment appears.
+
+Updating the homepage or repository URL on PyPI does not update the trusted publisher identity.
+Those are separate settings. No API token is needed when the exact trusted publisher is configured,
+and a failed publish can be retried from the existing verified release run after correcting PyPI.
 
 After publication, a separate unprivileged Python 3.11 job installs the exact tagged version from
 the public PyPI index. It allows bounded retries for index propagation, then runs `agora quickstart`

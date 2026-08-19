@@ -9,6 +9,7 @@ executable: "terraform"
 version-command: ["version"]
 minimum-runtime-version: "1.5.0"
 authentication-reference: "terraform-backend-and-provider-profile"
+credential-sources: ["env", "workload-identity"]
 provider: "hashicorp"
 transport: "cli"
 implements: "cloud-infrastructure"

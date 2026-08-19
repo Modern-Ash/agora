@@ -475,6 +475,51 @@ def test_rejects_incomplete_runtime_version_metadata(tmp_path: Path) -> None:
         load_tool_contract(tool)
 
 
+def test_defaults_to_cli_session_when_credential_sources_is_absent() -> None:
+    contract = load_tool_contract(packs_root() / "tools" / "repository")
+
+    assert contract.credential_sources == ["cli-session"]
+
+
+def test_loads_the_declared_credential_source_chain() -> None:
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "jira")
+
+    assert contract.credential_sources == ["cli-session"]
+
+    contract = load_tool_contract(packs_root() / "adapters" / "cli" / "terraform")
+
+    assert contract.credential_sources == ["env", "workload-identity"]
+
+
+def test_rejects_an_unsupported_credential_source(tmp_path: Path) -> None:
+    source = packs_root() / "adapters" / "cli" / "jira"
+    tool = tmp_path / "jira"
+    shutil.copytree(source, tool)
+    manifest = tool / "TOOL.md"
+    contents = manifest.read_text(encoding="utf-8").replace(
+        'credential-sources: ["cli-session"]', 'credential-sources: ["carrier-pigeon"]'
+    )
+    manifest.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported Tool credential source"):
+        load_tool_contract(tool)
+
+
+def test_rejects_a_repeated_credential_source(tmp_path: Path) -> None:
+    source = packs_root() / "adapters" / "cli" / "jira"
+    tool = tmp_path / "jira"
+    shutil.copytree(source, tool)
+    manifest = tool / "TOOL.md"
+    contents = manifest.read_text(encoding="utf-8").replace(
+        'credential-sources: ["cli-session"]',
+        'credential-sources: ["cli-session", "cli-session"]',
+    )
+    manifest.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must not repeat a source"):
+        load_tool_contract(tool)
+
+
 def test_rejects_an_adapter_that_weakens_the_implemented_contract(tmp_path: Path) -> None:
     adapter = load_tool_contract(packs_root() / "adapters" / "cli" / "github-actions")
     implemented = load_tool_contract(packs_root() / "tools" / "ci-cd")

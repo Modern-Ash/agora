@@ -1947,6 +1947,12 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_show = tool.add_parser("show", help="Show an installed project Tool Pack")
     tool_show.add_argument("--tool", required=True)
 
+    tool_credentials = tool.add_parser(
+        "credentials",
+        help="Report whether a Tool Pack can authenticate right now, and how (never a value)",
+    )
+    tool_credentials.add_argument("--tool", required=True)
+
     tool.add_parser("list", help="List installed project Tool Packs")
 
     tool_adapter = tool.add_parser(
@@ -1971,6 +1977,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     tool_runs = tool.add_parser("runs", help="List governed tool runs")
     tool_runs.add_argument("--status")
+
+    tool_result = tool.add_parser(
+        "result", help="Show one Tool Run and its captured provider output"
+    )
+    tool_result.add_argument("--run", required=True)
 
     tool_authorization = tool.add_parser(
         "authorization", help="Export the canonical payload for a prepared Tool Run"
@@ -2937,6 +2948,8 @@ def _dispatch(
         )
     if args.command == "tool" and args.tool_command == "show":
         return workspace.show_tool(args.tool)
+    if args.command == "tool" and args.tool_command == "credentials":
+        return workspace.resolve_tool_credentials(args.tool)
     if args.command == "tool" and args.tool_command == "list":
         return workspace.list_tools()
     if (
@@ -2963,6 +2976,8 @@ def _dispatch(
         )
     if args.command == "tool" and args.tool_command == "runs":
         return workspace.list_tool_runs(args.status)
+    if args.command == "tool" and args.tool_command == "result":
+        return workspace.show_tool_run(args.run)
     if args.command == "tool" and args.tool_command == "authorization":
         return workspace.prepare_tool_authorization(
             PrepareToolAuthorizationInput(

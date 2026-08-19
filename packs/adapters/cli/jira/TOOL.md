@@ -9,6 +9,7 @@ executable: "acli"
 version-command: ["--version"]
 minimum-runtime-version: "1.3.0"
 authentication-reference: "atlassian-cli-jira-site"
+credential-sources: ["cli-session"]
 provider: "atlassian"
 transport: "cli"
 implements: "work-management"

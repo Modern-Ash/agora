@@ -9,6 +9,7 @@ executable: "gcloud"
 version-command: ["version"]
 minimum-runtime-version: "300.0.0"
 authentication-reference: "gcloud-active-account-or-workload-identity"
+credential-sources: ["cli-session", "workload-identity"]
 provider: "google-cloud"
 transport: "cli"
 implements: "cloud-infrastructure"

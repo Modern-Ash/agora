@@ -382,6 +382,7 @@ class ToolContract:
     executable: str
     authentication_reference: str | None
     operations: dict[str, ToolOperation]
+    credential_sources: list[str] = field(default_factory=lambda: ["cli-session"])
     provider: str | None = None
     transport: str | None = None
     implements: str | None = None
@@ -403,6 +404,7 @@ class ToolPackRecord:
     scope: Literal["user", "project"]
     path: str
     operations: list[str]
+    credential_sources: list[str] = field(default_factory=lambda: ["cli-session"])
     provider: str | None = None
     transport: str | None = None
     implements: str | None = None
@@ -825,6 +827,23 @@ class ToolRunRecord:
     authorization_signature: str | None = None
     timeout_seconds: int = 300
     max_output_bytes: int = 1048576
+
+
+@dataclass(frozen=True)
+class ToolResultRecord:
+    run_id: str
+    status: Literal["completed", "failed"]
+    exit_code: int
+    result_kind: str | None
+    stdout: str
+    stderr: str
+    path: str
+
+
+@dataclass(frozen=True)
+class ToolRunInspection:
+    run: ToolRunRecord
+    result: ToolResultRecord | None
 
 
 @dataclass(frozen=True)

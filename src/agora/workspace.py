@@ -28,12 +28,14 @@ from agora.coordination import (
     load_coordination_policy,
     render_coordination_policy,
 )
+from agora.credentials import CredentialChainResolution, resolve_credential_chain
 from agora.filesystem import (
     agora_home,
     append_entry,
     assert_slug,
     atomic_write,
     copy_template_tree,
+    filesystem_transaction,
     find_project_root,
     packs_root,
     write_new,
@@ -222,7 +224,9 @@ from agora.model import (
     ToolAuthorizationRecord,
     ToolContract,
     ToolPackRecord,
+    ToolResultRecord,
     ToolRisk,
+    ToolRunInspection,
     ToolRunRecord,
     ToolRuntimeProbe,
     TransitionRule,
@@ -2823,6 +2827,18 @@ class AgoraWorkspace:
         contract = load_tool_contract(path)
         return self._tool_pack_record(contract, "project", path)
 
+    def resolve_tool_credentials(self, tool_id: str) -> CredentialChainResolution:
+        """Report whether this adapter can authenticate right now, and how.
+
+        Never reads, stores, or returns a credential value — only whether a
+        declared source (CLI session, env var presence, keychain, workload
+        identity) currently appears satisfied.
+        """
+        assert_slug(tool_id, "Tool id")
+        path = self.project_root() / ".agora" / "tools" / tool_id
+        contract = load_tool_contract(path)
+        return resolve_credential_chain(contract)
+
     def list_methods(self) -> list[MethodPackRecord]:
         method_root = self.project_root() / ".agora" / "methods"
         records: list[MethodPackRecord] = []
@@ -3816,46 +3832,49 @@ class AgoraWorkspace:
             budget_limits=budget_limits,
             parent_work_ref=parent_work_ref,
         )
-        write_new(path / "WORK.md", self._render_work(work))
-        write_new(
-            path / "artifacts.md",
-            render_markdown(
-                MarkdownDocument(
-                    attributes={"schema": "agora/artifacts/v1", "artifact-kinds": []},
-                    body=(
-                        "# Artifacts\n\n| Kind | URI | Produced by | Timestamp |\n"
-                        "| --- | --- | --- | --- |"
-                    ),
-                )
-            ),
-        )
-        write_new(
-            path / "evidence.md",
-            render_markdown(
-                MarkdownDocument(
-                    attributes={"schema": "agora/evidence/v1", "results": []},
-                    body=(
-                        "# Evidence\n\n"
-                        "| Type | Result | Artifact references | Produced by | Timestamp |\n"
-                        "| --- | --- | --- | --- | --- |"
-                    ),
-                )
-            ),
-        )
-        write_new(
-            path / "approvals.md",
-            render_markdown(
-                MarkdownDocument(
-                    attributes={"schema": "agora/approvals/v1", "approval-roles": []},
-                    body=(
-                        "# Approvals\n\n| Role | Approved by | Note | Timestamp |\n"
-                        "| --- | --- | --- | --- |"
-                    ),
-                )
-            ),
-        )
-        write_new(path / "interactions.md", "# Interactions\n\n")
-        self._append_work_event(work, "work.created", f"state={work.state} actor={actor.reference}")
+        with filesystem_transaction():
+            write_new(path / "WORK.md", self._render_work(work))
+            write_new(
+                path / "artifacts.md",
+                render_markdown(
+                    MarkdownDocument(
+                        attributes={"schema": "agora/artifacts/v1", "artifact-kinds": []},
+                        body=(
+                            "# Artifacts\n\n| Kind | URI | Produced by | Timestamp |\n"
+                            "| --- | --- | --- | --- |"
+                        ),
+                    )
+                ),
+            )
+            write_new(
+                path / "evidence.md",
+                render_markdown(
+                    MarkdownDocument(
+                        attributes={"schema": "agora/evidence/v1", "results": []},
+                        body=(
+                            "# Evidence\n\n"
+                            "| Type | Result | Artifact references | Produced by | Timestamp |\n"
+                            "| --- | --- | --- | --- | --- |"
+                        ),
+                    )
+                ),
+            )
+            write_new(
+                path / "approvals.md",
+                render_markdown(
+                    MarkdownDocument(
+                        attributes={"schema": "agora/approvals/v1", "approval-roles": []},
+                        body=(
+                            "# Approvals\n\n| Role | Approved by | Note | Timestamp |\n"
+                            "| --- | --- | --- | --- |"
+                        ),
+                    )
+                ),
+            )
+            write_new(path / "interactions.md", "# Interactions\n\n")
+            self._append_work_event(
+                work, "work.created", f"state={work.state} actor={actor.reference}"
+            )
         return work
 
     @_locked_mutation("project")
@@ -8161,6 +8180,14 @@ class AgoraWorkspace:
         ]
         return [record for record in records if status is None or record.status == status]
 
+    def show_tool_run(self, run_id: str) -> ToolRunInspection:
+        assert_slug(run_id, "Tool run id")
+        root = self.project_root()
+        run = self._load_tool_run(root / ".agora" / "tool-runs" / run_id)
+        result_path = Path(run.path) / "RESULT.md"
+        result = self._load_tool_result(run) if result_path.is_file() else None
+        return ToolRunInspection(run=run, result=result)
+
     def status(self) -> WorkspaceStatus:
         root = self.project_root()
         project = self._load_project_configuration(root)
@@ -11503,9 +11530,7 @@ class AgoraWorkspace:
                     "documents",
                     "tool-result.invalid",
                     result_path,
-                    lambda result_path=result_path: _assert_schema(
-                        read_markdown(result_path), "agora/tool-result/v1", result_path
-                    ),
+                    lambda run=run: self._load_tool_result(run),
                 )
 
         event_sources = [("project", root / ".agora" / "events.md")]
@@ -14027,6 +14052,7 @@ class AgoraWorkspace:
             scope=scope,
             path=str(path),
             operations=sorted(contract.operations),
+            credential_sources=list(contract.credential_sources),
             provider=contract.provider,
             transport=contract.transport,
             implements=contract.implements,
@@ -14320,6 +14346,35 @@ class AgoraWorkspace:
                     f"## Standard error\n\n{block(stderr)}"
                 ),
             )
+        )
+
+    @staticmethod
+    def _load_tool_result(record: ToolRunRecord) -> ToolResultRecord:
+        path = Path(record.path) / "RESULT.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/tool-result/v1", path)
+        run_id = string_attribute(document.attributes, "run")
+        status = string_attribute(document.attributes, "status")
+        exit_code = _optional_integer_attribute(document.attributes, "exit-code")
+        result_kind = optional_string_attribute(document.attributes, "result-kind")
+        if run_id != record.id:
+            raise ValueError(f"Tool result run {run_id} does not match Tool Run {record.id}")
+        if status not in {"completed", "failed"} or status != record.status:
+            raise ValueError(f"Tool result status does not match Tool Run {record.id}")
+        if exit_code is None or exit_code != record.exit_code:
+            raise ValueError(f"Tool result exit code does not match Tool Run {record.id}")
+        if result_kind != record.result_kind:
+            raise ValueError(f"Tool result kind does not match Tool Run {record.id}")
+        stdout = _tool_result_section(document.body, "Standard output", "Standard error", path)
+        stderr = _tool_result_section(document.body, "Standard error", None, path)
+        return ToolResultRecord(
+            run_id=run_id,
+            status=status,
+            exit_code=exit_code,
+            result_kind=result_kind,
+            stdout=stdout,
+            stderr=stderr,
+            path=str(path),
         )
 
     def _assert_wip_limit(
@@ -15091,6 +15146,23 @@ def _tool_risk(value: str) -> ToolRisk:
     if value not in {"read", "write", "destructive"}:
         raise ValueError(f"Unsupported tool risk: {value}")
     return value  # type: ignore[return-value]
+
+
+def _tool_result_section(body: str, heading: str, next_heading: str | None, path: Path) -> str:
+    marker = f"## {heading}\n\n"
+    if marker not in body:
+        raise ValueError(f"Tool result is missing {heading}: {path}")
+    contents = body.split(marker, 1)[1]
+    if next_heading is not None:
+        next_marker = f"\n\n## {next_heading}\n\n"
+        if next_marker not in contents:
+            raise ValueError(f"Tool result is missing {next_heading}: {path}")
+        contents = contents.split(next_marker, 1)[0]
+    lines = contents.rstrip().splitlines()
+    if not lines or any(not line.startswith("    ") for line in lines):
+        raise ValueError(f"Tool result {heading} must be an indented block: {path}")
+    value = "\n".join(line[4:] for line in lines)
+    return "" if value == "(empty)" else value
 
 
 def _work_operational_status(value: object) -> WorkOperationalStatus:

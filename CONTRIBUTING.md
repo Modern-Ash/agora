@@ -32,6 +32,7 @@ uv run python samples/concurrent-writes/run.py
 uv run python samples/pack-registry/run.py
 uv run python samples/remote-registry/run.py
 uv run python samples/github-end-to-end/run.py
+uv run python samples/jira-cli/run.py
 ```
 
 ## Rules
@@ -51,6 +52,10 @@ uv run python samples/github-end-to-end/run.py
 - Add tests for capabilities, role actions, transitions, WIP, gates, approvals, handoffs,
   interruptions, recursive swarms, delegated work, sessions, tool runs, queries, validation, and
   filesystem behavior.
+- For compound Markdown mutations, document the complete write set and add injected failure tests
+  that prove rollback does not leave domain records, event streams, or activity out of sync.
+- Keep Tool Result inspection provider-neutral: validate Agora metadata while returning bounded
+  provider output without inventing a universal provider schema.
 - Update templates and documentation whenever the installed protocol changes.
 - Keep explanatory material under `docs/`, operational protocol sources under `packs/`, and
   plugin-owned run output under its existing plugin directory.
@@ -89,3 +94,7 @@ the governed `repository/commit` Tool Pack operation so the input is validated b
 
 Generated distributions, virtual environments, local `.agora`, and installed agent commands are not
 committed to this repository.
+
+Use the [core improvement roadmap](docs/roadmap.md) to understand the current extraction and
+hardening priorities. Completed behavior is authoritative only when its implementation, tests, and
+user-facing documentation land together.

@@ -9,6 +9,7 @@ executable: "glab"
 version-command: ["version"]
 minimum-runtime-version: "1.109.0"
 authentication-reference: "gitlab-cli-profile-or-environment"
+credential-sources: ["cli-session", "env"]
 provider: "gitlab"
 transport: "cli"
 implements: "code-review"
