@@ -30,6 +30,7 @@ from agora.model import (
     InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
+    ResumeSessionInput,
     RevokeApprovalDelegationInput,
     SetActorRuntimeInput,
     StartSessionInput,
@@ -872,6 +873,147 @@ def test_prepares_and_launches_a_session_with_actor_runtime_override(
     assert [item.type for item in activity] == ["session.prepared", "session.completed"]
     assert activity[-1].actor == "project:facilitator"
     assert activity[-1].source.endswith("/SUMMARY.md")
+
+
+def test_claude_integration_passes_a_non_interactive_permission_mode(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/claude" if executable == "claude" else None,
+    )
+    _prepare_scrum_team(workspace)
+    workspace.set_actor_runtime(
+        SetActorRuntimeInput(
+            actor_id="facilitator",
+            integration="claude",
+            provider="anthropic",
+            model="configured-by-claude",
+        )
+    )
+    calls: list[list[str]] = []
+
+    def launch(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
+        calls.append(command)
+        return 0
+
+    session_workspace = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launch)
+    session_workspace.start_session(
+        StartSessionInput(
+            id="claude-session",
+            actor_id="facilitator",
+            swarm_id="delivery",
+            launch=True,
+        )
+    )
+
+    command = calls[0]
+    assert command[:2] == ["claude", "--print"]
+    # A non-interactive session has nobody available to grant tool-use
+    # approval; without an explicit permission mode the process blocks on
+    # its first approval request and fails identically on every retry.
+    assert "--permission-mode" in command
+    assert command[command.index("--permission-mode") + 1] == "bypassPermissions"
+    assert "--model" not in command  # "configured-by-*" models omit --model
+
+
+def test_resume_recomputes_the_command_from_the_actors_current_runtime(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    """A runtime switch after a failure (e.g. a provider outage or quota
+    exhaustion) must take effect on retry. Before this fix, resume always
+    replayed the exact command bytes of the failed attempt, so an actor
+    switched from a derivable integration (codex/claude) to another kept
+    retrying the *old* provider's command forever."""
+    root, workspace = project
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: "/usr/bin/claude" if executable == "claude" else executable,
+    )
+    _prepare_scrum_team(workspace)
+
+    failing_workspace = AgoraWorkspace(
+        cwd=root, now=lambda: TIMESTAMP, launcher=lambda command, cwd, environment: 1
+    )
+    with pytest.raises(RuntimeError):
+        failing_workspace.start_session(
+            StartSessionInput(
+                id="governed-session",
+                actor_id="facilitator",
+                swarm_id="delivery",
+                runner="/bin/false --original-provider",
+                launch=True,
+            )
+        )
+    failed = failing_workspace.list_sessions("failed")[0]
+    assert failed.launch_command == ["/bin/false", "--original-provider"]
+
+    # Switch the actor to a derivable runtime after the failure.
+    switch_workspace = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
+    switch_workspace.set_actor_runtime(
+        SetActorRuntimeInput(
+            actor_id="facilitator",
+            integration="claude",
+            provider="anthropic",
+            model="configured-by-claude",
+        )
+    )
+
+    # Resume with no explicit --runner: the command must be freshly derived
+    # from the actor's *current* runtime, not the stale failed command.
+    calls: list[list[str]] = []
+
+    def launch(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
+        calls.append(command)
+        return 0
+
+    retry_workspace = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launch)
+    retry = retry_workspace.resume_session(
+        ResumeSessionInput(session_id=failed.id, replacement_id="governed-session-retry")
+    )
+
+    assert retry.status == "completed"
+    assert calls[0][:2] == ["claude", "--print"]
+    assert calls[0] != failed.launch_command
+
+
+def test_resume_still_requires_an_explicit_runner_for_generic_integration(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    """The "generic" integration has no runtime to derive a command from —
+    it always required an explicit --runner up front — so preserving the
+    prior explicit runner on a runner-less resume remains correct there."""
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+
+    failing_workspace = AgoraWorkspace(
+        cwd=root, now=lambda: TIMESTAMP, launcher=lambda command, cwd, environment: 1
+    )
+    with pytest.raises(RuntimeError):
+        failing_workspace.start_session(
+            StartSessionInput(
+                id="generic-session",
+                actor_id="facilitator",
+                swarm_id="delivery",
+                runner="/bin/false --local-runner",
+                launch=True,
+            )
+        )
+    failed = failing_workspace.list_sessions("failed")[0]
+
+    calls: list[list[str]] = []
+
+    def launch(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
+        calls.append(command)
+        return 0
+
+    retry_workspace = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launch)
+    retry_workspace.resume_session(
+        ResumeSessionInput(session_id=failed.id, replacement_id="generic-session-retry")
+    )
+
+    assert calls[0] == ["/bin/false", "--local-runner"]
 
 
 def test_human_role_holder_can_use_a_capability_compatible_ai_executor(
