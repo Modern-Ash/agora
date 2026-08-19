@@ -59,6 +59,22 @@ policy for your organization.
 Agora complements issue trackers, source hosts, CI/CD systems, documentation platforms, and cloud
 providers. It is not a project-management UI, an agent runtime, or a replacement for those systems.
 
+### A note on "swarm"
+
+Multi-agent frameworks (OpenAI Swarm, AutoGen, CrewAI, LangGraph, and others) use "swarm" for
+runtime coordination: several agents exchanging messages or handing off control to solve a task in
+one session. Spec-driven tools (spec-kit and similar) generally have no equivalent concept at all —
+one agent works a spec to completion.
+
+An Agora swarm is neither. It is the durable governance unit for one objective: a Method Pack, the
+roles it requires, and the human, AI, service, or swarm actors assigned to hold them, with every
+transition checked against a permission and gate contract and recorded in `.agora/` and Git. A
+swarm can be a single human role-holder and a single AI role-holder working sequentially through a
+gated lifecycle — as most swarms are — or it can compose recursively into a delegated team. It is
+not runtime message-passing between agents, and it does not imply parallelism or autonomy. If you
+know "swarm" from a multi-agent runtime, expect Agora's version to be about *who is allowed to do
+what, and the durable record of what they did* — not about how agents talk to each other.
+
 ## Architecture
 
 ```mermaid
