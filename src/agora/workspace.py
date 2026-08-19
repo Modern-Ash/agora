@@ -8728,7 +8728,20 @@ class AgoraWorkspace:
         replacement_id = data.replacement_id or self._available_session_id(
             root, f"{previous.id}-retry"
         )
-        runner = data.runner or shlex.join(previous.launch_command)
+        runner = data.runner
+        if runner is None:
+            # Recompute the launch command from the actor's *current* runtime
+            # configuration rather than reusing the failed attempt's stale
+            # command, so a runtime change (e.g. switching integration after a
+            # provider outage) takes effect on retry. The one exception is the
+            # "generic" integration, which has no runtime to derive the
+            # command from and always required an explicit --runner up front;
+            # for that case alone, preserve the prior explicit runner.
+            project = self._load_project_configuration(root)
+            executor = self._find_actor(root, previous.executor or previous.actor)
+            integration = executor.integration or project.integration
+            if integration == "generic":
+                runner = shlex.join(previous.launch_command)
         return self.start_session(
             StartSessionInput(
                 id=replacement_id,
@@ -12898,7 +12911,15 @@ class AgoraWorkspace:
                 command.extend(["--model", model])
             return [*command, prompt]
         if integration == "claude":
-            command = ["claude", "--print"]
+            # Codex's own "exec" subcommand defaults to an unattended,
+            # non-interactive approval posture (approval: never). "claude
+            # --print" has no equivalent default: without an explicit
+            # permission mode it will block on the first tool call needing
+            # approval, which nothing can grant in a non-interactive Agora
+            # session, causing every retry to fail identically. Pass an
+            # explicit bypass so the claude integration is actually usable
+            # for unattended governed sessions, matching Codex's posture.
+            command = ["claude", "--print", "--permission-mode", "bypassPermissions"]
             if not model.startswith("configured-by-"):
                 command.extend(["--model", model])
             return [*command, prompt]

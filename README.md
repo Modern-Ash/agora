@@ -241,6 +241,16 @@ it does not embed provider credentials or an LLM client in its core. See
 [LLM environments](docs/guides/llm-environments.md). Generic sessions accept the runner explicitly,
 for example `agora run --runner "company-agent run" --launch`.
 
+Both native integrations run unattended, so their commands are built with a non-interactive
+approval posture: `codex exec` runs with its own default read-only, unattended approval behavior,
+and `claude --print` is launched with `--permission-mode bypassPermissions`, since a governed
+session has nobody available to approve an interactive permission prompt. Changing an actor's
+runtime with `agora actor runtime` takes effect immediately, including on the next automatic retry
+of a failed session (`agora resume` / `agora run --until-blocked` recompute the launch command from
+the actor's current runtime rather than replaying the failed attempt's command) — the one exception
+is the `generic` integration, which has no runtime to derive a command from and always requires an
+explicit `--runner`, so a runner-less retry there reuses the prior explicit runner.
+
 ## Run the daily loop
 
 ```mermaid
