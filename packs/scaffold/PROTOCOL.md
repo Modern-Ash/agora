@@ -16,7 +16,8 @@ project: "{{PROJECT_NAME}}"
    grants ownership or human approval authority.
 7. Use a delegation record when linked child work is proposed, accepted, or collected.
 8. Stop and request approval when a policy or gate cannot be satisfied.
-9. Use installed Tool Pack operations for governed external actions and retain their results.
+9. Use installed Tool Pack operations for governed external actions, retain their results, and use
+   `agora tool result --run <id>` when captured provider output must be inspected.
 10. Read `.agora/STANDARDS.md` and validate commit messages before creating repository history.
 11. When an actor requires authentication, prepare, externally sign, and apply each covered
     lifecycle mutation through its durable `ACTION.md` intent.

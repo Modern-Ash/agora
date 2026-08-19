@@ -58,6 +58,31 @@ agora session list --status prepared
 Filters match persisted values exactly. An empty machine result is an empty JSON array, not an
 error; the terminal view instead reports that no items were found.
 
+## Inspect a Tool Run result
+
+Listing Tool Runs answers which operations exist. Inspecting one run answers what exact command was
+governed and what bounded output the provider process returned:
+
+```bash
+agora tool runs
+agora tool result --run verify-created-jira-work
+```
+
+The result contains two typed objects:
+
+- `run`: tool and operation ids, actor, swarm, optional work and environment, capability, risk,
+  inputs, structured command, runtime status, authentication evidence, limits, and durable path;
+- `result`: terminal status, exit code, result kind, bounded `stdout` and `stderr`, and the
+  `RESULT.md` path, or `null` while the run remains prepared.
+
+Agora does not parse provider JSON into a universal ticket, deployment, or review model. The typed
+boundary verifies Agora metadata and returns provider output unchanged. Adapters and callers remain
+responsible for interpreting their declared result kind.
+
+Inspection rejects a terminal result that does not match its `RUN.md` identity, status, exit code,
+or result kind. Full validation reports the same condition with stable code
+`tool-result.invalid`.
+
 ## Event inspection
 
 Project, swarm, and work event files use the same timestamped record shape. Query the most recent
@@ -109,8 +134,8 @@ It checks:
 - Project, swarm, and work event syntax and timestamps.
 
 Validation continues after an invalid record so one run can report multiple independent issues. The
-The captured JSON response contains `checked` counts and issues with `severity`, stable `code`, `path`, and
-`message` fields.
+captured JSON response contains `checked` counts and issues with `severity`, stable `code`, `path`,
+and `message` fields.
 
 Errors set `ok` to `false` and make the CLI exit with status `1`. Warnings remain visible but do not
 fail validation. A valid workspace exits with status `0`, making the command suitable for CI:

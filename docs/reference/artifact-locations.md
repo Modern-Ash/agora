@@ -107,10 +107,15 @@ Agora creates current collaboration state under `.agora/`. Common records includ
 .agora/sessions/<session>/RESULT.md
 .agora/swarms/<swarm>/work/<work>/usage/<usage>/USAGE.md
 .agora/tool-runs/<run>/RUN.md
+.agora/tool-runs/<run>/RESULT.md
 ```
 
 These are neither manuals nor disposable prompts. They are durable governed records shared through
 the filesystem and Git. Chat history is not a substitute for them.
+
+`RUN.md` exists after preparation. `RESULT.md` exists only after launch reaches a terminal outcome.
+Use `agora tool result --run <run>` to read their validated typed view; do not treat ad hoc terminal
+logs as a replacement for the durable record.
 
 ## Work products versus Agora records
 

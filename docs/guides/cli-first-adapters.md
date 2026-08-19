@@ -260,7 +260,7 @@ untrusted text into CQL or pretend that an Atlassian site is a Confluence space.
 Agora never installs `twg`, runs OAuth login, or changes its permissions. Installation and
 authentication follow Atlassian's official
 [TWG CLI setup](https://developer.atlassian.com/cloud/twg-cli/getting-started/installation/), while
-live launch still requires `agora tool doctor --tool twg-confluence` to confirm a compatible local
+live launch still requires `agora tool adapter list --check` to confirm a compatible local
 version.
 
 ## Terraform through its native CLI

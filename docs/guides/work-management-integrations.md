@@ -64,7 +64,7 @@ Install the partial GitLab adapter when the developer already uses `glab`:
 
 ```bash
 agora tool adapter install --id gitlab-issues --scope project
-agora tool doctor --tool gitlab-issues
+agora tool adapter list --check
 ```
 
 It maps `search`, `view`, `comment`, and `transition` to native GitLab issue commands. Search returns
@@ -144,6 +144,20 @@ agora tool invoke \
 
 Agora captures command metadata, standard output, standard error, exit code, and result kind under
 `.agora/tool-runs/<run-id>`. Project and work event streams receive attributable tool events.
+Inspect the typed run and its bounded provider output without opening the Markdown files manually:
+
+```bash
+agora tool result --run move-agora-42
+```
+
+The Jira sample launches the exact reviewed adapter contract against a deterministic,
+ACLI-compatible local process, including a final read that shows the created issue, comment, and
+transition. It demonstrates Agora's complete execution boundary without claiming a Jira Cloud
+connection:
+
+```bash
+uv run python samples/jira-cli/run.py
+```
 
 ## Adapt Jira or another provider
 
@@ -178,7 +192,7 @@ of the team's protocol.
 This separation prevents a provider outage or vendor migration from making the local governance
 record unreadable. Git remains the review and synchronization layer for Agora's Markdown state.
 
-Run the executable adapter example:
+Run the provider-neutral executable adapter example:
 
 ```bash
 uv run python samples/work-management/run.py

@@ -1,5 +1,9 @@
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -17,14 +21,125 @@ def packs_root() -> Path:
     return Path(__file__).resolve().parents[2] / "packs"
 
 
-def atomic_write(path: Path, contents: str) -> None:
+def _atomic_write_direct(path: Path, contents: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.tmp")
-    temporary.write_text(contents, encoding="utf-8")
-    temporary.replace(path)
+    try:
+        temporary.write_text(contents, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class _FileSnapshot:
+    contents: str | None
+    mode: int | None
+
+
+class FilesystemTransaction:
+    """Stage related Markdown writes and commit or roll them back as one mutation."""
+
+    def __init__(self) -> None:
+        self._writes: dict[Path, str] = {}
+
+    def write(self, path: Path, contents: str) -> None:
+        self._writes[path] = contents
+
+    def write_new(self, path: Path, contents: str, force: bool = False) -> None:
+        if (path in self._writes or path.exists()) and not force:
+            raise FileExistsError(
+                f"Refusing to overwrite existing file: {path}. Pass --force to replace it."
+            )
+        self._writes[path] = contents
+
+    def append(self, path: Path, entry: str) -> None:
+        contents = self._writes.get(path)
+        if contents is None:
+            contents = path.read_text(encoding="utf-8") if path.exists() else ""
+        self._writes[path] = f"{contents}{entry.rstrip()}\n"
+
+    def commit(self) -> None:
+        snapshots: dict[Path, _FileSnapshot] = {}
+        applied: list[Path] = []
+        created_directories = {
+            directory
+            for path in self._writes
+            for directory in _missing_parent_directories(path.parent)
+        }
+        try:
+            for path, contents in self._writes.items():
+                snapshots[path] = _FileSnapshot(
+                    contents=path.read_text(encoding="utf-8") if path.exists() else None,
+                    mode=path.stat().st_mode if path.exists() else None,
+                )
+                _atomic_write_direct(path, contents)
+                applied.append(path)
+        except Exception as error:
+            rollback_errors: list[Exception] = []
+            for path in reversed(applied):
+                snapshot = snapshots[path]
+                try:
+                    if snapshot.contents is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        _atomic_write_direct(path, snapshot.contents)
+                        if snapshot.mode is not None:
+                            path.chmod(snapshot.mode)
+                except Exception as rollback_error:  # pragma: no cover - catastrophic filesystem
+                    rollback_errors.append(rollback_error)
+            ordered_directories = sorted(
+                created_directories, key=lambda item: len(item.parts), reverse=True
+            )
+            for directory in ordered_directories:
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            if rollback_errors:
+                error.add_note(
+                    "Filesystem transaction rollback encountered errors: "
+                    + "; ".join(str(item) for item in rollback_errors)
+                )
+            raise
+
+
+_ACTIVE_TRANSACTION: ContextVar[FilesystemTransaction | None] = ContextVar(
+    "agora_filesystem_transaction", default=None
+)
+
+
+@contextmanager
+def filesystem_transaction() -> Iterator[FilesystemTransaction]:
+    current = _ACTIVE_TRANSACTION.get()
+    if current is not None:
+        yield current
+        return
+    transaction = FilesystemTransaction()
+    token = _ACTIVE_TRANSACTION.set(transaction)
+    try:
+        yield transaction
+    except Exception:
+        _ACTIVE_TRANSACTION.reset(token)
+        raise
+    else:
+        _ACTIVE_TRANSACTION.reset(token)
+        transaction.commit()
+
+
+def atomic_write(path: Path, contents: str) -> None:
+    transaction = _ACTIVE_TRANSACTION.get()
+    if transaction is not None:
+        transaction.write(path, contents)
+        return
+    _atomic_write_direct(path, contents)
 
 
 def write_new(path: Path, contents: str, force: bool = False) -> None:
+    transaction = _ACTIVE_TRANSACTION.get()
+    if transaction is not None:
+        transaction.write_new(path, contents, force)
+        return
     if path.exists() and not force:
         raise FileExistsError(
             f"Refusing to overwrite existing file: {path}. Pass --force to replace it."
@@ -33,9 +148,24 @@ def write_new(path: Path, contents: str, force: bool = False) -> None:
 
 
 def append_entry(path: Path, entry: str) -> None:
+    transaction = _ACTIVE_TRANSACTION.get()
+    if transaction is not None:
+        transaction.append(path, entry)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
         stream.write(f"{entry.rstrip()}\n")
+
+
+def _missing_parent_directories(path: Path) -> list[Path]:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    return missing
 
 
 def copy_template_tree(

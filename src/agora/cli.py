@@ -1972,6 +1972,11 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_runs = tool.add_parser("runs", help="List governed tool runs")
     tool_runs.add_argument("--status")
 
+    tool_result = tool.add_parser(
+        "result", help="Show one Tool Run and its captured provider output"
+    )
+    tool_result.add_argument("--run", required=True)
+
     tool_authorization = tool.add_parser(
         "authorization", help="Export the canonical payload for a prepared Tool Run"
     )
@@ -2963,6 +2968,8 @@ def _dispatch(
         )
     if args.command == "tool" and args.tool_command == "runs":
         return workspace.list_tool_runs(args.status)
+    if args.command == "tool" and args.tool_command == "result":
+        return workspace.show_tool_run(args.run)
     if args.command == "tool" and args.tool_command == "authorization":
         return workspace.prepare_tool_authorization(
             PrepareToolAuthorizationInput(

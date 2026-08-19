@@ -117,7 +117,7 @@ exact Confluence page subset:
 
 ```bash
 agora tool adapter install --id twg-confluence --scope project
-agora tool doctor --tool twg-confluence
+agora tool adapter list --check
 ```
 
 It implements `view`, `create`, `update`, `publish`, and `archive`. Create always produces a page

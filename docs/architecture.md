@@ -47,6 +47,10 @@ Tool Packs and structured external operations. `src/agora/markdown.py` implement
 JSON-compatible front matter used by the protocol. `src/agora/upgrades.py` plans ordered project
 migrations, preserves customization boundaries, backs up changed files, and writes durable upgrade
 manifests.
+`src/agora/filesystem.py` supplies atomic single-document replacement and a nested transaction
+context for compound Markdown mutations. The transaction stages writes in memory, snapshots
+pre-existing files, commits them in insertion order, and restores applied files and newly created
+directories if a later write fails.
 `src/agora/packs.py` validates shared pack versions, dependency declarations, and compatibility
 ranges.
 `src/agora/registries.py` validates installed registry snapshots and discovers Method and Tool Packs.
@@ -152,7 +156,22 @@ published. A failed multi-pack removal restores the previous trees and lock.
 
 Markdown is the durable contract and the filesystem represents current state. Git adds history,
 diffs, review, synchronization, and branches. There is no parallel JSON snapshot. Atomic replacement
-keeps the previous document intact when an operation fails.
+keeps the previous document intact when an individual write fails.
+
+Compound mutations distinguish three guarantees:
+
+| Boundary | Guarantee |
+| --- | --- |
+| One Markdown document | Write a sibling temporary file and atomically replace the destination |
+| Work creation | Stage the work document, companion registers, event streams, and Activity Ledger; roll back every applied write if commit fails |
+| Specialized pack, registry, and upgrade changes | Use their reviewed staging and rollback mechanisms before publishing the new composition |
+
+The filesystem transaction is reentrant within one execution context. A nested helper contributes
+to the active transaction instead of committing independently, so creating a work item and appending
+its events share one outcome. The project writer lock prevents another local mutation from
+interleaving with that commit. This is rollback protection, not a distributed filesystem
+transaction: process or machine loss during a compound commit still requires Git reconciliation and
+`agora validate`.
 
 Project protocol versions are independent from individual Markdown schema identifiers. A CLI update
 does not mutate a workspace. `agora upgrade` first produces a read-only plan; `--apply` backs up all
@@ -200,6 +219,12 @@ Jira, repositories, CI/CD, Confluence, cloud, and observability are modeled as T
 external CLIs. Each operation declares an executable argument vector, inputs, risk, capability, and
 optional approval role. Role policies determine which operations may be invoked. Preparation and
 captured results remain in `.agora/tool-runs`; credentials are never copied into Git.
+
+`agora tool result --run <id>` loads `RUN.md` and, when present, its typed `RESULT.md`. Loading rejects
+a result whose run id, terminal status, exit code, or result kind differs from the governing run.
+The command returns `result: null` for a prepared invocation and bounded output for completed or
+failed invocations. This read path is provider-neutral; JSON interpretation remains with the adapter
+consumer.
 
 The kernel does not use a shell or vendor SDK. It performs exact argument substitution and delegates
 authentication to the executable environment. The bundled Git pack is a concrete implementation;
@@ -285,7 +310,9 @@ Mutating workspace operations hold a reentrant operating-system lock keyed by th
 or Agora home path. Initialization acquires home and target locks in deterministic order. A project
 may additionally configure a provider-neutral external lease CLI for cross-host coordination; local
 locks are acquired first and remain mandatory. Lock metadata is runtime-only while external lease
-configuration is reviewed Markdown. Atomic document replacement still protects readers.
+configuration is reviewed Markdown. Atomic document replacement protects readers, while
+rollback-protected work creation prevents a normal write failure from leaving only part of the work
+contract or its event history.
 
 External commands still run with the caller's operating-system permissions. Tool Pack manifests and
 agent Session records bound direct processes by elapsed time and captured output; those values are

@@ -20,6 +20,33 @@ take the writer lock. Atomic Markdown replacement gives them either the precedin
 never a partially written file. A read spanning several records can observe a mutation in progress;
 run it again after the writer finishes when a fully stable multi-record view is required.
 
+## Atomic documents and compound rollback
+
+The writer lock, atomic replacement, and transaction rollback solve different failure modes:
+
+| Mechanism | Protects against | Does not provide |
+| --- | --- | --- |
+| Writer lock | Two local mutations interleaving | Cross-host exclusion unless an external lease is configured |
+| Atomic replacement | A reader observing half of one Markdown document | Consistency across several documents |
+| Filesystem transaction | A normal commit error leaving part of one compound mutation applied | Crash-safe distributed database semantics |
+
+Work creation uses the shared filesystem transaction. `WORK.md`, `artifacts.md`, `evidence.md`,
+`approvals.md`, `interactions.md`, scoped event streams, and the Activity Ledger are staged together.
+If a write fails, Agora restores overwritten documents, removes files created by the failed attempt,
+and removes newly created empty directories. Nested event helpers join the same transaction.
+
+This guarantee is intentionally described as rollback-protected rather than fully ACID. A process
+or host failure during the commit can still require inspection of Git and the Markdown state. After
+an abnormal termination, run:
+
+```bash
+git status --short
+agora validate
+```
+
+Do not manually publish only the missing companion files before understanding the failed mutation.
+Prefer restoring or completing the complete reviewed work record as one change.
+
 ## Contention behavior
 
 Agora fails immediately by default when another process owns the resource:

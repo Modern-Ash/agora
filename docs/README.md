@@ -16,6 +16,10 @@ See [Documentation and artifact locations](reference/artifact-locations.md) for 
 source-to-runtime map, including portable commands, Method Packs, Tool Packs, agent adapters,
 durable work records, and externally owned product artifacts.
 
+For the current hardening sequence, see the [core improvement roadmap](roadmap.md). The implemented
+transaction, Tool Result, and Jira exercise changes are recorded in [Core hardening and observable
+Jira integration](changes/2026-08-core-hardening-and-jira.md).
+
 ## Operational Markdown
 
 These directories are the operational product, not explanatory documentation:
@@ -135,6 +139,8 @@ do not exist as one static agent file in this repository.
   plugin output, distribution templates, agent adapters, project records, and work products.
 - [Domain model](domain-model.md): packs, actors, roles, swarms, handoffs, work, and evidence.
 - [Architecture](architecture.md): scopes, adapters, filesystem persistence, and Git behavior.
+- [Core improvement roadmap](roadmap.md): prioritized transaction, modularity, error, budget, and
+  live-integration work without release-date promises.
 - [Method Pack reference](reference/method-packs.md): author and install custom lifecycles.
 - [Tool Pack reference](reference/tool-packs.md): govern external CLIs and persist results.
 - [ADR 0001](decisions/0001-initial-architecture.md): why Agora is local, Markdown-first, and
@@ -172,8 +178,9 @@ do not exist as one static agent file in this repository.
   transitions while rejecting deletion and unsupported typed creation.
 - [GitLab Merge Requests CLI adapter](../samples/gitlab-merge-requests-cli/README.md): prepare native
   review creation and head-pipeline checks while rejecting unsupported merge translation.
-- [Jira ACLI adapter](../samples/jira-cli/README.md): prepare bounded Jira searches and governed
-  transitions while keeping ACLI installation and authentication external.
+- [Jira ACLI adapter](../samples/jira-cli/README.md): execute the reviewed Jira contract against a
+  deterministic ACLI-compatible process, inspect captured responses, and keep live Jira
+  authentication external.
 - [Atlassian TWG Confluence adapter](../samples/twg-confluence-cli/README.md): prepare page lifecycle
   commands, require optimistic concurrency, and reject unsupported search translation.
 - [CLI runtime compatibility](../samples/cli-runtime-compatibility/README.md): probe local adapter

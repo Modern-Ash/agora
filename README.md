@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://pypi.org/project/agora-framework/"><img src="https://img.shields.io/pypi/v/agora-framework.svg" alt="PyPI version"></a>
   <a href="https://pypi.org/project/agora-framework/"><img src="https://img.shields.io/pypi/pyversions/agora-framework.svg" alt="Supported Python versions"></a>
-  <a href="https://github.com/fabianaguero/agora/actions/workflows/ci.yml"><img src="https://github.com/fabianaguero/agora/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/Modern-Ash/agora/actions/workflows/ci.yml"><img src="https://github.com/Modern-Ash/agora/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache 2.0 license"></a>
 </p>
 
@@ -35,7 +35,7 @@ coordinate recursive swarms, run reviewed external tools, and validate its durab
 | Bundled workflows | Spec-Driven, Scrum, and Kanban Method Packs |
 | Actor forms | Human, AI, service, automation, and recursively composed swarm |
 | Integrations | Provider-neutral Tool Packs plus reviewed native CLI adapters |
-| Persistence | Human-readable Markdown in the filesystem, designed for Git review |
+| Persistence | Human-readable Markdown, atomic document writes, and rollback-protected work creation |
 | Compatibility | Explicit project migrations and `agora upgrade` support |
 | Stability | Alpha: CLI and Markdown contracts may still evolve before `1.0` |
 
@@ -307,6 +307,18 @@ Adapter commands are structured and shell-free, contain no credentials, and have
 and captured-output limits. Write or destructive capabilities such as merge, deployment, release
 publication, infrastructure apply, and incident resolution remain opt-in and policy-controlled.
 
+Every launched operation persists `RUN.md` plus a bounded `RESULT.md`. Inspect both through the
+typed read command instead of parsing provider output from terminal logs:
+
+```bash
+agora tool result --run <tool-run-id>
+```
+
+Prepared runs return `result: null`; completed and failed runs return their validated status, exit
+code, result kind, `stdout`, `stderr`, and durable path. The
+[Jira ACLI sample](samples/jira-cli/README.md) demonstrates this boundary through actual child
+processes without requiring Jira Cloud credentials.
+
 See the [GitHub ecosystem guide](docs/guides/github-ecosystem.md),
 [CLI-first adapter guide](docs/guides/cli-first-adapters.md), and
 [Tool Pack reference](docs/reference/tool-packs.md).
@@ -366,6 +378,9 @@ During the alpha series:
   credentials.
 - External systems remain sources of operational state; Agora persists their verified references
   and evidence rather than silently mirroring them.
+- Atomic replacement protects every individual Markdown document. Multi-document rollback currently
+  covers work creation and specialized upgrade, registry, and pack transactions; extending one
+  shared transaction boundary to every compound lifecycle mutation remains planned core work.
 
 ## Documentation
 
@@ -380,6 +395,7 @@ Understand the model:
 
 - [Architecture](docs/architecture.md)
 - [Domain model](docs/domain-model.md)
+- [Core improvement roadmap](docs/roadmap.md)
 - [Documentation and artifact locations](docs/reference/artifact-locations.md)
 - [Full documentation index](docs/README.md)
 

@@ -26,7 +26,7 @@ remote registries remain optional adapters around the same filesystem protocol.
 Agora requires Python 3.11 or newer. For daily use from this checkout:
 
 ```bash
-git clone https://github.com/fabianaguero/agora.git
+git clone https://github.com/Modern-Ash/agora.git
 cd agora
 uv tool install .
 agora --help

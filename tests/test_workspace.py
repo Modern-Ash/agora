@@ -1041,6 +1041,12 @@ def test_governs_and_persists_external_tool_invocations(
     assert calls[0][2]["AGORA_TOOL_RUN"].endswith("repository-status/RUN.md")
     result = root / ".agora" / "tool-runs" / "repository-status" / "RESULT.md"
     assert "M README.md" in result.read_text()
+    inspection = tool_workspace.show_tool_run("repository-status")
+    assert inspection.run.status == "completed"
+    assert inspection.result is not None
+    assert inspection.result.stdout == " M README.md"
+    assert inspection.result.stderr == ""
+    assert inspection.result.result_kind == "repository-status"
     assert "tool.completed" in (root / ".agora" / "events.md").read_text()
     tool_activity = tool_workspace.list_activity(tool_run_id="repository-status")
     assert [item.type for item in tool_activity] == ["tool.prepared", "tool.completed"]
@@ -1098,6 +1104,11 @@ def test_governs_and_persists_external_tool_invocations(
     failed_path = root / ".agora" / "tool-runs" / "failed-status"
     assert 'status: "failed"' in (failed_path / "RUN.md").read_text()
     assert "repository unavailable" in (failed_path / "RESULT.md").read_text()
+    failed_inspection = failed_workspace.show_tool_run("failed-status")
+    assert failed_inspection.result is not None
+    assert failed_inspection.result.status == "failed"
+    assert failed_inspection.result.exit_code == 7
+    assert failed_inspection.result.stderr == "repository unavailable"
 
     with pytest.raises(PermissionError, match="repository.write"):
         tool_workspace.invoke_tool(
@@ -1145,6 +1156,7 @@ def test_governs_and_persists_external_tool_invocations(
         )
     )
     assert tool_workspace.invoke_tool(approved_change).status == "prepared"
+    assert tool_workspace.show_tool_run("approved-branch").result is None
 
     with pytest.raises(ValueError, match=r"missing=\[revision\]"):
         tool_workspace.invoke_tool(
@@ -1156,6 +1168,39 @@ def test_governs_and_persists_external_tool_invocations(
                 swarm_id="delivery",
             )
         )
+
+
+def test_rejects_a_tool_result_bound_to_another_run(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    governed = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        tool_runner=lambda command, cwd, environment: subprocess.CompletedProcess(
+            command, 0, stdout="clean\n", stderr=""
+        ),
+    )
+    governed.invoke_tool(
+        InvokeToolInput(
+            id="repository-status",
+            tool_id="repository",
+            operation_id="status",
+            actor_id="developer",
+            swarm_id="delivery",
+            launch=True,
+        )
+    )
+    result_path = root / ".agora" / "tool-runs" / "repository-status" / "RESULT.md"
+    result_path.write_text(
+        result_path.read_text().replace('run: "repository-status"', 'run: "different-tool-run"')
+    )
+
+    with pytest.raises(ValueError, match="does not match Tool Run repository-status"):
+        governed.show_tool_run("repository-status")
+    report = governed.validate()
+    assert any(issue.code == "tool-result.invalid" for issue in report.issues)
 
 
 def test_discovers_installs_and_governs_the_github_actions_cli_adapter(
@@ -3097,6 +3142,43 @@ def test_activity_ledger_filters_work_chronology_and_validates_sources(
     )
     report = workspace.validate()
     assert any(issue.code == "activity.invalid" for issue in report.issues)
+
+
+def test_create_work_rolls_back_every_document_when_transaction_commit_fails(
+    project: tuple[Path, AgoraWorkspace], monkeypatch
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    activity = root / ".agora" / "activity.md"
+    original_activity = activity.read_text(encoding="utf-8")
+
+    from agora import filesystem
+
+    original_write = filesystem._atomic_write_direct
+    calls = 0
+
+    def fail_third_write(path: Path, contents: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise OSError("injected transaction failure")
+        original_write(path, contents)
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_third_write)
+
+    with pytest.raises(OSError, match="injected transaction failure"):
+        workspace.create_work(
+            CreateWorkInput(
+                swarm_id="delivery",
+                id="transactional-work",
+                title="Create every work document atomically",
+                actor_id="owner",
+            )
+        )
+
+    assert not (root / ".agora" / "swarms" / "delivery" / "work" / "transactional-work").exists()
+    assert activity.read_text(encoding="utf-8") == original_activity
+    assert workspace.validate().ok
 
 
 def test_rebuilds_activity_from_existing_durable_records(

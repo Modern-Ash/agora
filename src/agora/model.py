@@ -828,6 +828,23 @@ class ToolRunRecord:
 
 
 @dataclass(frozen=True)
+class ToolResultRecord:
+    run_id: str
+    status: Literal["completed", "failed"]
+    exit_code: int
+    result_kind: str | None
+    stdout: str
+    stderr: str
+    path: str
+
+
+@dataclass(frozen=True)
+class ToolRunInspection:
+    run: ToolRunRecord
+    result: ToolResultRecord | None
+
+
+@dataclass(frozen=True)
 class EnvironmentPolicyRecord:
     id: str
     name: str
