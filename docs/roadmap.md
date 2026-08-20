@@ -21,6 +21,8 @@ authoritative.
 - Typed gate-decision domain failures and transaction-exact Activity results.
 - Exact multi-transition gate decision options, state-bound signing preparation, bounded
   specification revision detail, and an aggregate work control projection for Studio consumers.
+- Core 0.7 canonical gate commands, Core-issued governed-material precondition digests, evidence
+  references tied to required evidence types, and lock-consistent work control snapshots.
 - An executable Jira adapter scenario that shows reads, writes, provider output, and denied
   authority without requiring live credentials.
 

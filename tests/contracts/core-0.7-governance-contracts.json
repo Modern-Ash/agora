@@ -1,0 +1,41 @@
+{
+  "core_version": "0.7.0",
+  "command": {
+    "schema": "agora/application/approve-gate-command/v3",
+    "project_identity": "governed-project",
+    "swarm_id": "delivery",
+    "work_id": "release",
+    "gate_id": "completion",
+    "actor_id": "project:owner",
+    "decision": "approved",
+    "reason": "Evidence reviewed and accepted",
+    "expected_state": "verifying",
+    "transition_target": "completed",
+    "role_id": "product-owner",
+    "evidence_references": ["repo://reports/review.txt"],
+    "precondition_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authentication": null
+  },
+  "prepared": {
+    "schema": "agora/application/prepared-gate-decision/v2",
+    "authorization_schema": "agora/application/approve-gate-authorization/v3",
+    "authorization_payload": "{\"actor_id\":\"project:owner\",\"authorization_schema\":\"agora/application/approve-gate-authorization/v3\",\"decision\":\"approved\",\"evidence_references\":[\"repo://reports/review.txt\"],\"expected_state\":\"verifying\",\"gate_id\":\"completion\",\"precondition_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"project_identity\":\"governed-project\",\"reason\":\"Evidence reviewed and accepted\",\"role_id\":\"product-owner\",\"schema\":\"agora/application/approve-gate-command/v3\",\"swarm_id\":\"delivery\",\"transition_target\":\"completed\",\"work_id\":\"release\"}\n",
+    "authorization_digest": "f92f4844c1565f22dcc38f4b5afb74d2b1f96d63e5d62072922608cca9ed8af7",
+    "precondition_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "freshness": "governed-material/v1"
+  },
+  "gate_option": {
+    "schema": "agora/application/gate-decision-option-summary/v2",
+    "required_evidence_types": ["review-report"],
+    "evidence_references": ["repo://reports/review.txt"],
+    "evidence_references_by_type": {
+      "review-report": ["repo://reports/review.txt"]
+    }
+  },
+  "gate_options_projection_schema": "agora/application/gate-decision-options-projection/v2",
+  "gate_decision_projection_schema": "agora/application/gate-decision-projection/v2",
+  "work_control": {
+    "schema": "agora/application/work-control-projection/v2",
+    "snapshot_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

@@ -6,6 +6,7 @@ from agora.application.commands import (
     GateDecisionProjection,
     PreparedGateDecision,
     approve_gate_authorization_payload,
+    canonicalize_approve_gate_command,
 )
 from agora.application.dto import (
     ActivityEntry,
@@ -69,6 +70,7 @@ __all__ = [
     "ApproveGateCommand",
     "ApprovalSummary",
     "approve_gate_authorization_payload",
+    "canonicalize_approve_gate_command",
     "ArtifactSummary",
     "CommandPersistenceError",
     "EvidenceSummary",

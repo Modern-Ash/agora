@@ -376,11 +376,12 @@ class GateDecisionOptionSummary(SerializableDTO):
     evidence_required: bool
     required_evidence_types: tuple[str, ...]
     evidence_references: tuple[str, ...]
+    evidence_references_by_type: Mapping[str, tuple[str, ...]]
     authentication_required: bool
     authentication_algorithm: str | None
     authentication_fingerprint: str | None
     unavailable_reason: str | None
-    schema: str = field(default="agora/application/gate-decision-option-summary/v1", init=False)
+    schema: str = field(default="agora/application/gate-decision-option-summary/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -392,7 +393,7 @@ class GateDecisionOptionsProjection(SerializableDTO):
     terminal: bool
     options: tuple[GateDecisionOptionSummary, ...]
     reason: str | None = None
-    schema: str = field(default="agora/application/gate-decision-options-projection/v1", init=False)
+    schema: str = field(default="agora/application/gate-decision-options-projection/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -419,6 +420,7 @@ class LifecycleProjection(SerializableDTO):
 
 @dataclass(frozen=True)
 class WorkControlProjection(SerializableDTO):
+    snapshot_token: str
     work: WorkItemDetail
     lifecycle: LifecycleProjection
     artifacts: tuple[ArtifactSummary, ...]
@@ -427,4 +429,4 @@ class WorkControlProjection(SerializableDTO):
     traceability: TraceabilitySummary
     specification_history: SpecificationSummary
     gate_decision_options: GateDecisionOptionsProjection
-    schema: str = field(default="agora/application/work-control-projection/v1", init=False)
+    schema: str = field(default="agora/application/work-control-projection/v2", init=False)
