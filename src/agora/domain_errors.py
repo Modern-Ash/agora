@@ -10,7 +10,18 @@ class ProjectIdentityMismatchRuleError(DomainRuleError):
 
 
 class StalePreconditionRuleError(DomainRuleError):
+    def __init__(self, message: str, *, stale_reason: str = "governed-material-changed") -> None:
+        super().__init__(message)
+        self.stale_reason = stale_reason
+
+
+class GovernedMaterialStaleRuleError(StalePreconditionRuleError):
     pass
+
+
+class PreparationExpiredRuleError(StalePreconditionRuleError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, stale_reason="preparation-expired")
 
 
 class GateAlreadyResolvedRuleError(DomainRuleError):
@@ -26,6 +37,10 @@ class GateDecisionRoleRuleError(DomainRuleError):
 
 
 class ActorUnauthorizedRuleError(PermissionError):
+    pass
+
+
+class SignatureInvalidRuleError(ActorUnauthorizedRuleError):
     pass
 
 

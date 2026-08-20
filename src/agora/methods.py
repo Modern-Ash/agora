@@ -35,6 +35,9 @@ def load_method_contract(root: Path) -> MethodContract:
         else {}
     )
     terminal_state = string_attribute(document.attributes, "terminal-state")
+    gate_decision_ttl_seconds = _optional_ttl_seconds(
+        document.attributes, "gate-decision-ttl-seconds"
+    )
     if not required_roles:
         raise ValueError(f"Method Pack {method_id} must define at least one required role")
     if not states:
@@ -160,6 +163,7 @@ def load_method_contract(root: Path) -> MethodContract:
         wip_limits=wip_limits,
         criterion_stages=criterion_stages,
         criterion_stage_roles=criterion_stage_roles,
+        gate_decision_ttl_seconds=gate_decision_ttl_seconds,
     )
 
 
@@ -197,6 +201,11 @@ def _load_gates(root: Path) -> dict[str, GatePolicy]:
             require_git_commit=_boolean(document.attributes, "require-git-commit", default=False),
             required_evidence_types=_string_list(
                 document.attributes, "required-evidence-types", default=[]
+            ),
+            require_content_addressed_evidence=_boolean(
+                document.attributes,
+                "require-content-addressed-evidence",
+                default=False,
             ),
             required_approval_roles=_string_list(
                 document.attributes, "required-approval-roles", default=[]
@@ -300,6 +309,15 @@ def _boolean(attributes: dict[str, Any], key: str, *, default: bool) -> bool:
     value = attributes.get(key, default)
     if not isinstance(value, bool):
         raise ValueError(f"Expected boolean attribute: {key}")
+    return value
+
+
+def _optional_ttl_seconds(attributes: dict[str, Any], key: str) -> int | None:
+    if key not in attributes:
+        return None
+    value = attributes[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Expected non-negative integer attribute: {key}")
     return value
 
 

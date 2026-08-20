@@ -33,4 +33,4 @@ agora init
   Confluence) behind provider-neutral Tool Packs.
 - **Multi-org trust** — Ed25519-signed packs and registries, optional transparency log.
 
-Status: alpha (0.7.0), ready for controlled pilots. See the [roadmap](roadmap.md) for open gaps.
+Status: alpha (0.8.0), ready for controlled pilots. See the [roadmap](roadmap.md) for open gaps.

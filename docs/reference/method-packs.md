@@ -63,6 +63,7 @@ Describe the lifecycle, its intent, and its completion expectations here.
 | `wip-limits` | Optional map of state ids to positive integer limits |
 | `criterion-stages` | Ordered, non-empty acceptance progress stages; legacy default is `satisfied` |
 | `criterion-stage-roles` | Optional map from a criterion stage to the roles allowed to record it |
+| `gate-decision-ttl-seconds` | Optional nonnegative integer overriding the project preparation TTL; zero disables expiration for this method |
 
 Every declared state must be reachable from the first state. The terminal state cannot have outgoing
 transitions. For a legacy pack without `transitions/`, Agora derives edges between adjacent states;
@@ -166,6 +167,10 @@ Actions currently issued by the CLI are:
 | `delegation.reject` | Reject a proposal under child authority |
 | `delegation.cancel` | Close a delegation under parent authority |
 
+Core Application Services additionally enforce `budget.amend` for the explicit parent-authorized
+child budget amendment. It is not yet a CLI operation. Bundled accountable request/owner roles carry
+the action; delivery child roles do not.
+
 A role may combine actions, but projects should grant only the authority required by that role.
 The specification-tooling actions remain advisory: permission to run one does not satisfy a
 criterion, grant approval, or move work. A generated artifact such as `gherkin-feature` becomes a
@@ -193,6 +198,7 @@ required-criterion-stage: "accepted"
 require-successful-evidence: true
 required-approval-roles: ["owner"]
 required-evidence-types: ["automated-test-run", "code-review"]
+require-content-addressed-evidence: true
 require-clean-git: true
 require-git-commit: true
 ---
@@ -216,6 +222,9 @@ adoption-friendly shortcut, but the acting role must be authorized for every con
 Legacy packs without the mapping retain their existing action-based behavior.
 
 `required-evidence-types` requires a successful record for each named evidence type. The optional
+`require-content-addressed-evidence` additionally requires every selected successful reference to
+carry an immutable artifact content identity. `repo://` digests are calculated locally; external
+URI digests are declared by the producer and Core never downloads them. The optional
 Git policies require a clean tree and/or a `git-commit` artifact with a `git://<full-sha>` URI that
 exists and is an ancestor of `HEAD`. Bundled methods leave the Git options disabled so teams can
 adopt Agora before choosing repository completion policy.

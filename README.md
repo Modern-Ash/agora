@@ -35,7 +35,7 @@ coordinate recursive swarms, run reviewed external tools, and validate its durab
 | Bundled workflows | Spec-Driven, Scrum, and Kanban Method Packs |
 | Actor forms | Human, AI, service, automation, and recursively composed swarm |
 | Integrations | Provider-neutral Tool Packs plus reviewed native CLI adapters |
-| Persistence | Human-readable Markdown, atomic document writes, and rollback-protected work creation |
+| Persistence | Human-readable Markdown, Git history, and rollback-protected compound lifecycle writes |
 | Compatibility | Explicit project migrations and `agora upgrade` support |
 | Stability | Alpha: CLI and Markdown contracts may still evolve before `1.0` |
 
@@ -97,7 +97,7 @@ flowchart LR
 Programmatic interfaces import the versioned contracts in `agora.application`. Agora CLI and the
 local-first Agora Studio API are peer adapters over those services; neither interface owns
 lifecycle policy or edits durable records outside Core. See the [application-service contract
-reference](docs/reference/application-services.md) for the Core 0.7 compatibility boundary.
+reference](docs/reference/application-services.md) for the Core 0.8 compatibility boundary.
 
 Configuration is resolved predictably:
 

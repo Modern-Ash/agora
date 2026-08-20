@@ -77,6 +77,22 @@ agora tool result --run <run-id>      # inspect captured provider output
 agora validate
 ```
 
+Core's automated live smoke is disabled by default. It requires a native authenticated ACLI and an
+explicitly confirmed non-production Jira project:
+
+```bash
+AGORA_RUN_JIRA_LIVE=1 \
+AGORA_JIRA_LIVE_PROJECT=AGORA-SANDBOX \
+AGORA_JIRA_LIVE_CONFIRMED_NONPRODUCTION=1 \
+uv run pytest tests/test_jira_live.py -q -s
+```
+
+`AGORA_JIRA_LIVE_ISSUE_TYPE` optionally overrides `Task`. The test prepares a bounded Tool Run,
+asserts that it is still `prepared`, and only then launches it. It creates a unique issue and reports
+the key for manual archival. It does not delete the issue because the reviewed neutral contract has
+no delete operation. Missing flags or ACLI produce a clean skip, and normal tests and samples never
+contact Jira.
+
 `tool launch` revalidates the recorded operation and current policy; actors configured for
 authentication must also supply the external signature. ACLI owns site selection, account
 permissions, network access, and provider errors. Agora owns role authority, exact command

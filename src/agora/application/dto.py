@@ -59,6 +59,7 @@ class ProjectOverview(SerializableDTO):
     default_method: str
     max_delegation_depth: int
     created_at: str
+    gate_decision_ttl_seconds: int | None
     branch: str
     counts: Mapping[str, int]
     swarm_statuses: Mapping[str, int]
@@ -68,7 +69,7 @@ class ProjectOverview(SerializableDTO):
     session_statuses: Mapping[str, int]
     tool_run_statuses: Mapping[str, int]
     attention: Mapping[str, tuple[str, ...]]
-    schema: str = field(default="agora/application/project-overview/v1", init=False)
+    schema: str = field(default="agora/application/project-overview/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -163,12 +164,13 @@ class GateSummary(SerializableDTO):
     required_criterion_stage: str | None
     require_successful_evidence: bool
     required_evidence_types: tuple[str, ...]
+    require_content_addressed_evidence: bool
     required_approval_roles: tuple[str, ...]
     require_clean_git: bool
     require_git_commit: bool
     blockers: tuple[GateBlockerSummary, ...] = ()
     satisfied: bool | None = None
-    schema: str = field(default="agora/application/gate-summary/v1", init=False)
+    schema: str = field(default="agora/application/gate-summary/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -195,7 +197,8 @@ class MethodSummary(SerializableDTO):
     wip_limits: Mapping[str, int]
     criterion_stages: tuple[str, ...]
     criterion_stage_roles: Mapping[str, tuple[str, ...]]
-    schema: str = field(default="agora/application/method-summary/v1", init=False)
+    gate_decision_ttl_seconds: int | None
+    schema: str = field(default="agora/application/method-summary/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -229,8 +232,9 @@ class ArtifactSummary(SerializableDTO):
     uri: str
     produced_by: str
     timestamp: str
+    content_sha256: str | None
     activity: ActivityEntry | None = None
-    schema: str = field(default="agora/application/artifact-summary/v2", init=False)
+    schema: str = field(default="agora/application/artifact-summary/v3", init=False)
 
 
 @dataclass(frozen=True)
@@ -238,10 +242,11 @@ class EvidenceSummary(SerializableDTO):
     type: str
     result: str
     artifact_references: tuple[str, ...]
+    artifact_content_sha256: Mapping[str, str | None]
     produced_by: str
     timestamp: str
     activity: ActivityEntry | None = None
-    schema: str = field(default="agora/application/evidence-summary/v2", init=False)
+    schema: str = field(default="agora/application/evidence-summary/v3", init=False)
 
 
 @dataclass(frozen=True)
@@ -280,7 +285,7 @@ class WorkItemDetail(SerializableDTO):
     artifact_kinds: tuple[str, ...] = ()
     evidence_results: tuple[str, ...] = ()
     approval_roles: tuple[str, ...] = ()
-    schema: str = field(default="agora/application/work-item-detail/v2", init=False)
+    schema: str = field(default="agora/application/work-item-detail/v3", init=False)
 
 
 @dataclass(frozen=True)
@@ -310,7 +315,7 @@ class TraceabilitySummary(SerializableDTO):
     artifacts: tuple[ArtifactSummary, ...]
     evidence: tuple[EvidenceSummary, ...]
     activity: tuple[ActivityEntry, ...]
-    schema: str = field(default="agora/application/traceability-summary/v1", init=False)
+    schema: str = field(default="agora/application/traceability-summary/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -377,11 +382,13 @@ class GateDecisionOptionSummary(SerializableDTO):
     required_evidence_types: tuple[str, ...]
     evidence_references: tuple[str, ...]
     evidence_references_by_type: Mapping[str, tuple[str, ...]]
+    evidence_content_sha256: Mapping[str, str | None]
+    content_addressed_evidence_required: bool
     authentication_required: bool
     authentication_algorithm: str | None
     authentication_fingerprint: str | None
     unavailable_reason: str | None
-    schema: str = field(default="agora/application/gate-decision-option-summary/v2", init=False)
+    schema: str = field(default="agora/application/gate-decision-option-summary/v3", init=False)
 
 
 @dataclass(frozen=True)
@@ -393,7 +400,7 @@ class GateDecisionOptionsProjection(SerializableDTO):
     terminal: bool
     options: tuple[GateDecisionOptionSummary, ...]
     reason: str | None = None
-    schema: str = field(default="agora/application/gate-decision-options-projection/v2", init=False)
+    schema: str = field(default="agora/application/gate-decision-options-projection/v3", init=False)
 
 
 @dataclass(frozen=True)
@@ -415,7 +422,7 @@ class LifecycleProjection(SerializableDTO):
     states: tuple[MethodStateSummary, ...] = ()
     transitions: tuple[TransitionSummary, ...] = ()
     gates: tuple[GateSummary, ...] = ()
-    schema: str = field(default="agora/application/lifecycle-projection/v2", init=False)
+    schema: str = field(default="agora/application/lifecycle-projection/v3", init=False)
 
 
 @dataclass(frozen=True)
@@ -429,4 +436,4 @@ class WorkControlProjection(SerializableDTO):
     traceability: TraceabilitySummary
     specification_history: SpecificationSummary
     gate_decision_options: GateDecisionOptionsProjection
-    schema: str = field(default="agora/application/work-control-projection/v2", init=False)
+    schema: str = field(default="agora/application/work-control-projection/v3", init=False)

@@ -48,8 +48,25 @@ An inherited map means:
 - accepted, collected, blocked, proposed, or cancelled contracts retain their reservation.
 
 Cancellation retains the reservation because the child may already have consumed some authorized
-capacity. Agora does not silently infer that capacity is reusable. A future explicit budget
-amendment or release protocol can add that decision with its own evidence and approval requirements.
+capacity. Agora does not silently infer that capacity is reusable. Core 0.8 exposes an explicit
+Application Service budget amendment; no automatic release occurs.
+
+## Amend a child allocation
+
+Construct `AmendBudgetCommand` and call `AgoraCommandService.prepare_budget_amendment()`. Review the
+returned parent and child identities, previous and proposed limits, consumed usage, evidence,
+accountable parent role, precondition digest, and expiration. An authenticated actor signs the exact
+authorization payload. Confirm those unchanged values with `amend_budget()`.
+
+Core revalidates parent authority, Method Pack `budget.amend` permission, child relationship,
+sibling allocation, current usage, evidence, actor key, and expiration under the project lock. It
+then writes the child's current `WORK.md`, append-only
+`budget-amendments/<id>/AMENDMENT.md`, work event, and Activity entry in one transaction. A child
+role cannot authorize its own increase, an amendment cannot introduce a dimension absent from a
+bounded parent, and no proposal may reduce a limit below consumption.
+
+This 0.8 boundary is programmatic; Agora CLI intentionally has no new budget-amend command yet.
+CLI and Studio adapters should call the same Application Service when they expose the operation.
 
 ## Record observed usage
 
@@ -103,8 +120,9 @@ the inherited parent limit before mutation.
 
 `agora validate` detects negative or malformed limits, unavailable dimensions, aggregate
 overallocation, malformed or misowned usage records, cumulative usage overruns, action/ledger
-mismatches, and a child work budget that differs from its accepted delegation. Existing unbounded
-work remains compatible because missing `budget-limits` is read as `null`.
+mismatches, and invalid parent-child relationships. A current child budget may legitimately differ
+from its original accepted delegation only through an append-only amendment record. Existing
+unbounded work remains compatible because missing `budget-limits` is read as `null`.
 
 Run the [delegated work sample](../../samples/delegated-work/README.md) to inspect a signed budget
 that is inherited by accepted child work and an evidence-backed usage record within that budget.

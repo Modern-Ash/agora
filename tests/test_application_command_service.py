@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -17,10 +17,13 @@ from agora.application import (
     ApproveGateCommand,
     CommandPersistenceError,
     EvidenceMissingError,
+    GovernedMaterialStaleError,
     InvalidCommandError,
+    PreparationExpiredError,
     ProjectIdentityMismatchError,
     SignatureRequiredError,
     StalePreconditionError,
+    TransactionIndeterminateError,
     approve_gate_authorization_payload,
 )
 from agora.domain_errors import EvidenceMissingRuleError, GateDecisionRoleRuleError
@@ -171,6 +174,10 @@ def prepared_command(service: AgoraCommandService, **changes: object) -> Approve
         reason=prepared.reason,
         evidence_references=prepared.evidence_references,
         precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+        evidence_content_sha256=prepared.evidence_content_sha256,
+        actor_fingerprint=prepared.actor_fingerprint,
     )
 
 
@@ -185,7 +192,7 @@ def test_serializes_the_immutable_versioned_command() -> None:
 
     payload = json.loads(value.to_json())
 
-    assert payload["schema"] == "agora/application/approve-gate-command/v3"
+    assert payload["schema"] == "agora/application/approve-gate-command/v4"
     assert payload["decision"] == "approved"
     assert payload["evidence_references"] == ["repo://reports/release.txt"]
     assert "path" not in payload
@@ -200,7 +207,7 @@ def test_core_exposes_exact_approve_and_reject_options(
 
     projection = AgoraReadService(workspace).gate_decision_options("delivery", "release")
 
-    assert projection.schema == ("agora/application/gate-decision-options-projection/v2")
+    assert projection.schema == ("agora/application/gate-decision-options-projection/v3")
     assert [(item.decision, item.allowed) for item in projection.options] == [
         ("approved", True),
         ("rejected", True),
@@ -317,12 +324,19 @@ def test_prepares_a_stable_canonical_authorization_payload(
     prepared = service.prepare_gate_decision(command())
     second = service.prepare_gate_decision(command())
 
-    assert prepared.schema == "agora/application/prepared-gate-decision/v2"
-    assert prepared.command_schema == "agora/application/approve-gate-command/v3"
-    assert prepared.authorization_schema == ("agora/application/approve-gate-authorization/v3")
+    assert prepared.schema == "agora/application/prepared-gate-decision/v3"
+    assert prepared.command_schema == "agora/application/approve-gate-command/v4"
+    assert prepared.authorization_schema == ("agora/application/approve-gate-authorization/v4")
     assert prepared.authorization_payload.encode("ascii") == (
         approve_gate_authorization_payload(
-            replace(command(), precondition_digest=prepared.precondition_digest)
+            replace(
+                command(),
+                precondition_digest=prepared.precondition_digest,
+                prepared_at=prepared.prepared_at,
+                expires_at=prepared.expires_at,
+                evidence_content_sha256=prepared.evidence_content_sha256,
+                actor_fingerprint=prepared.actor_fingerprint,
+            )
         )
     )
     assert (
@@ -332,7 +346,7 @@ def test_prepares_a_stable_canonical_authorization_payload(
     assert prepared == second
     assert prepared.authentication_required is False
     assert prepared.authentication_public_key is None
-    assert prepared.freshness == "governed-material/v1"
+    assert prepared.freshness == "governed-material/v2"
     assert re.fullmatch(r"[0-9a-f]{64}", prepared.precondition_digest)
 
 
@@ -351,7 +365,14 @@ def test_canonicalizes_reason_and_evidence_once_for_payload_projection_and_persi
     )
 
     prepared = service.prepare_gate_decision(raw)
-    request = replace(raw, precondition_digest=prepared.precondition_digest)
+    request = replace(
+        raw,
+        precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+        evidence_content_sha256=prepared.evidence_content_sha256,
+        actor_fingerprint=prepared.actor_fingerprint,
+    )
     result = service.approve_gate(request)
 
     assert prepared.reason == "Evidence reviewed and accepted"
@@ -435,6 +456,10 @@ def test_unsigned_decision_cannot_change_canonical_command_after_preparation(
     changed = command(
         reason="A different durable decision",
         precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+        evidence_content_sha256=prepared.evidence_content_sha256,
+        actor_fingerprint=prepared.actor_fingerprint,
     )
 
     with pytest.raises(StalePreconditionError):
@@ -480,7 +505,14 @@ def test_rejects_governed_material_that_changed_after_preparation_without_writes
         )
 
     prepared = service.prepare_gate_decision(command())
-    request = replace(command(), precondition_digest=prepared.precondition_digest)
+    request = replace(
+        command(),
+        precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+        evidence_content_sha256=prepared.evidence_content_sha256,
+        actor_fingerprint=prepared.actor_fingerprint,
+    )
 
     if changed_material == "evidence":
         workspace.add_evidence(
@@ -531,9 +563,11 @@ def test_rejects_governed_material_that_changed_after_preparation_without_writes
     ]
     before = {path: path.read_bytes() for path in decision_paths}
 
-    with pytest.raises(StalePreconditionError):
+    with pytest.raises(StalePreconditionError) as captured:
         service.approve_gate(request)
 
+    if changed_material == "key":
+        assert captured.value.to_dict()["details"]["stale_reason"] == "actor-key-changed"
     assert {path: path.read_bytes() for path in decision_paths} == before
 
 
@@ -637,7 +671,7 @@ def test_rejects_an_actor_without_gate_authority(
     with pytest.raises(ActorUnauthorizedError) as captured:
         service.prepare_gate_decision(command(actor_id="developer"))
 
-    assert captured.value.to_dict()["code"] == "command.actor-unauthorized"
+    assert captured.value.to_dict()["code"] == "authority.denied"
 
 
 def test_lifecycle_exposes_gate_policy_and_typed_blockers_before_decision(
@@ -669,7 +703,7 @@ def test_rejects_missing_or_unverified_evidence(
     with pytest.raises(EvidenceMissingError) as captured:
         service.prepare_gate_decision(command(evidence_references=("repo://reports/missing.txt",)))
 
-    assert captured.value.to_dict()["code"] == "command.evidence-missing"
+    assert captured.value.to_dict()["code"] == "gate.evidence-missing"
 
 
 def test_rejects_a_stale_expected_state(
@@ -770,6 +804,10 @@ def test_verifies_inline_authentication_against_the_current_actor_key(
     signed = replace(
         unsigned,
         precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+        evidence_content_sha256=prepared.evidence_content_sha256,
+        actor_fingerprint=prepared.actor_fingerprint,
         authentication={
             "algorithm": "ed25519",
             "fingerprint": fingerprint,
@@ -832,18 +870,30 @@ def test_signed_gate_decision_is_bound_to_the_exact_prepared_payload(
             unsigned,
             reason="Changed after preparation",
             precondition_digest=prepared.precondition_digest,
+            prepared_at=prepared.prepared_at,
+            expires_at=prepared.expires_at,
+            evidence_content_sha256=prepared.evidence_content_sha256,
+            actor_fingerprint=prepared.actor_fingerprint,
             authentication=authentication,
         )
     elif failure == "fingerprint":
         request = replace(
             unsigned,
             precondition_digest=prepared.precondition_digest,
+            prepared_at=prepared.prepared_at,
+            expires_at=prepared.expires_at,
+            evidence_content_sha256=prepared.evidence_content_sha256,
+            actor_fingerprint=prepared.actor_fingerprint,
             authentication={**authentication, "fingerprint": "0" * 64},
         )
     else:
         request = replace(
             unsigned,
             precondition_digest=prepared.precondition_digest,
+            prepared_at=prepared.prepared_at,
+            expires_at=prepared.expires_at,
+            evidence_content_sha256=prepared.evidence_content_sha256,
+            actor_fingerprint=prepared.actor_fingerprint,
             authentication={
                 **authentication,
                 "signature": base64.b64encode(b"x" * 64).decode("ascii"),
@@ -865,6 +915,230 @@ def test_rejects_double_submission(
 
     with pytest.raises(StalePreconditionError):
         service.approve_gate(request)
+
+
+@pytest.mark.parametrize("offset_seconds, expired", [(899, False), (900, True), (901, True)])
+def test_prepared_gate_decision_has_an_exact_utc_expiration_boundary(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    offset_seconds: int,
+    expired: bool,
+) -> None:
+    _, workspace, service = gate_project
+    request = prepared_command(service)
+    assert request.prepared_at == "2026-08-20T15:00:00Z"
+    assert request.expires_at == "2026-08-20T15:15:00Z"
+    workspace._now = lambda: TIMESTAMP + timedelta(seconds=offset_seconds)
+
+    if expired:
+        with pytest.raises(PreparationExpiredError) as captured:
+            service.approve_gate(request)
+        assert captured.value.to_dict()["code"] == "command.preparation-expired"
+        assert workspace.show_work("delivery", "release").approval_roles == []
+    else:
+        assert service.approve_gate(request).decision == "approved"
+
+
+def test_project_can_explicitly_disable_preparation_expiration(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    root, workspace, service = gate_project
+    project_path = root / ".agora" / "project.md"
+    project = read_markdown(project_path)
+    project.attributes["gate-decision-ttl-seconds"] = 0
+    project_path.write_text(render_markdown(project), encoding="utf-8")
+
+    request = prepared_command(service)
+    assert request.expires_at is None
+    workspace._now = lambda: TIMESTAMP + timedelta(days=3650)
+    assert service.approve_gate(request).decision == "approved"
+
+
+def test_signed_actor_replay_after_expiration_is_rejected_before_writes(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, workspace, service = gate_project
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    fingerprint = hashlib.sha256(public_key).hexdigest()
+    find_actor = workspace._find_actor
+
+    def authenticated_actor(root: Path, actor_id: str):
+        actor = find_actor(root, actor_id)
+        if actor.reference != "project:owner":
+            return actor
+        return replace(
+            actor,
+            authentication_required=True,
+            authentication_algorithm="ed25519",
+            authentication_public_key=base64.b64encode(public_key).decode("ascii"),
+            authentication_fingerprint=fingerprint,
+        )
+
+    monkeypatch.setattr(workspace, "_find_actor", authenticated_actor)
+    monkeypatch.setattr(workspace, "_assert_current_actor_key", lambda actor: None)
+    raw = command()
+    prepared = service.prepare_gate_decision(raw)
+    authentication = {
+        "algorithm": "ed25519",
+        "fingerprint": fingerprint,
+        "signature": base64.b64encode(
+            private_key.sign(prepared.authorization_payload.encode("ascii"))
+        ).decode("ascii"),
+    }
+    request = replace(
+        raw,
+        precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+        evidence_content_sha256=prepared.evidence_content_sha256,
+        actor_fingerprint=prepared.actor_fingerprint,
+        authentication=authentication,
+    )
+    workspace._now = lambda: TIMESTAMP + timedelta(seconds=900)
+
+    with pytest.raises(PreparationExpiredError):
+        service.approve_gate(request)
+    with pytest.raises(PreparationExpiredError):
+        service.approve_gate(request)
+    assert workspace.show_work("delivery", "release").approval_roles == []
+
+
+def test_external_evidence_digest_is_durable_and_stales_a_prepared_decision(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace, service = gate_project
+    remote_uri = "https://evidence.example.invalid/report"
+    original_digest = "a" * 64
+    replacement_digest = "b" * 64
+    monkeypatch.setattr(
+        "socket.create_connection",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network access")),
+    )
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="developer",
+            kind="external-report",
+            uri=remote_uri,
+            content_sha256=original_digest,
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="developer",
+            type="external-audit",
+            result="success",
+            artifact_refs=[remote_uri],
+        )
+    )
+    gate = root / ".agora" / "methods" / "scrum" / "gates" / "completion.md"
+    gate.write_text(
+        gate.read_text(encoding="utf-8").replace(
+            "require-successful-evidence: true",
+            "require-successful-evidence: true\n"
+            'required-evidence-types: ["external-audit"]\n'
+            "require-content-addressed-evidence: true",
+        ),
+        encoding="utf-8",
+    )
+    raw = command(evidence_references=(remote_uri,))
+    request = prepared_command(service, evidence_references=(remote_uri,))
+    prepared = service.prepare_gate_decision(raw)
+    assert AgoraReadService(workspace).artifacts("delivery", "release")[-1].content_sha256 == (
+        original_digest
+    )
+    assert prepared.precondition_digest == request.precondition_digest
+
+    for name in ("artifacts.md", "evidence.md"):
+        path = root / ".agora" / "swarms" / "delivery" / "work" / "release" / name
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(original_digest, replacement_digest),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(GovernedMaterialStaleError) as captured:
+        service.approve_gate(request)
+    assert captured.value.to_dict()["details"]["stale_reason"] in {
+        "evidence-changed",
+        "governed-material-changed",
+    }
+
+
+def test_content_addressed_gate_blocks_external_evidence_without_digest(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    root, workspace, service = gate_project
+    remote_uri = "https://evidence.example.invalid/informational"
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="developer",
+            kind="external-report",
+            uri=remote_uri,
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="developer",
+            type="external-audit",
+            result="success",
+            artifact_refs=[remote_uri],
+        )
+    )
+    assert workspace.list_work_artifacts("delivery", "release")[-1].content_sha256 is None
+    gate = root / ".agora" / "methods" / "scrum" / "gates" / "completion.md"
+    gate.write_text(
+        gate.read_text(encoding="utf-8").replace(
+            "require-successful-evidence: true",
+            "require-successful-evidence: true\n"
+            'required-evidence-types: ["external-audit"]\n'
+            "require-content-addressed-evidence: true",
+        ),
+        encoding="utf-8",
+    )
+
+    approved = next(
+        option
+        for option in AgoraReadService(workspace)
+        .gate_decision_options("delivery", "release")
+        .options
+        if option.decision == "approved"
+    )
+    assert any(
+        blocker.code == "gate.evidence-content-digest-missing" for blocker in approved.blockers
+    )
+    with pytest.raises(EvidenceMissingError):
+        service.prepare_gate_decision(command(evidence_references=(remote_uri,)))
+
+
+@pytest.mark.parametrize("digest", ["a" * 63, "A" * 64, "not-a-digest"])
+def test_rejects_invalid_declared_external_artifact_digest(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService], digest: str
+) -> None:
+    _, workspace, _ = gate_project
+
+    with pytest.raises(ValueError, match="64 lowercase hexadecimal"):
+        workspace.add_artifact(
+            AddArtifactInput(
+                swarm_id="delivery",
+                work_id="release",
+                actor_id="developer",
+                kind="external-report",
+                uri="https://evidence.example.invalid/report",
+                content_sha256=digest,
+            )
+        )
 
 
 def test_maps_an_intermediate_write_failure_and_rolls_back_every_record(
@@ -892,9 +1166,38 @@ def test_maps_an_intermediate_write_failure_and_rolls_back_every_record(
     with pytest.raises(CommandPersistenceError) as captured:
         service.approve_gate(prepared_command(service))
 
-    assert captured.value.to_dict()["code"] == "command.persistence-failed"
+    assert captured.value.to_dict()["code"] == "transaction.commit-failed"
     assert {path: path.read_bytes() for path in paths} == before
     assert workspace.show_work("delivery", "release").approval_roles == []
+
+
+def test_surfaces_an_indeterminate_transaction_when_rollback_also_fails(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, service = gate_project
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    calls = 0
+
+    def fail_commit_and_rollback(path: Path, contents: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls in {2, 3}:
+            raise OSError(f"injected failure {calls}")
+        original(path, contents)
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_commit_and_rollback)
+
+    with pytest.raises(TransactionIndeterminateError) as captured:
+        service.approve_gate(prepared_command(service))
+
+    payload = captured.value.to_dict()
+    assert payload["code"] == "transaction.indeterminate"
+    assert payload["retryable"] is False
+    assert "inspect Git" in payload["recovery_hint"]
+    assert "write_set" not in payload["details"]
 
 
 def test_translates_domain_failures_by_type_and_never_by_message(
@@ -902,20 +1205,21 @@ def test_translates_domain_failures_by_type_and_never_by_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, workspace, service = gate_project
+    request = prepared_command(service)
 
     def typed_failure(_input: object) -> object:
         raise EvidenceMissingRuleError("opaque domain failure")
 
     monkeypatch.setattr(workspace, "decide_gate", typed_failure)
     with pytest.raises(EvidenceMissingError, match="opaque domain failure"):
-        service.approve_gate(command(precondition_digest="a" * 64))
+        service.approve_gate(request)
 
     def misleading_untyped_failure(_input: object) -> object:
         raise ValueError("evidence project identity mismatch already resolved")
 
     monkeypatch.setattr(workspace, "decide_gate", misleading_untyped_failure)
     with pytest.raises(InvalidCommandError):
-        service.approve_gate(command(precondition_digest="a" * 64))
+        service.approve_gate(request)
 
 
 def test_ambiguous_gate_role_fails_as_a_controlled_invalid_command(
@@ -923,10 +1227,11 @@ def test_ambiguous_gate_role_fails_as_a_controlled_invalid_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, workspace, service = gate_project
+    request = prepared_command(service)
 
     def ambiguous_role(_input: object) -> object:
         raise GateDecisionRoleRuleError("No unique gate role is available")
 
     monkeypatch.setattr(workspace, "decide_gate", ambiguous_role)
     with pytest.raises(InvalidCommandError, match="No unique gate role"):
-        service.approve_gate(command(precondition_digest="a" * 64))
+        service.approve_gate(request)

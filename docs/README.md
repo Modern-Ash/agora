@@ -25,6 +25,10 @@ transaction, Tool Result, and Jira exercise changes are recorded in [Core harden
 Jira integration](changes/2026-08-core-hardening-and-jira.md). Advisory specification tooling,
 runtime fallbacks, provenance, traceability, and the aggregate board are recorded in
 [Spec tooling and runtime resilience](changes/2026-08-spec-tooling-runtime-resilience.md).
+Core 0.8 evidence identity, optimistic consistency, expiring preparations, transactions, stable
+errors, budget amendments, and optional Jira live verification are recorded in
+[Core 0.8 application hardening](changes/2026-08-core-0.8-application-hardening.md). Studio and other
+consumers should follow the [Core 0.7 to 0.8 migration guide](guides/core-0.8-studio-migration.md).
 
 ## Operational Markdown
 
@@ -80,6 +84,8 @@ do not exist as one static agent file in this repository.
   from a concise chronology to its durable evidence and bounded logs.
 - [Application Services contracts](reference/application-services.md): consume the versioned Core
   read and command boundary from CLI, Studio API, or another local adapter.
+- [Core 0.8 Studio migration](guides/core-0.8-studio-migration.md): adopt new schemas, preparation
+  timestamps, external evidence digests, and operational errors without moving policy into HTTP.
 - [Operational agent loop](guides/operational-loop.md): derive next actions, run bounded external
   actors, stop at human authority, and resume durable failures.
 - [Complete verification](guides/verification.md): run format, lint, tests, documentation, samples,

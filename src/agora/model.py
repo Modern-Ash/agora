@@ -30,6 +30,7 @@ DEFAULT_SESSION_TIMEOUT_SECONDS = 3600
 MAX_SESSION_TIMEOUT_SECONDS = 86400
 DEFAULT_SESSION_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_SESSION_MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+DEFAULT_GATE_DECISION_TTL_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class ProjectConfiguration(UserConfiguration):
     project: str
     version: str
     created_at: str
+    gate_decision_ttl_seconds: int | None = DEFAULT_GATE_DECISION_TTL_SECONDS
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,7 @@ class GatePolicy:
     require_clean_git: bool = False
     require_git_commit: bool = False
     required_evidence_types: list[str] = field(default_factory=list)
+    require_content_addressed_evidence: bool = False
 
 
 @dataclass(frozen=True)
@@ -173,6 +176,7 @@ class MethodContract:
     wip_limits: dict[str, int]
     criterion_stages: list[str] = field(default_factory=lambda: ["satisfied"])
     criterion_stage_roles: dict[str, list[str]] = field(default_factory=dict)
+    gate_decision_ttl_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -211,6 +215,8 @@ class GateDecisionOptionRecord:
     required_evidence_types: list[str]
     evidence_references: list[str]
     evidence_references_by_type: dict[str, list[str]]
+    evidence_content_sha256: dict[str, str | None]
+    content_addressed_evidence_required: bool
     authentication_required: bool
     authentication_algorithm: str | None
     authentication_fingerprint: str | None
@@ -222,6 +228,8 @@ class GateDecisionOptionRecord:
 class PreparedGateDecisionRecord:
     option: GateDecisionOptionRecord
     precondition_digest: str
+    prepared_at: str
+    expires_at: str | None
 
 
 @dataclass(frozen=True)
@@ -240,6 +248,7 @@ class ArtifactRecord:
     uri: str
     produced_by: str
     timestamp: str
+    content_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -249,6 +258,7 @@ class EvidenceRecord:
     artifact_references: list[str]
     produced_by: str
     timestamp: str
+    artifact_content_sha256: dict[str, str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1274,6 +1284,7 @@ class InitInput:
     model: str | None = None
     default_method: Method | None = None
     max_delegation_depth: int | None = None
+    gate_decision_ttl_seconds: int | None = DEFAULT_GATE_DECISION_TTL_SECONDS
     force: bool = False
 
 
@@ -1763,6 +1774,7 @@ class LifecycleAuthorizationRecord:
 class AddArtifactInput(WorkActorInput):
     kind: str = ""
     uri: str = ""
+    content_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1845,7 +1857,11 @@ class GateDecisionInput(WorkActorInput):
     transition_target: str = ""
     role_id: str = ""
     evidence_refs: list[str] = field(default_factory=list)
+    evidence_content_sha256: dict[str, str | None] = field(default_factory=dict)
+    prepared_actor_fingerprint: str | None = None
     precondition_digest: str | None = None
+    prepared_at: str | None = None
+    expires_at: str | None = None
     authentication_payload: bytes | None = None
     authentication_signature: str | None = None
     authentication_fingerprint: str | None = None
@@ -1854,6 +1870,67 @@ class GateDecisionInput(WorkActorInput):
 @dataclass(frozen=True)
 class PrepareApprovalInput(AddApprovalInput):
     id: str = ""
+
+
+@dataclass(frozen=True)
+class BudgetAmendmentInput:
+    project_identity: str
+    parent_swarm_id: str
+    parent_work_id: str
+    child_swarm_id: str
+    child_work_id: str
+    actor_id: str
+    role_id: str
+    amendment_id: str
+    proposed_limits: dict[str, int]
+    reason: str
+    evidence_refs: list[str] = field(default_factory=list)
+    precondition_digest: str | None = None
+    prepared_at: str | None = None
+    expires_at: str | None = None
+    authentication_payload: bytes | None = None
+    authentication_signature: str | None = None
+    authentication_fingerprint: str | None = None
+
+
+@dataclass(frozen=True)
+class BudgetAmendmentRecord:
+    id: str
+    project_identity: str
+    parent_work_ref: str
+    child_work_ref: str
+    previous_limits: dict[str, int]
+    proposed_limits: dict[str, int]
+    consumed: dict[str, int]
+    actor: str
+    role: str
+    reason: str
+    evidence_refs: list[str]
+    precondition_digest: str
+    authentication_fingerprint: str | None
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class PreparedBudgetAmendmentRecord:
+    precondition_digest: str
+    prepared_at: str
+    expires_at: str | None
+    parent_work_ref: str
+    child_work_ref: str
+    previous_limits: dict[str, int]
+    proposed_limits: dict[str, int]
+    consumed: dict[str, int]
+    actor: ActorRecord
+    role: str
+
+
+@dataclass(frozen=True)
+class BudgetAmendmentResult:
+    amendment: BudgetAmendmentRecord
+    activity: ActivityRecord
+    remaining: dict[str, int]
 
 
 @dataclass(frozen=True)

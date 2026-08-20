@@ -89,6 +89,12 @@ manifests.
 context for compound Markdown mutations. The transaction stages writes in memory, snapshots
 pre-existing files, commits them in insertion order, and restores applied files and newly created
 directories if a later write fails.
+`src/agora/application` exposes the versioned read and command contracts shared by CLI and Studio.
+Core 0.8 adds expiring preparations, optimistic durable read-sets, stable operational error v2, and
+the prepare/apply budget-amendment boundary. `src/agora/mutation_handlers.py` is the first
+incremental handler extraction: a declarative registry for criterion, artifact, and evidence
+mutations with explicit resolved context. It has no dynamic imports or global service locator;
+`AgoraWorkspace` remains the public compatibility facade.
 `src/agora/packs.py` validates shared pack versions, dependency declarations, and compatibility
 ranges.
 `src/agora/registries.py` validates installed registry snapshots and discovers Method and Tool Packs.
@@ -104,7 +110,7 @@ private keys.
 As Core is modularized, application services remain the shared compatibility surface for Agora CLI
 and Studio API. Moving a handler must not move its invariant into either interface.
 
-Core 0.7 extends the local read boundary for project overview, actors, swarms, work, sessions,
+Core 0.8 extends the local read boundary for project overview, actors, swarms, work, sessions,
 Method Pack topology, calculated transition availability, gates and blockers, materials, Activity,
 traceability, bounded specification history and revision detail, exact gate decision options, and a
 consistent aggregate work control projection. Workspace exposes stable typed reads for durable
@@ -112,22 +118,24 @@ materials and lifecycle assessment; `AgoraReadService` no longer reaches into pr
 parsers. See [Application Services contracts](reference/application-services.md).
 
 `AgoraCommandService` exposes the first governed mutation contract as
-`agora/application/approve-gate-command/v3`. The command and its preparation contract bind the
+`agora/application/approve-gate-command/v4`. The command and its preparation contract bind the
 exact transition, gate, role, actor, decision, reason, expected state, and evidence. Core revalidates
 those facts, Method Pack policy, typed durable evidence, registered artifact and specification
 digests, assignments, approvals, actor identity, and optional detached Ed25519 authentication
-before persistence. Preparation is the sole issuer of a versioned governed-material digest; apply
+before persistence. Preparation is the sole issuer of a versioned governed-material digest and UTC
+expiration window; apply
 recalculates it under the project mutation lock and rejects stale material before writes. Approval,
 work events, and the Activity ledger commit through one filesystem transaction; callers receive a
-versioned updated lifecycle projection or a stable `command.*` error. Domain failures are
+versioned updated lifecycle projection or a stable application error v2. Domain failures are
 translated by exception type, and the transaction returns its exact Activity record so concurrent
 events cannot be mistaken for the decision result.
 
 Multi-record control projections acquire that same local project lock without acquiring an external
-writer lease. This gives each Core reader one internally consistent Markdown/Git snapshot and a
-deterministic snapshot token while keeping an external coordination provider out of read paths.
-Manual edits that bypass Core remain outside the concurrency guarantee and are caught by normal
-validation or later freshness checks.
+writer lease. They also fingerprint the complete durable read-set and local Git identity before and
+after assembly. Core retries a changing projection at most three times, then returns
+`durable-state.concurrent-edit` instead of a mixed snapshot. Governed commands repeat their
+read-set check immediately before commit. This is optimistic consistency, not distributed or
+filesystem isolation; an external writer can still race during the commit window.
 
 ### CLI
 
@@ -245,6 +253,8 @@ Compound mutations distinguish three guarantees:
 | --- | --- |
 | One Markdown document | Write a sibling temporary file and atomically replace the destination |
 | Work creation | Stage the work document, companion registers, event streams, and Activity Ledger; roll back every applied write if commit fails |
+| Adopted work lifecycle mutations | Stage domain record, work event, and Activity together; restore content and mode and remove new files on failure |
+| Gate decisions and budget amendments | Revalidate the governed read-set immediately before one transaction and return its exact Activity record |
 | Specialized pack, registry, and upgrade changes | Use their reviewed staging and rollback mechanisms before publishing the new composition |
 
 The filesystem transaction is reentrant within one execution context. A nested helper contributes
@@ -253,6 +263,11 @@ its events share one outcome. The project writer lock prevents another local mut
 interleaving with that commit. This is rollback protection, not a distributed filesystem
 transaction: process or machine loss during a compound commit still requires Git reconciliation and
 `agora validate`.
+
+If commit fails, Core reports `transaction.commit-failed` after a successful rollback. If rollback
+also fails, it reports non-retryable `transaction.indeterminate` and instructs the operator to stop
+mutations, inspect Git, and validate. Public details contain phase and counts, never the private
+absolute write-set.
 
 Project protocol versions are independent from individual Markdown schema identifiers. A CLI update
 does not mutate a workspace. `agora upgrade` first produces a read-only plan; `--apply` backs up all
@@ -336,6 +351,18 @@ Its GitHub Pull Requests adapter uses `gh`; no bundled role receives `review.mer
 External runtimes and adapters may submit provider-neutral Usage records with authoritative evidence
 references. Agora accumulates those append-only integer dimensions against work budget limits and
 signs authenticated submissions without importing a provider metering SDK.
+
+External artifact identity is producer-supplied, not fetched. Core calculates SHA-256 for safe
+`repo://` content, preserves complete `git://` commits, and accepts a declared lowercase SHA-256 for
+other URI schemes without opening a network connection. Evidence records capture the registered
+artifact digest. Method Pack gates may require all selected successful evidence to be
+content-addressed; informational evidence may remain address-only when policy permits it.
+
+An accountable parent role may prepare and apply a child budget amendment. The signed material
+binds parent and child identity, old and proposed limits, sibling allocations, consumed usage,
+evidence, reason, actor key, and expiration. Application writes an append-only `AMENDMENT.md`,
+changes the child's current limits, and emits event plus Activity in one transaction. Child roles
+cannot self-authorize an increase and limits cannot fall below consumed usage.
 
 Actor authentication is separate from provider authentication. An actor may require an Ed25519
 signature over a prepared lifecycle action, Tool Run, or agent session before execution. Agora
