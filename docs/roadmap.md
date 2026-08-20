@@ -4,6 +4,11 @@ This roadmap records recommended core hardening after the observable Jira integr
 is ordered by risk reduction and architectural leverage, not by promised release date. Every item
 must preserve Agora's language, model, provider, and process independence.
 
+The target product boundary follows [ADR 0003](decisions/0003-core-studio-cli-boundaries.md): Agora
+Core owns domain rules and application services; Agora CLI and Studio API are peer adapters over
+those services. Studio is local-first for the 0.x series, and Markdown plus Git remain
+authoritative.
+
 ## Implemented foundation
 
 - Atomic replacement for individual Markdown documents.
@@ -33,22 +38,24 @@ Acceptance conditions:
 - validation succeeds after a rolled-back failure;
 - documentation states which operations have the guarantee.
 
-## Priority 2: split lifecycle handlers from the workspace facade
+## Priority 2: extract application services and lifecycle handlers
 
 `AgoraWorkspace` currently centralizes routing, validation, rendering, persistence, and lifecycle
-application. Extract operation families behind a small handler registry while retaining
-`AgoraWorkspace` as the public compatibility facade.
+application. Extract explicit Agora Application Services and operation families behind a small
+handler registry while retaining `AgoraWorkspace` as the public compatibility facade during the
+transition. Agora CLI and Studio API must call those same services rather than each other.
 
 Recommended boundaries:
 
 ```text
 AgoraWorkspace
-├── WorkLifecycleHandlers
-├── DelegationHandlers
-├── ActorIdentityHandlers
-├── ToolRunHandlers
-├── SessionHandlers
-└── PackAndRegistryHandlers
+└── AgoraApplicationServices
+    ├── WorkLifecycleHandlers
+    ├── DelegationHandlers
+    ├── ActorIdentityHandlers
+    ├── ToolRunHandlers
+    ├── SessionHandlers
+    └── PackAndRegistryHandlers
 ```
 
 Handlers should receive explicit resolved context and filesystem services. They must not introduce a
@@ -58,6 +65,9 @@ Acceptance conditions:
 
 - lifecycle action dispatch uses a declarative action-to-handler map;
 - adding one action does not extend a central conditional chain;
+- CLI and Studio API exercise the same application service for the same use case;
+- shared requests, responses, events, and errors are serializable and explicitly versioned;
+- interface adapters contain no lifecycle policy and Studio never shells out to the CLI;
 - existing public Python and CLI behavior remains compatible;
 - Method Pack rules are reapplied immediately before every mutation;
 - unit tests can exercise a handler without initializing unrelated subsystems.
@@ -128,4 +138,7 @@ credentials durable.
 - No shell command construction for Tool Packs.
 - No automatic installation or authentication of native provider CLIs.
 - No database replacing Markdown and Git as the collaboration substrate.
+- No direct Studio edits to `.agora/` or conceptual dependency on terminal commands.
+- No authoritative Studio database; SQLite may only be a regenerable local projection.
+- No remote or multiuser Studio mode during the initial 0.x scope.
 - No claim that rollback protection supplies operating-system or distributed transaction isolation.

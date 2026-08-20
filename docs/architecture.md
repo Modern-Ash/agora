@@ -3,9 +3,14 @@
 ## Purpose
 
 Agora installs a local layer for customizing and governing the complete work lifecycle of humans and
-agents. The distributed product is a small Python CLI accompanied by Markdown templates. Python is
-an implementation choice for the CLI, not a required language or runtime for governed projects. The
-materialized product is the `.agora` directory and the selected agent adapter inside a project.
+agents. Agora Core contains the domain, application services, protocol, and persistence boundaries.
+The Python CLI is an optional interface to Core, not the architectural owner of the lifecycle.
+Python is an implementation choice for the current distribution and does not constrain the language
+or runtime of governed projects. The durable materialization remains the `.agora` directory and the
+selected agent adapter inside a project.
+
+The current CLI-centered distribution is summarized below. Its CLI-to-filesystem arrow compresses
+the Core application, domain, port, and adapter layers detailed in the next section.
 
 ```mermaid
 flowchart LR
@@ -20,8 +25,39 @@ flowchart LR
     CTX --> A
 ```
 
-The CLI owns validation and mutation rules. LLMs, IDEs, provider CLIs, and cloud services remain
-replaceable execution environments around the same protocol.
+Core owns validation and mutation rules. LLMs, IDEs, provider CLIs, Studio, and cloud services
+remain replaceable interfaces or execution environments around the same protocol.
+
+## Architectural boundaries
+
+[ADR 0003](decisions/0003-core-studio-cli-boundaries.md) separates Core from its user interfaces.
+Both terminal and web flows enter the same application-service boundary:
+
+```mermaid
+flowchart LR
+    SW[Studio Web] --> API[Studio API]
+    API --> APP[Agora Application Services]
+    CLI[Agora CLI] --> APP
+    APP --> DOMAIN[Domain]
+    DOMAIN --> PORTS[Ports]
+    PORTS --> ADAPTERS[Markdown / Git adapters]
+```
+
+Agora Core owns all domain rules, use-case orchestration, protocol interpretation, and persistence
+semantics. Agora CLI is an optional terminal, agent, and automation adapter. Agora Studio is a web
+control plane; its Studio API is an HTTP adapter over the same application services used by the CLI.
+No lifecycle rule may exist only in a CLI command or Studio route.
+
+Studio Web never edits `.agora/` directly, and Studio API does not implement operations by invoking
+terminal commands. Both constraints keep command spelling and browser behavior out of the domain.
+Requests, responses, events, and errors shared across these boundaries are serializable and carry an
+explicit contract version.
+
+Studio remains local-first during the 0.x series. Remote operation and multiuser coordination are
+not part of the initial architecture. Markdown and Git remain authoritative; a future Studio SQLite
+store may only be a disposable projection that is fully regenerable from them.
+
+The current CLI distribution materializes these scopes:
 
 ```text
 Python CLI + packs
@@ -34,10 +70,12 @@ Python CLI + packs
 
 ## Components
 
-### CLI
+### Core and current implementation
 
-`src/agora/cli.py` translates shell commands into workspace operations. It does not maintain a server
-or database, invoke an LLM, inspect project source languages, or impose a development methodology.
+The current Python modules co-locate some boundaries that the architecture keeps conceptually
+separate. `src/agora/cli.py` translates shell commands into Core operations; it is not the reusable
+application-service boundary. It does not maintain a server or database, invoke an LLM, inspect
+project source languages, or impose a development methodology.
 `src/agora/workspace.py` materializes and validates documents, capabilities, actions, workflows,
 gates, granular waivers, direct and delegated approvals, handoffs, interruptions, work delegations,
 sessions, and tool runs.
@@ -62,6 +100,22 @@ handling private signing material.
 `src/agora/identity.py` validates actor public identities, canonicalizes lifecycle, Tool Run, and
 session authorization payloads, and verifies both live and persisted signatures without handling
 private keys.
+
+As Core is modularized, application services remain the shared compatibility surface for Agora CLI
+and Studio API. Moving a handler must not move its invariant into either interface.
+
+### CLI
+
+Agora CLI maps arguments, standard input and output, terminal-oriented errors, and process exit
+codes to versioned Core requests and results. Agents and automation may continue to use it without
+making CLI syntax a dependency of Studio or a source of domain policy.
+
+### Studio and Studio API
+
+Agora Studio renders local control-plane views and submits intents to Studio API. Studio API maps
+versioned HTTP contracts to Agora Application Services and maps Core results back to HTTP. Neither
+layer owns lifecycle decisions or persistence behavior. Studio API accesses Markdown and Git only
+through Core ports and adapters; Studio Web has no filesystem mutation path.
 
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
@@ -155,8 +209,9 @@ published. A failed multi-pack removal restores the previous trees and lock.
 ### Git and filesystem
 
 Markdown is the durable contract and the filesystem represents current state. Git adds history,
-diffs, review, synchronization, and branches. There is no parallel JSON snapshot. Atomic replacement
-keeps the previous document intact when an individual write fails.
+diffs, review, synchronization, and branches. There is no parallel authoritative JSON or database
+snapshot. A future SQLite index for Studio must be disposable and fully regenerable from Markdown
+and Git. Atomic replacement keeps the previous document intact when an individual write fails.
 
 Compound mutations distinguish three guarantees:
 
