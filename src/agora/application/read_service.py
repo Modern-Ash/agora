@@ -12,9 +12,18 @@ from agora.application.dto import (
     ApprovalSummary,
     ArtifactSummary,
     EvidenceSummary,
+    GateBlockerSummary,
+    GateSummary,
     LifecycleProjection,
+    MethodStateSummary,
+    MethodSummary,
     ProjectOverview,
+    SessionSummary,
+    SpecificationRevisionSummary,
+    SpecificationSummary,
     SwarmSummary,
+    TraceabilitySummary,
+    TransitionSummary,
     WorkItemDetail,
     WorkItemSummary,
 )
@@ -24,9 +33,28 @@ from agora.application.errors import (
     ProjectNotFoundError,
     ReadResourceNotFoundError,
 )
-from agora.application.queries import ActivityFilters, ActorFilters, SwarmFilters, WorkItemFilters
+from agora.application.queries import (
+    ActivityFilters,
+    ActorFilters,
+    SessionFilters,
+    SwarmFilters,
+    WorkItemFilters,
+)
 from agora.filesystem import assert_slug
-from agora.model import ActivityRecord, ActorRecord, SwarmRecord, WorkRecord
+from agora.model import (
+    ActivityRecord,
+    ActorRecord,
+    ApprovalRecord,
+    ArtifactRecord,
+    EvidenceRecord,
+    GateBlockerRecord,
+    GatePolicy,
+    MethodContract,
+    SessionRecord,
+    SwarmRecord,
+    TransitionAssessmentRecord,
+    WorkRecord,
+)
 from agora.workspace import AgoraWorkspace
 
 ReadResult = TypeVar("ReadResult")
@@ -95,6 +123,30 @@ class AgoraReadService:
             lambda: self._swarm_summary(self._workspace.show_swarm(swarm_id)),
         )
 
+    def list_sessions(self, filters: SessionFilters | None = None) -> tuple[SessionSummary, ...]:
+        query = filters or SessionFilters()
+        return self._read(
+            "sessions",
+            lambda: tuple(
+                self._session_summary(record)
+                for record in self._workspace.list_sessions(query.status)
+            ),
+        )
+
+    def get_session(self, session_id: str) -> SessionSummary:
+        self._require_slug(session_id, "Session id")
+        return self._read(
+            f"session {session_id}",
+            lambda: self._session_summary(self._workspace.show_session(session_id)),
+        )
+
+    def get_method(self, swarm_id: str) -> MethodSummary:
+        self._require_slug(swarm_id, "Swarm id")
+        return self._read(
+            f"method for swarm {swarm_id}",
+            lambda: self._method_summary(self._workspace.method_contract(swarm_id)),
+        )
+
     def list_work_items(
         self, filters: WorkItemFilters | None = None
     ) -> tuple[WorkItemSummary, ...]:
@@ -118,7 +170,7 @@ class AgoraReadService:
 
         def read() -> WorkItemDetail:
             work = self._workspace.show_work(swarm_id, work_id)
-            artifacts, evidence, approvals = self._work_materials(work)
+            artifacts, evidence, approvals = self._work_materials(swarm_id, work_id)
             return WorkItemDetail(
                 id=work.id,
                 swarm_id=work.swarm_id,
@@ -160,7 +212,7 @@ class AgoraReadService:
         return self._read(
             "activity",
             lambda: tuple(
-                self._activity_entry(record)
+                self.activity_entry(record)
                 for record in self._workspace.list_activity(
                     actor_id=query.actor_id,
                     swarm_id=query.swarm_id,
@@ -177,20 +229,27 @@ class AgoraReadService:
         self._require_work_slugs(swarm_id, work_id)
 
         def read() -> LifecycleProjection:
-            swarm = self._workspace.show_swarm(swarm_id)
             work = self._workspace.show_work(swarm_id, work_id)
-            contract = self._workspace.method_contract(swarm_id)
+            assessment = self._workspace.inspect_work_lifecycle(swarm_id, work_id)
+            contract = assessment.method
+            transitions = tuple(self._transition_summary(item) for item in assessment.transitions)
             available = tuple(
                 dict.fromkeys(
                     transition.target
-                    for transition in contract.transitions
+                    for transition in transitions
                     if transition.source == work.state
                 )
             )
+            gate_blockers: dict[str, tuple[GateBlockerSummary, ...]] = {}
+            assessed_gates: set[str] = set()
+            for transition in transitions:
+                if transition.gate_id is not None and transition.source == work.state:
+                    assessed_gates.add(transition.gate_id)
+                    gate_blockers[transition.gate_id] = transition.blockers
             return LifecycleProjection(
-                swarm_id=swarm.id,
+                swarm_id=assessment.swarm_id,
                 work_id=work.id,
-                method=swarm.method,
+                method=contract.id,
                 current_state=work.state,
                 operational_status=work.operational_status,
                 terminal_state=contract.terminal_state,
@@ -202,6 +261,16 @@ class AgoraReadService:
                 artifact_kinds=work.artifact_kinds,
                 evidence_results=work.evidence_results,
                 approval_roles=work.approval_roles,
+                states=self._method_states(contract),
+                transitions=transitions,
+                gates=tuple(
+                    self._gate_summary(
+                        gate,
+                        blockers=gate_blockers.get(gate_id, ()),
+                        assessed=gate_id in assessed_gates,
+                    )
+                    for gate_id, gate in contract.gates.items()
+                ),
             )
 
         return self._read(f"lifecycle {swarm_id}/{work_id}", read)
@@ -210,31 +279,106 @@ class AgoraReadService:
         self._require_work_slugs(swarm_id, work_id)
 
         def read() -> tuple[ArtifactSummary, ...]:
-            work = self._workspace.show_work(swarm_id, work_id)
-            artifacts, _, _ = self._work_materials(work)
-            return artifacts
+            return tuple(
+                self._artifact_summary(record)
+                for record in self._workspace.list_work_artifacts(swarm_id, work_id)
+            )
 
         return self._read(f"artifacts {swarm_id}/{work_id}", read)
 
+    def evidence(self, swarm_id: str, work_id: str) -> tuple[EvidenceSummary, ...]:
+        self._require_work_slugs(swarm_id, work_id)
+        return self._read(
+            f"evidence {swarm_id}/{work_id}",
+            lambda: tuple(
+                self._evidence_summary(record)
+                for record in self._workspace.list_work_evidence(swarm_id, work_id)
+            ),
+        )
+
+    def approvals(self, swarm_id: str, work_id: str) -> tuple[ApprovalSummary, ...]:
+        self._require_work_slugs(swarm_id, work_id)
+        return self._read(
+            f"approvals {swarm_id}/{work_id}",
+            lambda: tuple(
+                self._approval_summary(record)
+                for record in self._workspace.list_work_approvals(swarm_id, work_id)
+            ),
+        )
+
+    def work_traceability(self, swarm_id: str, work_id: str) -> TraceabilitySummary:
+        self._require_work_slugs(swarm_id, work_id)
+
+        def read() -> TraceabilitySummary:
+            record = self._workspace.work_traceability(swarm_id, work_id)
+            return TraceabilitySummary(
+                swarm_id=str(record["swarm"]),
+                work_id=str(record["work"]),
+                state=str(record["state"]),
+                stale=bool(record["stale"]),
+                criteria=tuple(record["criteria"]),  # type: ignore[arg-type]
+                clarifications=record["clarifications"],  # type: ignore[arg-type]
+                gherkin=tuple(record["gherkin"]),  # type: ignore[arg-type]
+                consistency=tuple(record["consistency"]),  # type: ignore[arg-type]
+                artifacts=self.artifacts(swarm_id, work_id),
+                evidence=self.evidence(swarm_id, work_id),
+                activity=self.activity(
+                    ActivityFilters(swarm_id=swarm_id, work_id=work_id, limit=500)
+                ),
+            )
+
+        return self._read(f"traceability {swarm_id}/{work_id}", read)
+
+    def specification_history(self, swarm_id: str, work_id: str) -> SpecificationSummary:
+        self._require_work_slugs(swarm_id, work_id)
+
+        def read() -> SpecificationSummary:
+            history = self._workspace.work_specification_history(swarm_id, work_id)
+            return SpecificationSummary(
+                available=history.available,
+                uri=history.uri,
+                revisions=tuple(
+                    SpecificationRevisionSummary(
+                        id=revision.id,
+                        kind=revision.kind,
+                        sha=revision.sha,
+                        short_sha=revision.short_sha,
+                        timestamp=revision.timestamp,
+                        author=revision.author,
+                        subject=revision.subject,
+                        uncommitted=revision.uncommitted,
+                    )
+                    for revision in history.revisions
+                ),
+                has_history=history.has_history,
+                working_tree=history.working_tree,
+                truncated=history.truncated,
+                reason=history.reason,
+            )
+
+        return self._read(f"specification history {swarm_id}/{work_id}", read)
+
     def _work_materials(
-        self, work: WorkRecord
+        self, swarm_id: str, work_id: str
     ) -> tuple[
         tuple[ArtifactSummary, ...],
         tuple[EvidenceSummary, ...],
         tuple[ApprovalSummary, ...],
     ]:
-        root = self._workspace.project_root()
-        self._require_internal_path(root, Path(work.path))
-        artifact_rows = self._workspace._work_artifact_rows(work)
-        for _, uri in artifact_rows:
-            self._workspace._assert_artifact_reference(root, uri)
-        artifacts = tuple(ArtifactSummary(kind=kind, uri=uri) for kind, uri in artifact_rows)
-        evidence = tuple(
-            EvidenceSummary(type=type_, result=result, artifact_references=references)
-            for type_, result, references in self._workspace._work_evidence_rows(work)
+        return (
+            tuple(
+                self._artifact_summary(record)
+                for record in self._workspace.list_work_artifacts(swarm_id, work_id)
+            ),
+            tuple(
+                self._evidence_summary(record)
+                for record in self._workspace.list_work_evidence(swarm_id, work_id)
+            ),
+            tuple(
+                self._approval_summary(record)
+                for record in self._workspace.list_work_approvals(swarm_id, work_id)
+            ),
         )
-        approvals = tuple(ApprovalSummary(role=role) for role in work.approval_roles)
-        return artifacts, evidence, approvals
 
     def _read(self, subject: str, operation: Callable[[], ReadResult]) -> ReadResult:
         self._project_root()
@@ -307,6 +451,151 @@ class AgoraReadService:
             work_states=contract.work_states,
         )
 
+    def _session_summary(self, record: SessionRecord) -> SessionSummary:
+        root = self._workspace.project_root()
+        self._require_internal_path(root, Path(record.path))
+        self._require_internal_path(root, Path(record.context_path))
+        return SessionSummary(
+            id=record.id,
+            actor=record.actor,
+            executor=record.executor or record.actor,
+            swarm_id=record.swarm_id,
+            work_id=record.work_id,
+            roles=record.roles,
+            integration=record.integration,
+            provider=record.provider,
+            model=record.model,
+            status=record.status,
+            record_uri=f"repo://.agora/sessions/{record.id}/SESSION.md",
+            context_uri=f"repo://.agora/sessions/{record.id}/CONTEXT.md",
+            launch_command=record.launch_command,
+            runtime_available=record.runtime_available,
+            created_at=record.created_at,
+            exit_code=record.exit_code,
+            timeout_seconds=record.timeout_seconds,
+            max_output_bytes=record.max_output_bytes,
+            output_bytes=record.output_bytes,
+            termination_reason=record.termination_reason,
+            context_sha256=record.context_sha256,
+            authentication_verified=record.authentication_verified,
+            authentication_fingerprint=record.authentication_fingerprint,
+            authentication_public_key=record.authentication_public_key,
+            authorization_sha256=record.authorization_sha256,
+            authorization_signature=record.authorization_signature,
+            preparation_action_id=record.preparation_action_id,
+        )
+
+    @staticmethod
+    def _method_states(contract: MethodContract) -> tuple[MethodStateSummary, ...]:
+        initial = contract.work_states[0]
+        return tuple(
+            MethodStateSummary(
+                id=state,
+                initial=state == initial,
+                terminal=state == contract.terminal_state,
+            )
+            for state in contract.work_states
+        )
+
+    def _method_summary(self, contract: MethodContract) -> MethodSummary:
+        return MethodSummary(
+            id=contract.id,
+            name=contract.name,
+            version=contract.version,
+            required_roles=contract.required_roles,
+            states=self._method_states(contract),
+            transitions=tuple(
+                TransitionSummary(
+                    source=transition.source,
+                    target=transition.target,
+                    authorized_roles=transition.roles,
+                    gate_id=transition.gate,
+                    required_approval_roles=(
+                        contract.gates[transition.gate].required_approval_roles
+                        if transition.gate is not None
+                        else ()
+                    ),
+                    available=None,
+                )
+                for transition in contract.transitions
+            ),
+            gates=tuple(self._gate_summary(gate) for gate in contract.gates.values()),
+            wip_limits=contract.wip_limits,
+            criterion_stages=contract.criterion_stages,
+            criterion_stage_roles=contract.criterion_stage_roles,
+        )
+
+    @staticmethod
+    def _blocker_summary(record: GateBlockerRecord) -> GateBlockerSummary:
+        return GateBlockerSummary(
+            code=record.code,
+            category=record.category,
+            message=record.message,
+            references=record.references,
+        )
+
+    def _transition_summary(self, record: TransitionAssessmentRecord) -> TransitionSummary:
+        return TransitionSummary(
+            source=record.source,
+            target=record.target,
+            authorized_roles=record.roles,
+            gate_id=record.gate_id,
+            required_approval_roles=record.required_approval_roles,
+            available=record.available,
+            blockers=tuple(self._blocker_summary(item) for item in record.blockers),
+        )
+
+    @staticmethod
+    def _gate_summary(
+        gate: GatePolicy,
+        *,
+        blockers: tuple[GateBlockerSummary, ...] = (),
+        assessed: bool = False,
+    ) -> GateSummary:
+        return GateSummary(
+            id=gate.id,
+            require_all_criteria=gate.require_all_criteria,
+            require_required_artifacts=gate.require_required_artifacts,
+            required_artifacts=gate.required_artifacts,
+            required_criterion_stage=gate.required_criterion_stage,
+            require_successful_evidence=gate.require_successful_evidence,
+            required_evidence_types=gate.required_evidence_types,
+            required_approval_roles=gate.required_approval_roles,
+            require_clean_git=gate.require_clean_git,
+            require_git_commit=gate.require_git_commit,
+            blockers=blockers,
+            satisfied=not blockers if assessed else None,
+        )
+
+    @staticmethod
+    def _artifact_summary(record: ArtifactRecord) -> ArtifactSummary:
+        return ArtifactSummary(
+            kind=record.kind,
+            uri=record.uri,
+            produced_by=record.produced_by,
+            timestamp=record.timestamp,
+        )
+
+    @staticmethod
+    def _evidence_summary(record: EvidenceRecord) -> EvidenceSummary:
+        return EvidenceSummary(
+            type=record.type,
+            result=record.result,
+            artifact_references=record.artifact_references,
+            produced_by=record.produced_by,
+            timestamp=record.timestamp,
+        )
+
+    @staticmethod
+    def _approval_summary(record: ApprovalRecord) -> ApprovalSummary:
+        return ApprovalSummary(
+            role=record.role,
+            actor=record.actor,
+            decision="approved",
+            note=record.note,
+            timestamp=record.timestamp,
+        )
+
     @staticmethod
     def _work_summary(record: WorkRecord) -> WorkItemSummary:
         return WorkItemSummary(
@@ -333,7 +622,8 @@ class AgoraReadService:
         )
 
     @staticmethod
-    def _activity_entry(record: ActivityRecord) -> ActivityEntry:
+    def activity_entry(record: ActivityRecord) -> ActivityEntry:
+        """Project one exact durable Activity record into its public contract."""
         return ActivityEntry(
             timestamp=record.timestamp,
             type=record.type,

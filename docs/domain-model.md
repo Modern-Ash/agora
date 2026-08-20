@@ -27,6 +27,13 @@ They may validate transport shape and render results, but a lifecycle rule canno
 interface. Requests, responses, events, and errors that cross an interface boundary must be
 serializable and explicitly versioned.
 
+A **Lifecycle Projection** is a read model calculated by Core from current work and its Method Pack.
+It contains the complete state and transition topology, authorized roles, gate policies, structured
+blockers, and executable availability. It is not durable state and cannot authorize a mutation by
+itself. Artifact, evidence, approval, session, Activity, traceability, and specification-history
+summaries likewise project durable Markdown and Git records without becoming a second source of
+truth. Relationships are present only when the durable protocol records them exactly.
+
 ## Actor, role, and assignment
 
 An **Actor** has an identity, kind, capabilities, a primary runtime, and an optional ordered runtime

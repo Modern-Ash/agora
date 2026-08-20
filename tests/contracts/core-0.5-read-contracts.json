@@ -1,0 +1,119 @@
+{
+  "core_version": "0.5.0",
+  "session": {
+    "schema": "agora/application/session-summary/v1",
+    "id": "session-1",
+    "actor": "project:developer",
+    "executor": "project:developer",
+    "swarm_id": "delivery",
+    "work_id": "feature",
+    "roles": ["developer"],
+    "integration": "generic",
+    "provider": "local",
+    "model": "local",
+    "status": "prepared",
+    "record_uri": "repo://.agora/sessions/session-1/SESSION.md",
+    "context_uri": "repo://.agora/sessions/session-1/CONTEXT.md"
+  },
+  "method": {
+    "schema": "agora/application/method-summary/v1",
+    "id": "scrum",
+    "states": [
+      {"schema": "agora/application/method-state-summary/v1", "id": "specified", "initial": true, "terminal": false}
+    ],
+    "transitions": [
+      {
+        "schema": "agora/application/transition-summary/v1",
+        "source": "specified",
+        "target": "planned",
+        "authorized_roles": ["product-owner"],
+        "gate_id": null,
+        "required_approval_roles": [],
+        "available": null,
+        "blockers": []
+      }
+    ]
+  },
+  "lifecycle": {
+    "schema": "agora/application/lifecycle-projection/v2",
+    "current_state": "verifying",
+    "transitions": [
+      {
+        "schema": "agora/application/transition-summary/v1",
+        "source": "verifying",
+        "target": "completed",
+        "authorized_roles": ["product-owner"],
+        "gate_id": "completion",
+        "required_approval_roles": ["product-owner"],
+        "available": false,
+        "blockers": [
+          {
+            "schema": "agora/application/gate-blocker-summary/v1",
+            "code": "gate.approvals-missing",
+            "category": "approval",
+            "message": "Required approval roles are missing",
+            "references": ["product-owner"]
+          }
+        ]
+      }
+    ]
+  },
+  "artifact": {
+    "schema": "agora/application/artifact-summary/v2",
+    "kind": "test-report",
+    "uri": "repo://reports/result.txt",
+    "produced_by": "project:developer",
+    "timestamp": "2026-08-20T12:00:00Z",
+    "activity": null
+  },
+  "evidence": {
+    "schema": "agora/application/evidence-summary/v2",
+    "type": "test-run",
+    "result": "success",
+    "artifact_references": ["repo://reports/result.txt"],
+    "produced_by": "project:developer",
+    "timestamp": "2026-08-20T12:00:00Z",
+    "activity": null
+  },
+  "approval": {
+    "schema": "agora/application/approval-summary/v2",
+    "role": "product-owner",
+    "actor": "project:owner",
+    "decision": "approved",
+    "note": "Accepted",
+    "timestamp": "2026-08-20T12:00:00Z",
+    "activity": null
+  },
+  "traceability": {
+    "schema": "agora/application/traceability-summary/v1",
+    "activity": [
+      {
+        "schema": "agora/application/activity-entry/v1",
+        "timestamp": "2026-08-20T12:00:00Z",
+        "type": "artifact.added",
+        "actor": "project:developer",
+        "session_id": "session-1",
+        "tool_run_id": null,
+        "source": "repo://.agora/swarms/delivery/work/feature/events.md"
+      }
+    ]
+  },
+  "specification": {
+    "schema": "agora/application/specification-summary/v1",
+    "available": true,
+    "uri": "repo://docs/spec.md",
+    "revisions": [
+      {
+        "schema": "agora/application/specification-revision-summary/v1",
+        "id": "0123456789012345678901234567890123456789",
+        "kind": "commit",
+        "sha": "0123456789012345678901234567890123456789",
+        "short_sha": "0123456789",
+        "timestamp": "2026-08-20T12:00:00Z",
+        "author": "Agora Test",
+        "subject": "docs: add spec",
+        "uncommitted": false
+      }
+    ]
+  }
+}

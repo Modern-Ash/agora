@@ -16,6 +16,9 @@ authoritative.
 - Rollback-protected work creation across its contract, event streams, and Activity Ledger.
 - Typed, read-only inspection of Tool Runs and captured Tool Results.
 - Validation that terminal result identity and metadata match the governing run.
+- A complete versioned read boundary for sessions, Method Packs, lifecycle blockers, materials,
+  traceability, and bounded specification history, shared by CLI and Studio API.
+- Typed gate-decision domain failures and transaction-exact Activity results.
 - An executable Jira adapter scenario that shows reads, writes, provider output, and denied
   authority without requiring live credentials.
 
@@ -38,12 +41,13 @@ Acceptance conditions:
 - validation succeeds after a rolled-back failure;
 - documentation states which operations have the guarantee.
 
-## Priority 2: extract application services and lifecycle handlers
+## Priority 2: continue extracting mutation handlers
 
-`AgoraWorkspace` currently centralizes routing, validation, rendering, persistence, and lifecycle
-application. Extract explicit Agora Application Services and operation families behind a small
-handler registry while retaining `AgoraWorkspace` as the public compatibility facade during the
-transition. Agora CLI and Studio API must call those same services rather than each other.
+The read boundary and first governed gate command are extracted. `AgoraWorkspace` still centralizes
+many mutation families, validation, rendering, and persistence. Continue extracting explicit
+operation families behind a small handler registry while retaining `AgoraWorkspace` as the public
+compatibility facade during the transition. Agora CLI and Studio API must call those same services
+rather than each other.
 
 Recommended boundaries:
 

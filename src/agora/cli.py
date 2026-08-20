@@ -13,6 +13,7 @@ from agora.application import (
     ActivityFilters,
     ActorFilters,
     AgoraReadService,
+    SessionFilters,
     SwarmFilters,
     WorkItemFilters,
 )
@@ -20,7 +21,9 @@ from agora.application.dto import (
     ActivityEntry,
     ActorSummary,
     ProjectOverview,
+    SessionSummary,
     SwarmSummary,
+    TraceabilitySummary,
     WorkItemDetail,
     WorkItemSummary,
 )
@@ -230,7 +233,10 @@ def _command_name(args: argparse.Namespace) -> str:
 def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
     """Project application DTOs onto the CLI's pre-service JSON contract."""
     if isinstance(value, tuple) and all(
-        isinstance(item, (ActorSummary, SwarmSummary, WorkItemSummary, ActivityEntry))
+        isinstance(
+            item,
+            (ActorSummary, SwarmSummary, WorkItemSummary, ActivityEntry, SessionSummary),
+        )
         for item in value
     ):
         return [_cli_read_payload(item, workspace) for item in value]
@@ -327,6 +333,61 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "tool_run_id": value.tool_run_id,
             "source": value.source,
             "path": str(root / ".agora" / "activity.md"),
+        }
+    if isinstance(value, SessionSummary):
+        root = workspace.project_root()
+        session_root = root / ".agora" / "sessions" / value.id
+        return {
+            "id": value.id,
+            "actor": value.actor,
+            "swarm_id": value.swarm_id,
+            "work_id": value.work_id,
+            "roles": list(value.roles),
+            "integration": value.integration,
+            "provider": value.provider,
+            "model": value.model,
+            "status": value.status,
+            "path": str(session_root),
+            "context_path": str(session_root / "CONTEXT.md"),
+            "launch_command": list(value.launch_command),
+            "runtime_available": value.runtime_available,
+            "created_at": value.created_at,
+            "exit_code": value.exit_code,
+            "timeout_seconds": value.timeout_seconds,
+            "max_output_bytes": value.max_output_bytes,
+            "output_bytes": value.output_bytes,
+            "termination_reason": value.termination_reason,
+            "context_sha256": value.context_sha256,
+            "authentication_verified": value.authentication_verified,
+            "authentication_fingerprint": value.authentication_fingerprint,
+            "authentication_public_key": value.authentication_public_key,
+            "authorization_sha256": value.authorization_sha256,
+            "authorization_signature": value.authorization_signature,
+            "preparation_action_id": value.preparation_action_id,
+            "executor": value.executor,
+        }
+    if isinstance(value, TraceabilitySummary):
+        payload = value.to_dict()
+        return {
+            "swarm": value.swarm_id,
+            "work": value.work_id,
+            "state": value.state,
+            "stale": value.stale,
+            "criteria": payload["criteria"],
+            "clarifications": payload["clarifications"],
+            "gherkin": payload["gherkin"],
+            "consistency": payload["consistency"],
+            "artifacts": [
+                {"kind": artifact.kind, "uri": artifact.uri} for artifact in value.artifacts
+            ],
+            "evidence": [
+                {
+                    "type": evidence.type,
+                    "result": evidence.result,
+                    "artifact-references": list(evidence.artifact_references),
+                }
+                for evidence in value.evidence
+            ],
         }
     return value
 
@@ -3037,7 +3098,7 @@ def _dispatch(
             )
         )
     if args.command == "session" and args.session_command == "show":
-        return workspace.show_session(args.session)
+        return reads.get_session(args.session)
     if args.command == "session" and args.session_command == "diagnose":
         return workspace.diagnose_session(args.session)
     if args.command == "session" and args.session_command == "progress":
@@ -3729,7 +3790,7 @@ def _dispatch(
     if args.command == "gate" and args.gate_command == "list":
         return workspace.list_gate_waivers(args.swarm, args.work, args.gate)
     if args.command == "session" and args.session_command == "list":
-        return workspace.list_sessions(args.status)
+        return reads.list_sessions(SessionFilters(status=args.status))
     if args.command == "session" and args.session_command == "prepare":
         return workspace.prepare_session(
             PrepareSessionInput(
@@ -3862,7 +3923,7 @@ def _dispatch(
         if args.checklist_command == "list":
             return workspace.list_checklists(args.swarm, args.work)
     if args.command == "work" and args.work_command == "traceability":
-        return workspace.work_traceability(args.swarm, args.work)
+        return reads.work_traceability(args.swarm, args.work)
     if args.command == "work" and args.work_command == "clarify":
         return workspace.clarify_work(
             WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),

@@ -12,15 +12,18 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from agora.application import (
     ActorUnauthorizedError,
     AgoraCommandService,
+    AgoraReadService,
     ApproveGateCommand,
     CommandPersistenceError,
     EvidenceMissingError,
     GateAlreadyResolvedError,
+    InvalidCommandError,
     ProjectIdentityMismatchError,
     SignatureRequiredError,
     StalePreconditionError,
     approve_gate_authorization_payload,
 )
+from agora.domain_errors import EvidenceMissingRuleError, GateDecisionRoleRuleError
 from agora.model import (
     AddActorInput,
     AddArtifactInput,
@@ -197,6 +200,24 @@ def test_applies_approval_and_rejection_as_durable_decisions(
     assert event_type in (root / ".agora" / "activity.md").read_text(encoding="utf-8")
 
 
+def test_returns_the_exact_activity_from_the_gate_transaction_without_a_latest_event_query(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, workspace, service = gate_project
+
+    def forbidden_latest_event_query(*args: object, **kwargs: object) -> list[object]:
+        raise AssertionError("CommandService must not search for a latest Activity event")
+
+    monkeypatch.setattr(workspace, "list_activity", forbidden_latest_event_query)
+
+    result = service.approve_gate(command(decision="rejected"))
+
+    assert result.activity.type == "gate.rejected"
+    assert result.activity.actor == "project:owner"
+    assert result.activity.source.endswith("/work/release/events.md")
+
+
 def test_rejects_an_actor_without_gate_authority(
     gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
 ) -> None:
@@ -206,6 +227,27 @@ def test_rejects_an_actor_without_gate_authority(
         service.approve_gate(command(actor_id="developer"))
 
     assert captured.value.to_dict()["code"] == "command.actor-unauthorized"
+
+
+def test_lifecycle_exposes_gate_policy_and_typed_blockers_before_decision(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, workspace, _ = gate_project
+
+    lifecycle = AgoraReadService(workspace).lifecycle("delivery", "release")
+    completion = next(
+        transition for transition in lifecycle.transitions if transition.gate_id == "completion"
+    )
+
+    assert completion.available is False
+    assert completion.required_approval_roles == ("product-owner",)
+    assert [blocker.code for blocker in completion.blockers] == ["gate.approvals-missing"]
+    assert completion.blockers[0].to_dict()["schema"] == (
+        "agora/application/gate-blocker-summary/v1"
+    )
+    gate = next(item for item in lifecycle.gates if item.id == "completion")
+    assert gate.satisfied is False
+    assert gate.required_evidence_types == ()
 
 
 def test_rejects_missing_or_unverified_evidence(
@@ -344,3 +386,38 @@ def test_maps_an_intermediate_write_failure_and_rolls_back_every_record(
     assert captured.value.to_dict()["code"] == "command.persistence-failed"
     assert {path: path.read_bytes() for path in paths} == before
     assert workspace.show_work("delivery", "release").approval_roles == []
+
+
+def test_translates_domain_failures_by_type_and_never_by_message(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, workspace, service = gate_project
+
+    def typed_failure(_input: object) -> object:
+        raise EvidenceMissingRuleError("opaque domain failure")
+
+    monkeypatch.setattr(workspace, "decide_gate", typed_failure)
+    with pytest.raises(EvidenceMissingError, match="opaque domain failure"):
+        service.approve_gate(command())
+
+    def misleading_untyped_failure(_input: object) -> object:
+        raise ValueError("evidence project identity mismatch already resolved")
+
+    monkeypatch.setattr(workspace, "decide_gate", misleading_untyped_failure)
+    with pytest.raises(InvalidCommandError):
+        service.approve_gate(command())
+
+
+def test_ambiguous_gate_role_fails_as_a_controlled_invalid_command(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, workspace, service = gate_project
+
+    def ambiguous_role(_input: object) -> object:
+        raise GateDecisionRoleRuleError("No unique gate role is available")
+
+    monkeypatch.setattr(workspace, "decide_gate", ambiguous_role)
+    with pytest.raises(InvalidCommandError, match="No unique gate role"):
+        service.approve_gate(command())
