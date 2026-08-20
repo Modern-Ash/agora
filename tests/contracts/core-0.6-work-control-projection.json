@@ -1,0 +1,228 @@
+{
+  "core_version": "0.6.0",
+  "projection": {
+    "schema": "agora/application/work-control-projection/v1",
+    "work": {
+      "schema": "agora/application/work-item-detail/v2",
+      "id": "release",
+      "swarm_id": "delivery",
+      "title": "Release safely",
+      "description": "Ship the governed release.",
+      "state": "verifying",
+      "operational_status": "active",
+      "status_reason": null,
+      "status_by": null,
+      "status_at": null,
+      "acceptance_criteria": {"accepted": "The release is accepted"},
+      "satisfied_criteria": ["accepted"],
+      "criterion_statuses": {"accepted": ["specified", "implemented", "verified", "accepted"]},
+      "required_artifacts": ["test-report"],
+      "artifact_kinds": ["test-report", "spec"],
+      "evidence_results": ["success"],
+      "approval_roles": [],
+      "child_work_refs": ["delivery/release-notes"],
+      "budget_limits": {"tokens": 10000},
+      "delegation_id": "release-delegation",
+      "parent_work_ref": "delivery/program",
+      "artifacts": [
+        {
+          "schema": "agora/application/artifact-summary/v2",
+          "kind": "test-report",
+          "uri": "repo://reports/release.txt",
+          "produced_by": "project:developer",
+          "timestamp": "2026-08-20T12:00:00Z",
+          "activity": null
+        }
+      ],
+      "evidence": [
+        {
+          "schema": "agora/application/evidence-summary/v2",
+          "type": "test-run",
+          "result": "success",
+          "artifact_references": ["repo://reports/release.txt"],
+          "produced_by": "project:developer",
+          "timestamp": "2026-08-20T12:01:00Z",
+          "activity": null
+        }
+      ],
+      "approvals": [
+        {
+          "schema": "agora/application/approval-summary/v2",
+          "role": "scrum-master",
+          "actor": "project:facilitator",
+          "decision": "approved",
+          "note": "Verification completed",
+          "timestamp": "2026-08-20T12:02:00Z",
+          "activity": null
+        }
+      ]
+    },
+    "lifecycle": {
+      "schema": "agora/application/lifecycle-projection/v2",
+      "swarm_id": "delivery",
+      "work_id": "release",
+      "method": "scrum",
+      "current_state": "verifying",
+      "operational_status": "active",
+      "terminal_state": "completed",
+      "available_transitions": ["implementing", "completed"],
+      "acceptance_criteria": {"accepted": "The release is accepted"},
+      "satisfied_criteria": ["accepted"],
+      "criterion_statuses": {"accepted": ["specified", "implemented", "verified", "accepted"]},
+      "required_artifacts": ["test-report"],
+      "artifact_kinds": ["test-report", "spec"],
+      "evidence_results": ["success"],
+      "approval_roles": [],
+      "states": [
+        {"schema": "agora/application/method-state-summary/v1", "id": "verifying", "initial": false, "terminal": false},
+        {"schema": "agora/application/method-state-summary/v1", "id": "completed", "initial": false, "terminal": true}
+      ],
+      "transitions": [
+        {
+          "schema": "agora/application/transition-summary/v1",
+          "source": "verifying",
+          "target": "completed",
+          "authorized_roles": ["product-owner"],
+          "gate_id": "completion",
+          "required_approval_roles": ["product-owner"],
+          "available": false,
+          "blockers": [
+            {
+              "schema": "agora/application/gate-blocker-summary/v1",
+              "code": "gate.approvals-missing",
+              "category": "approval",
+              "message": "Required approval roles are missing",
+              "references": ["product-owner"]
+            }
+          ]
+        }
+      ],
+      "gates": [
+        {
+          "schema": "agora/application/gate-summary/v1",
+          "id": "completion",
+          "require_all_criteria": true,
+          "require_required_artifacts": true,
+          "required_artifacts": null,
+          "required_criterion_stage": "accepted",
+          "require_successful_evidence": true,
+          "required_evidence_types": [],
+          "required_approval_roles": ["product-owner"],
+          "require_clean_git": false,
+          "require_git_commit": false,
+          "blockers": [
+            {
+              "schema": "agora/application/gate-blocker-summary/v1",
+              "code": "gate.approvals-missing",
+              "category": "approval",
+              "message": "Required approval roles are missing",
+              "references": ["product-owner"]
+            }
+          ],
+          "satisfied": false
+        }
+      ]
+    },
+    "artifacts": [
+      {
+        "schema": "agora/application/artifact-summary/v2",
+        "kind": "test-report",
+        "uri": "repo://reports/release.txt",
+        "produced_by": "project:developer",
+        "timestamp": "2026-08-20T12:00:00Z",
+        "activity": null
+      }
+    ],
+    "evidence": [
+      {
+        "schema": "agora/application/evidence-summary/v2",
+        "type": "test-run",
+        "result": "success",
+        "artifact_references": ["repo://reports/release.txt"],
+        "produced_by": "project:developer",
+        "timestamp": "2026-08-20T12:01:00Z",
+        "activity": null
+      }
+    ],
+    "approvals": [
+      {
+        "schema": "agora/application/approval-summary/v2",
+        "role": "scrum-master",
+        "actor": "project:facilitator",
+        "decision": "approved",
+        "note": "Verification completed",
+        "timestamp": "2026-08-20T12:02:00Z",
+        "activity": null
+      }
+    ],
+    "traceability": {
+      "schema": "agora/application/traceability-summary/v1",
+      "swarm_id": "delivery",
+      "work_id": "release",
+      "state": "verifying",
+      "stale": false,
+      "criteria": [{"id": "accepted", "description": "The release is accepted", "satisfied": true}],
+      "clarifications": {"open": [], "resolved": []},
+      "gherkin": [],
+      "consistency": [],
+      "artifacts": [],
+      "evidence": [],
+      "activity": [
+        {
+          "schema": "agora/application/activity-entry/v1",
+          "timestamp": "2026-08-20T12:01:00Z",
+          "type": "evidence.added",
+          "summary": "evidence added",
+          "actor": "project:developer",
+          "swarm_id": "delivery",
+          "work_id": "release",
+          "session_id": null,
+          "tool_run_id": null,
+          "source": "repo://.agora/swarms/delivery/work/release/events.md"
+        }
+      ]
+    },
+    "specification_history": {
+      "schema": "agora/application/specification-summary/v1",
+      "available": true,
+      "uri": "repo://docs/spec.md",
+      "revisions": [],
+      "has_history": true,
+      "working_tree": false,
+      "truncated": false,
+      "reason": null
+    },
+    "gate_decision_options": {
+      "schema": "agora/application/gate-decision-options-projection/v1",
+      "swarm_id": "delivery",
+      "work_id": "release",
+      "current_state": "verifying",
+      "operational_status": "active",
+      "terminal": false,
+      "reason": null,
+      "options": [
+        {
+          "schema": "agora/application/gate-decision-option-summary/v1",
+          "swarm_id": "delivery",
+          "work_id": "release",
+          "expected_state": "verifying",
+          "transition_source": "verifying",
+          "transition_target": "completed",
+          "gate_id": "completion",
+          "decision": "approved",
+          "role_id": "product-owner",
+          "actor_id": "project:owner",
+          "allowed": true,
+          "blockers": [],
+          "evidence_required": true,
+          "required_evidence_types": [],
+          "evidence_references": ["repo://reports/release.txt"],
+          "authentication_required": false,
+          "authentication_algorithm": null,
+          "authentication_fingerprint": null,
+          "unavailable_reason": null
+        }
+      ]
+    }
+  }
+}

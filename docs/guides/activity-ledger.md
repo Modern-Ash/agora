@@ -80,5 +80,7 @@ and their linked records on the active work branch. `agora validate` verifies th
 that every `repo://` source exists. Historical projects without a ledger remain readable; the next
 governed activity creates it automatically.
 
-Agora Studio and other read-only clients should use `agora activity list` instead of parsing the
-Markdown format themselves. They may open the returned source only after the user selects an entry.
+Agora Studio and other programmatic clients should use `AgoraReadService.activity()` instead of
+parsing the Markdown format themselves. The CLI exposes the same service through
+`agora activity list` for terminal users. Clients may open the returned source only after the user
+selects an entry.

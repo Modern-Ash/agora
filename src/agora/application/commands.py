@@ -19,9 +19,37 @@ class ApproveGateCommand(SerializableDTO):
     decision: str
     reason: str
     expected_state: str
+    transition_target: str
+    role_id: str
     evidence_references: tuple[str, ...] = ()
     authentication: Mapping[str, str] | None = None
-    schema: str = field(default="agora/application/approve-gate-command/v1", init=False)
+    schema: str = field(default="agora/application/approve-gate-command/v2", init=False)
+
+
+@dataclass(frozen=True)
+class PreparedGateDecision(SerializableDTO):
+    command_schema: str
+    authorization_schema: str
+    authorization_payload: str
+    authorization_digest: str
+    project_identity: str
+    swarm_id: str
+    work_id: str
+    expected_state: str
+    transition_target: str
+    gate_id: str
+    decision: str
+    actor_id: str
+    role_id: str
+    reason: str
+    evidence_references: tuple[str, ...]
+    authentication_required: bool
+    authentication_algorithm: str | None
+    authentication_fingerprint: str | None
+    authentication_public_key: str | None
+    freshness: str
+    expires_at: str | None
+    schema: str = field(default="agora/application/prepared-gate-decision/v1", init=False)
 
 
 @dataclass(frozen=True)
@@ -44,7 +72,7 @@ def approve_gate_authorization_payload(command: ApproveGateCommand) -> bytes:
 
     value = command.to_dict()
     value.pop("authentication", None)
-    value["authorization_schema"] = "agora/application/approve-gate-authorization/v1"
+    value["authorization_schema"] = "agora/application/approve-gate-authorization/v2"
     return (
         json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode("ascii")

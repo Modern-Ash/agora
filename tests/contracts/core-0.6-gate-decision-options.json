@@ -1,0 +1,148 @@
+{
+  "core_version": "0.6.0",
+  "scenarios": {
+    "multiple_transitions_gates_roles": {
+      "schema": "agora/application/gate-decision-options-projection/v1",
+      "swarm_id": "delivery",
+      "work_id": "release",
+      "current_state": "verifying",
+      "operational_status": "active",
+      "terminal": false,
+      "reason": null,
+      "options": [
+        {
+          "schema": "agora/application/gate-decision-option-summary/v1",
+          "swarm_id": "delivery",
+          "work_id": "release",
+          "expected_state": "verifying",
+          "transition_source": "verifying",
+          "transition_target": "completed",
+          "gate_id": "completion",
+          "decision": "approved",
+          "role_id": "product-owner",
+          "actor_id": "project:owner",
+          "allowed": true,
+          "blockers": [],
+          "evidence_required": true,
+          "required_evidence_types": ["test-run"],
+          "evidence_references": ["repo://reports/release.txt"],
+          "authentication_required": false,
+          "authentication_algorithm": null,
+          "authentication_fingerprint": null,
+          "unavailable_reason": null
+        },
+        {
+          "schema": "agora/application/gate-decision-option-summary/v1",
+          "swarm_id": "delivery",
+          "work_id": "release",
+          "expected_state": "verifying",
+          "transition_source": "verifying",
+          "transition_target": "completed",
+          "gate_id": "completion",
+          "decision": "rejected",
+          "role_id": "product-owner",
+          "actor_id": "project:owner",
+          "allowed": true,
+          "blockers": [],
+          "evidence_required": false,
+          "required_evidence_types": [],
+          "evidence_references": ["repo://reports/release.txt"],
+          "authentication_required": false,
+          "authentication_algorithm": null,
+          "authentication_fingerprint": null,
+          "unavailable_reason": null
+        },
+        {
+          "schema": "agora/application/gate-decision-option-summary/v1",
+          "swarm_id": "delivery",
+          "work_id": "release",
+          "expected_state": "verifying",
+          "transition_source": "verifying",
+          "transition_target": "reviewing",
+          "gate_id": "rework-review",
+          "decision": "approved",
+          "role_id": "scrum-master",
+          "actor_id": "project:facilitator",
+          "allowed": false,
+          "blockers": [
+            {
+              "schema": "agora/application/gate-blocker-summary/v1",
+              "code": "gate.evidence-types-missing",
+              "category": "evidence",
+              "message": "Required successful evidence types are missing",
+              "references": ["review-report"]
+            }
+          ],
+          "evidence_required": true,
+          "required_evidence_types": ["review-report"],
+          "evidence_references": ["repo://reports/release.txt"],
+          "authentication_required": true,
+          "authentication_algorithm": "ed25519",
+          "authentication_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "unavailable_reason": "Required successful evidence types are missing"
+        },
+        {
+          "schema": "agora/application/gate-decision-option-summary/v1",
+          "swarm_id": "delivery",
+          "work_id": "release",
+          "expected_state": "verifying",
+          "transition_source": "verifying",
+          "transition_target": "reviewing",
+          "gate_id": "rework-review",
+          "decision": "rejected",
+          "role_id": "scrum-master",
+          "actor_id": "project:facilitator",
+          "allowed": true,
+          "blockers": [],
+          "evidence_required": false,
+          "required_evidence_types": [],
+          "evidence_references": ["repo://reports/release.txt"],
+          "authentication_required": true,
+          "authentication_algorithm": "ed25519",
+          "authentication_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "unavailable_reason": null
+        }
+      ]
+    },
+    "approval_blocked": {
+      "schema": "agora/application/gate-decision-options-projection/v1",
+      "swarm_id": "delivery",
+      "work_id": "resolved-role",
+      "current_state": "verifying",
+      "operational_status": "active",
+      "terminal": false,
+      "reason": null,
+      "options": [
+        {
+          "schema": "agora/application/gate-decision-option-summary/v1",
+          "swarm_id": "delivery",
+          "work_id": "resolved-role",
+          "expected_state": "verifying",
+          "transition_source": "verifying",
+          "transition_target": "completed",
+          "gate_id": "completion",
+          "decision": "approved",
+          "role_id": "product-owner",
+          "actor_id": "project:owner",
+          "allowed": false,
+          "blockers": [
+            {
+              "schema": "agora/application/gate-blocker-summary/v1",
+              "code": "gate.role-already-resolved",
+              "category": "approval",
+              "message": "Approval role is already resolved",
+              "references": ["product-owner"]
+            }
+          ],
+          "evidence_required": true,
+          "required_evidence_types": [],
+          "evidence_references": ["repo://reports/release.txt"],
+          "authentication_required": false,
+          "authentication_algorithm": null,
+          "authentication_fingerprint": null,
+          "unavailable_reason": "Approval role is already resolved"
+        }
+      ]
+    }
+  }
+}

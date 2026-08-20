@@ -13,17 +13,21 @@ from agora.application.dto import (
     ArtifactSummary,
     EvidenceSummary,
     GateBlockerSummary,
+    GateDecisionOptionsProjection,
+    GateDecisionOptionSummary,
     GateSummary,
     LifecycleProjection,
     MethodStateSummary,
     MethodSummary,
     ProjectOverview,
     SessionSummary,
+    SpecificationRevisionDetail,
     SpecificationRevisionSummary,
     SpecificationSummary,
     SwarmSummary,
     TraceabilitySummary,
     TransitionSummary,
+    WorkControlProjection,
     WorkItemDetail,
     WorkItemSummary,
 )
@@ -357,6 +361,110 @@ class AgoraReadService:
             )
 
         return self._read(f"specification history {swarm_id}/{work_id}", read)
+
+    def specification_revision(
+        self, swarm_id: str, work_id: str, revision_id: str
+    ) -> SpecificationRevisionDetail:
+        self._require_work_slugs(swarm_id, work_id)
+        if not isinstance(revision_id, str) or not revision_id:
+            raise InvalidReadQueryError("Specification revision id is required")
+
+        def read() -> SpecificationRevisionDetail:
+            detail = self._workspace.work_specification_revision(swarm_id, work_id, revision_id)
+            return SpecificationRevisionDetail(
+                available=detail.available,
+                uri=detail.uri,
+                revision_id=detail.revision_id,
+                kind=detail.kind,
+                sha=detail.sha,
+                previous_revision_id=detail.previous_revision_id,
+                timestamp=detail.timestamp,
+                author=detail.author,
+                subject=detail.subject,
+                content=detail.content,
+                diff=detail.diff,
+                size_bytes=detail.size_bytes,
+                content_truncated=detail.content_truncated,
+                diff_truncated=detail.diff_truncated,
+                encoding=detail.encoding,
+                binary=detail.binary,
+                reason=detail.reason,
+            )
+
+        return self._read(f"specification revision {swarm_id}/{work_id}/{revision_id}", read)
+
+    def gate_decision_options(self, swarm_id: str, work_id: str) -> GateDecisionOptionsProjection:
+        self._require_work_slugs(swarm_id, work_id)
+
+        def read() -> GateDecisionOptionsProjection:
+            work = self._workspace.show_work(swarm_id, work_id)
+            contract = self._workspace.method_contract(swarm_id)
+            records = self._workspace.inspect_gate_decision_options(swarm_id, work_id)
+            options = tuple(
+                GateDecisionOptionSummary(
+                    swarm_id=record.swarm_id,
+                    work_id=record.work_id,
+                    expected_state=record.expected_state,
+                    transition_source=record.transition_source,
+                    transition_target=record.transition_target,
+                    gate_id=record.gate_id,
+                    decision=record.decision,
+                    role_id=record.role_id,
+                    actor_id=record.actor_id,
+                    allowed=record.allowed,
+                    blockers=tuple(self._blocker_summary(blocker) for blocker in record.blockers),
+                    evidence_required=record.evidence_required,
+                    required_evidence_types=record.required_evidence_types,
+                    evidence_references=record.evidence_references,
+                    authentication_required=record.authentication_required,
+                    authentication_algorithm=record.authentication_algorithm,
+                    authentication_fingerprint=record.authentication_fingerprint,
+                    unavailable_reason=record.unavailable_reason,
+                )
+                for record in records
+            )
+            terminal = work.state == contract.terminal_state
+            reason = None
+            if terminal:
+                reason = "Work is in a terminal state"
+            elif work.operational_status != "active":
+                reason = f"Work operational status is {work.operational_status}"
+            elif not options:
+                reason = "No governed gate decisions exist for the current state"
+            return GateDecisionOptionsProjection(
+                swarm_id=swarm_id,
+                work_id=work_id,
+                current_state=work.state,
+                operational_status=work.operational_status,
+                terminal=terminal,
+                options=options,
+                reason=reason,
+            )
+
+        return self._read(f"gate decision options {swarm_id}/{work_id}", read)
+
+    def work_control_projection(self, swarm_id: str, work_id: str) -> WorkControlProjection:
+        self._require_work_slugs(swarm_id, work_id)
+        work = self.get_work_item(swarm_id, work_id)
+        lifecycle = self.lifecycle(swarm_id, work_id)
+        traceability = self.work_traceability(swarm_id, work_id)
+        options = self.gate_decision_options(swarm_id, work_id)
+        if not (
+            work.state == lifecycle.current_state == traceability.state == options.current_state
+        ):
+            raise InvalidDurableStateError(
+                "Work changed while its control projection was being read"
+            )
+        return WorkControlProjection(
+            work=work,
+            lifecycle=lifecycle,
+            artifacts=work.artifacts,
+            evidence=work.evidence,
+            approvals=work.approvals,
+            traceability=traceability,
+            specification_history=self.specification_history(swarm_id, work_id),
+            gate_decision_options=options,
+        )
 
     def _work_materials(
         self, swarm_id: str, work_id: str

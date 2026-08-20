@@ -20,8 +20,8 @@ humans, AI agents, services, and swarms. It materializes the roles, lifecycle ru
 evidence, and durable work records that a team chooses for each project.
 
 Agora is independent of the project's programming language, LLM provider, agent environment, and
-development process. Its Python CLI coordinates the protocol; it does not introduce an LLM SDK or
-runtime into the governed codebase.
+development process. Its Python application services coordinate the protocol; the CLI is an
+optional adapter and does not introduce an LLM SDK or runtime into the governed codebase.
 
 ## Project status
 
@@ -93,6 +93,11 @@ flowchart LR
 
     G[Git] <--> P
 ```
+
+Programmatic interfaces import the versioned contracts in `agora.application`. Agora CLI and the
+local-first Agora Studio API are peer adapters over those services; neither interface owns
+lifecycle policy or edits durable records outside Core. See the [application-service contract
+reference](docs/reference/application-services.md) for the Core 0.6 compatibility boundary.
 
 Configuration is resolved predictably:
 

@@ -29,6 +29,7 @@ from agora.model import (
     AddArtifactInput,
     AddEvidenceInput,
     AssignActorInput,
+    ChangeWorkStatusInput,
     CreateSwarmInput,
     CreateWorkInput,
     InitInput,
@@ -152,6 +153,8 @@ def command(**changes: object) -> ApproveGateCommand:
         "decision": "approved",
         "reason": "Evidence reviewed and accepted",
         "expected_state": "verifying",
+        "transition_target": "completed",
+        "role_id": "product-owner",
         "evidence_references": ("repo://reports/release.txt",),
     }
     values.update(changes)
@@ -169,12 +172,210 @@ def test_serializes_the_immutable_versioned_command() -> None:
 
     payload = json.loads(value.to_json())
 
-    assert payload["schema"] == "agora/application/approve-gate-command/v1"
+    assert payload["schema"] == "agora/application/approve-gate-command/v2"
     assert payload["decision"] == "approved"
     assert payload["evidence_references"] == ["repo://reports/release.txt"]
     assert "path" not in payload
     with pytest.raises(TypeError):
         value.authentication["signature"] = "changed"  # type: ignore[index]
+
+
+def test_core_exposes_exact_approve_and_reject_options(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, workspace, _ = gate_project
+
+    projection = AgoraReadService(workspace).gate_decision_options("delivery", "release")
+
+    assert projection.schema == ("agora/application/gate-decision-options-projection/v1")
+    assert [(item.decision, item.allowed) for item in projection.options] == [
+        ("approved", True),
+        ("rejected", True),
+    ]
+    assert {item.transition_target for item in projection.options} == {"completed"}
+    assert {item.role_id for item in projection.options} == {"product-owner"}
+    assert {item.actor_id for item in projection.options} == {"project:owner"}
+    assert projection.options[0].evidence_references == ("repo://reports/release.txt",)
+
+
+def test_rejection_remains_available_when_approval_preconditions_are_blocked(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, workspace, _ = gate_project
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="blocked-gate",
+            title="Blocked gate",
+            actor_id="owner",
+            acceptance_criteria=[("missing", "Still missing")],
+            required_artifacts=["test-report"],
+        )
+    )
+    for state, actor in (
+        ("planned", "developer"),
+        ("implementing", "developer"),
+        ("reviewing", "developer"),
+        ("verifying", "facilitator"),
+    ):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="blocked-gate",
+                actor_id=actor,
+                target_state=state,
+            )
+        )
+
+    options = AgoraReadService(workspace).gate_decision_options("delivery", "blocked-gate").options
+    approved = next(item for item in options if item.decision == "approved")
+    rejected = next(item for item in options if item.decision == "rejected")
+
+    assert approved.allowed is False
+    assert {blocker.category for blocker in approved.blockers} >= {
+        "criterion",
+        "artifact",
+        "evidence",
+    }
+    assert rejected.allowed is True
+    assert rejected.blockers == ()
+
+
+def test_enumerates_multiple_transitions_gates_roles_and_actors(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    root, workspace, _ = gate_project
+    method_root = root / ".agora" / "methods" / "scrum"
+    completion = method_root / "gates" / "completion.md"
+    completion.write_text(
+        completion.read_text(encoding="utf-8").replace(
+            'required-approval-roles: ["product-owner"]',
+            'required-approval-roles: ["product-owner","scrum-master"]',
+        ),
+        encoding="utf-8",
+    )
+    (method_root / "gates" / "rework-review.md").write_text(
+        """---
+schema: "agora/gate/v1"
+id: "rework-review"
+require-all-criteria: false
+require-required-artifacts: false
+require-successful-evidence: false
+required-approval-roles: ["scrum-master"]
+---
+
+# Rework review gate
+""",
+        encoding="utf-8",
+    )
+    (method_root / "transitions" / "08-verifying-reviewing.md").write_text(
+        """---
+schema: "agora/transition/v1"
+from: "verifying"
+to: "reviewing"
+roles: ["scrum-master"]
+gate: "rework-review"
+---
+
+# Return to review
+""",
+        encoding="utf-8",
+    )
+
+    options = AgoraReadService(workspace).gate_decision_options("delivery", "release").options
+
+    assert len(options) == 6
+    assert {item.transition_target for item in options} == {"completed", "reviewing"}
+    assert {item.gate_id for item in options} == {"completion", "rework-review"}
+    assert {(item.role_id, item.actor_id) for item in options} == {
+        ("product-owner", "project:owner"),
+        ("scrum-master", "project:facilitator"),
+    }
+
+
+def test_prepares_a_stable_canonical_authorization_payload(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, _, service = gate_project
+
+    prepared = service.prepare_gate_decision(command())
+    second = service.prepare_gate_decision(command())
+
+    assert prepared.schema == "agora/application/prepared-gate-decision/v1"
+    assert prepared.command_schema == "agora/application/approve-gate-command/v2"
+    assert prepared.authorization_schema == ("agora/application/approve-gate-authorization/v2")
+    assert prepared.authorization_payload.encode("ascii") == (
+        approve_gate_authorization_payload(command())
+    )
+    assert (
+        prepared.authorization_digest
+        == hashlib.sha256(prepared.authorization_payload.encode("ascii")).hexdigest()
+    )
+    assert prepared == second
+    assert prepared.authentication_required is False
+    assert prepared.authentication_public_key is None
+
+
+def test_prepare_revalidates_evidence_and_stale_state(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, _, service = gate_project
+
+    with pytest.raises(EvidenceMissingError):
+        service.prepare_gate_decision(command(evidence_references=("repo://reports/missing.txt",)))
+    with pytest.raises(StalePreconditionError):
+        service.prepare_gate_decision(command(expected_state="reviewing"))
+
+
+@pytest.mark.parametrize("operation", ["blocked", "cancelled"])
+def test_gate_options_report_non_active_work_as_blocked(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    operation: str,
+) -> None:
+    _, workspace, _ = gate_project
+    change = ChangeWorkStatusInput(
+        swarm_id="delivery",
+        work_id="release",
+        actor_id="developer" if operation == "blocked" else "owner",
+        reason=f"Work is {operation}",
+        id=f"make-{operation}",
+    )
+    if operation == "blocked":
+        workspace.block_work(change)
+    else:
+        workspace.cancel_work(change)
+
+    projection = AgoraReadService(workspace).gate_decision_options("delivery", "release")
+
+    assert projection.operational_status == operation
+    assert projection.reason == f"Work operational status is {operation}"
+    assert projection.options
+    assert all(item.allowed is False for item in projection.options)
+    assert all(
+        any(blocker.code == "work.not-active" for blocker in item.blockers)
+        for item in projection.options
+    )
+
+
+def test_terminal_work_has_no_gate_decision_options(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, workspace, service = gate_project
+    service.approve_gate(command())
+    workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="owner",
+            target_state="completed",
+        )
+    )
+
+    projection = AgoraReadService(workspace).gate_decision_options("delivery", "release")
+
+    assert projection.terminal is True
+    assert projection.options == ()
+    assert projection.reason == "Work is in a terminal state"
 
 
 @pytest.mark.parametrize(
@@ -284,11 +485,26 @@ def test_requires_the_existing_signed_action_flow_for_authenticated_actors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, workspace, service = gate_project
+    public_key = (
+        Ed25519PrivateKey.generate()
+        .public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+    )
+    fingerprint = hashlib.sha256(public_key).hexdigest()
     find_actor = workspace._find_actor
 
     def authenticated_actor(root: Path, actor_id: str):
         actor = find_actor(root, actor_id)
-        return replace(actor, authentication_required=True)
+        return replace(
+            actor,
+            authentication_required=True,
+            authentication_algorithm="ed25519",
+            authentication_public_key=base64.b64encode(public_key).decode("ascii"),
+            authentication_fingerprint=fingerprint,
+        )
 
     monkeypatch.setattr(workspace, "_find_actor", authenticated_actor)
 
@@ -326,6 +542,12 @@ def test_verifies_inline_authentication_against_the_current_actor_key(
     monkeypatch.setattr(workspace, "_find_actor", authenticated_actor)
     monkeypatch.setattr(workspace, "_assert_current_actor_key", lambda actor: None)
     unsigned = command()
+    prepared = service.prepare_gate_decision(unsigned)
+    assert prepared.authentication_required is True
+    assert prepared.authentication_algorithm == "ed25519"
+    assert prepared.authentication_fingerprint == fingerprint
+    assert prepared.authentication_public_key == base64.b64encode(public_key).decode("ascii")
+    assert "private" not in prepared.to_json().lower()
     signature = base64.b64encode(
         private_key.sign(approve_gate_authorization_payload(unsigned))
     ).decode("ascii")
@@ -344,6 +566,60 @@ def test_verifies_inline_authentication_against_the_current_actor_key(
         swarm_id="delivery", work_id="release", type_="approval.added", limit=1
     )[0]
     assert f"authentication={fingerprint}" in event.detail
+
+
+@pytest.mark.parametrize("failure", ["reason", "fingerprint", "signature"])
+def test_signed_gate_decision_is_bound_to_the_exact_prepared_payload(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    _, workspace, service = gate_project
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    fingerprint = hashlib.sha256(public_key).hexdigest()
+    find_actor = workspace._find_actor
+
+    def authenticated_actor(root: Path, actor_id: str):
+        actor = find_actor(root, actor_id)
+        if actor.reference != "project:owner":
+            return actor
+        return replace(
+            actor,
+            authentication_required=True,
+            authentication_algorithm="ed25519",
+            authentication_public_key=base64.b64encode(public_key).decode("ascii"),
+            authentication_fingerprint=fingerprint,
+        )
+
+    monkeypatch.setattr(workspace, "_find_actor", authenticated_actor)
+    monkeypatch.setattr(workspace, "_assert_current_actor_key", lambda actor: None)
+    unsigned = command()
+    signature = base64.b64encode(
+        private_key.sign(approve_gate_authorization_payload(unsigned))
+    ).decode("ascii")
+    authentication = {
+        "algorithm": "ed25519",
+        "fingerprint": fingerprint,
+        "signature": signature,
+    }
+    if failure == "reason":
+        request = command(reason="Changed after preparation", authentication=authentication)
+    elif failure == "fingerprint":
+        request = command(authentication={**authentication, "fingerprint": "0" * 64})
+    else:
+        request = command(
+            authentication={
+                **authentication,
+                "signature": base64.b64encode(b"x" * 64).decode("ascii"),
+            }
+        )
+
+    with pytest.raises(ActorUnauthorizedError):
+        service.approve_gate(request)
 
 
 @pytest.mark.parametrize("decision", ["approved", "rejected"])

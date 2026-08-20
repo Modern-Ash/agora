@@ -195,6 +195,29 @@ class TransitionAssessmentRecord:
 
 
 @dataclass(frozen=True)
+class GateDecisionOptionRecord:
+    swarm_id: str
+    work_id: str
+    expected_state: str
+    transition_source: str
+    transition_target: str
+    gate_id: str
+    decision: Literal["approved", "rejected"]
+    role_id: str
+    actor_id: str | None
+    allowed: bool
+    blockers: list[GateBlockerRecord]
+    evidence_required: bool
+    required_evidence_types: list[str]
+    evidence_references: list[str]
+    authentication_required: bool
+    authentication_algorithm: str | None
+    authentication_fingerprint: str | None
+    authentication_public_key: str | None
+    unavailable_reason: str | None
+
+
+@dataclass(frozen=True)
 class WorkLifecycleAssessment:
     swarm_id: str
     work_id: str
@@ -249,6 +272,27 @@ class SpecificationHistoryRecord:
     has_history: bool
     working_tree: bool
     truncated: bool
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class SpecificationRevisionDetailRecord:
+    available: bool
+    uri: str | None
+    revision_id: str
+    kind: Literal["commit", "working-tree"] | None
+    sha: str | None
+    previous_revision_id: str | None
+    timestamp: str | None
+    author: str | None
+    subject: str | None
+    content: str | None
+    diff: str | None
+    size_bytes: int
+    content_truncated: bool
+    diff_truncated: bool
+    encoding: str
+    binary: bool
     reason: str | None = None
 
 
@@ -1790,6 +1834,8 @@ class GateDecisionInput(WorkActorInput):
     decision: Literal["approved", "rejected"] = "rejected"
     reason: str = ""
     expected_state: str = ""
+    transition_target: str = ""
+    role_id: str = ""
     evidence_refs: list[str] = field(default_factory=list)
     authentication_payload: bytes | None = None
     authentication_signature: str | None = None
