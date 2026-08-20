@@ -48,6 +48,48 @@ consumer fixture.
 `prepared_at` is always required on confirmation. `expires_at` is `null` only when expiration was
 explicitly disabled. Treat the exact expiration instant as expired.
 
+The digest map is exact, not the complete set advertised by the gate option. If an option exposes
+three eligible references and the actor selects one, preparation returns exactly one map entry. A
+selected reference without content identity remains present with a `null` value. Never remove that
+key, send an empty map, add another eligible-but-unselected reference, hash the URI, or rewrite
+`null`: all are stale confirmation material.
+
+```python
+from dataclasses import replace
+
+from agora.application import AgoraCommandService, ApproveGateCommand
+
+service = AgoraCommandService.from_path(project_root)
+intent = ApproveGateCommand(
+    project_identity="example-project",
+    swarm_id="delivery",
+    work_id="release",
+    gate_id="completion",
+    actor_id="owner",
+    decision="approved",
+    reason="Reviewed the selected audit evidence",
+    expected_state="verifying",
+    transition_target="completed",
+    role_id="product-owner",
+    evidence_references=("https://evidence.example.invalid/audit",),
+)
+prepared = service.prepare_gate_decision(intent)
+
+# An authenticated actor signs prepared.authorization_payload externally here.
+confirmation = replace(
+    intent,
+    reason=prepared.reason,
+    evidence_references=prepared.evidence_references,
+    evidence_content_sha256=prepared.evidence_content_sha256,
+    actor_fingerprint=prepared.actor_fingerprint,
+    precondition_digest=prepared.precondition_digest,
+    prepared_at=prepared.prepared_at,
+    expires_at=prepared.expires_at,
+    authentication=None,  # supply exact Ed25519 material when required
+)
+durable = service.approve_gate(confirmation)
+```
+
 ## Stale, expired, and evidence messages
 
 Do not infer failure type from English text. Use error v2:
@@ -60,11 +102,17 @@ Do not infer failure type from English text. Use error v2:
 | `gate.evidence-missing` | Show Core's typed evidence blockers; do not calculate them in Studio |
 | `command.signature-invalid` | Ask the actor to sign the newly prepared payload |
 | `transaction.commit-failed` | No decision was committed; preserve the form and allow a reviewed retry |
+| `transaction.rollback-failed` | Restoration was verified, but rollback reported an error; require review before retry |
 | `transaction.indeterminate` | Stop mutation controls and show the supplied recovery hint |
 
 `details.stale_reason` may distinguish state, governed material, evidence, actor key, preparation,
 or an external edit. Details are safe for structured display but remain untrusted text; render them
 as text, never HTML.
+
+For `transaction.indeterminate`, Studio must disable mutation controls until the operator reconciles
+Git and runs `agora validate`. `transaction.rollback-failed` is different: Core verified the
+original snapshots, but the reported rollback anomaly still warrants operator review. Studio must
+not infer either case from an HTTP status or English message.
 
 ## External evidence
 
@@ -74,6 +122,10 @@ must pass it to Core as data and let Core validate and persist it. A gate option
 `content_addressed_evidence_required: true` and blocker
 `gate.evidence-content-digest-missing` is not approvable. Never hide the blocker or substitute a URI
 hash for a content hash.
+
+The portable fixture `tests/contracts/core-0.8-application-contracts.json` intentionally contains a
+gate option with more eligible evidence than the prepared command selects. Consumers should assert
+that the prepared and confirmed maps equal the selected command map, not the option-wide map.
 
 ## Work Control reads
 

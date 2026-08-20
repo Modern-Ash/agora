@@ -1,12 +1,14 @@
 import io
 import json
 import subprocess
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from agora.cli import main
+from agora.filesystem import FilesystemTransactionFailure
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
@@ -870,7 +872,11 @@ def test_prepares_and_launches_a_session_with_actor_runtime_override(
     assert summary.is_file()
     assert 'schema: "agora/session-summary/v1"' in summary.read_text()
     activity = session_workspace.list_activity(session_id="governance-session")
-    assert [item.type for item in activity] == ["session.prepared", "session.completed"]
+    assert [item.type for item in activity] == [
+        "session.prepared",
+        "session.running",
+        "session.completed",
+    ]
     assert activity[-1].actor == "project:facilitator"
     assert activity[-1].source.endswith("/SUMMARY.md")
 
@@ -1191,7 +1197,11 @@ def test_governs_and_persists_external_tool_invocations(
     assert inspection.result.result_kind == "repository-status"
     assert "tool.completed" in (root / ".agora" / "events.md").read_text()
     tool_activity = tool_workspace.list_activity(tool_run_id="repository-status")
-    assert [item.type for item in tool_activity] == ["tool.prepared", "tool.completed"]
+    assert [item.type for item in tool_activity] == [
+        "tool.prepared",
+        "tool.running",
+        "tool.completed",
+    ]
     assert tool_activity[-1].source.endswith("/RESULT.md")
 
     commit = tool_workspace.invoke_tool(
@@ -1212,6 +1222,7 @@ def test_governs_and_persists_external_tool_invocations(
         "-m",
         "feat(governance): validate repository commits",
     ]
+
     with pytest.raises(ValueError, match="must match Conventional Commits"):
         tool_workspace.invoke_tool(
             InvokeToolInput(
@@ -1310,6 +1321,301 @@ def test_governs_and_persists_external_tool_invocations(
                 swarm_id="delivery",
             )
         )
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 4])
+def test_handoff_transaction_keeps_assignment_events_and_activity_aligned(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at: int,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.add_actor(
+        AddActorInput(
+            id="alternate-developer",
+            name="Alternate Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    swarm = root / ".agora" / "swarms" / "delivery"
+    tracked = [swarm / "SWARM.md", swarm / "events.md", root / ".agora" / "activity.md"]
+    before = {path: path.read_bytes() for path in tracked}
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def fail_selected(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == fail_at:
+            raise OSError(f"handoff failure {fail_at}")
+        original(path, contents)
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.handoff_actor(
+            HandoffActorInput(
+                id="atomic-handoff",
+                swarm_id="delivery",
+                role_id="developer",
+                from_actor_id="developer",
+                to_actor_id="alternate-developer",
+                authorized_by="developer",
+                reason="Transfer implementation responsibility",
+            )
+        )
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not (swarm / "handoffs" / "atomic-handoff").exists()
+    assert workspace.show_swarm("delivery").assignments["developer"] == "project:developer"
+
+
+@pytest.mark.parametrize("fail_at", [1, 3, 5])
+def test_session_preparation_transaction_removes_partial_records_and_can_retry(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at: int,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    tracked = [root / ".agora" / "events.md", root / ".agora" / "activity.md"]
+    before = {path: path.read_bytes() for path in tracked}
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def fail_selected(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == fail_at:
+            raise OSError(f"session failure {fail_at}")
+        original(path, contents)
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+    request = StartSessionInput(
+        id="atomic-session",
+        actor_id="developer",
+        swarm_id="delivery",
+        launch=False,
+    )
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.start_session(request)
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not (root / ".agora" / "sessions" / "atomic-session").exists()
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", original)
+    assert workspace.start_session(request).status == "prepared"
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+def test_tool_preparation_transaction_removes_partial_records_and_can_retry(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at: int,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    tracked = [root / ".agora" / "events.md", root / ".agora" / "activity.md"]
+    before = {path: path.read_bytes() for path in tracked}
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def fail_selected(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == fail_at:
+            raise OSError(f"tool preparation failure {fail_at}")
+        original(path, contents)
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+    request = InvokeToolInput(
+        id="atomic-tool-run",
+        tool_id="repository",
+        operation_id="status",
+        actor_id="developer",
+        swarm_id="delivery",
+    )
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.invoke_tool(request)
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not (root / ".agora" / "tool-runs" / "atomic-tool-run").exists()
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", original)
+    assert workspace.invoke_tool(request).status == "prepared"
+
+
+@pytest.mark.parametrize("fail_at", [1, 3, 5])
+def test_session_finalization_failure_leaves_an_explicit_running_recovery_state(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at: int,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def fail_finalization(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == fail_at:
+            raise OSError(f"session finalization failure {fail_at}")
+        original(path, contents)
+
+    def launch(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
+        monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_finalization)
+        return 0
+
+    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launch)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        governed.start_session(
+            StartSessionInput(
+                id="finalization-failure",
+                actor_id="developer",
+                swarm_id="delivery",
+                runner="/bin/true",
+                launch=True,
+            )
+        )
+
+    session_root = root / ".agora" / "sessions" / "finalization-failure"
+    assert governed.show_session("finalization-failure").status == "running"
+    assert not (session_root / "RESULT.md").exists()
+    assert not (session_root / "SUMMARY.md").exists()
+    assert [item.type for item in governed.list_activity(session_id="finalization-failure")] == [
+        "session.prepared",
+        "session.running",
+    ]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 4])
+def test_tool_finalization_failure_leaves_an_explicit_running_recovery_state(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at: int,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    from agora import filesystem
+
+    monkeypatch.setattr("agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}")
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def fail_finalization(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == fail_at:
+            raise OSError(f"tool finalization failure {fail_at}")
+        original(path, contents)
+
+    def run_tool(
+        command: list[str], cwd: Path, environment: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_finalization)
+        return subprocess.CompletedProcess(command, 0, stdout="clean", stderr="")
+
+    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, tool_runner=run_tool)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        governed.invoke_tool(
+            InvokeToolInput(
+                id="tool-finalization-failure",
+                tool_id="repository",
+                operation_id="status",
+                actor_id="developer",
+                swarm_id="delivery",
+                launch=True,
+            )
+        )
+
+    run_root = root / ".agora" / "tool-runs" / "tool-finalization-failure"
+    assert governed.show_tool_run("tool-finalization-failure").run.status == "running"
+    assert not (run_root / "RESULT.md").exists()
+    assert [
+        item.type for item in governed.list_activity(tool_run_id="tool-finalization-failure")
+    ] == ["tool.prepared", "tool.running"]
+
+
+def test_tool_external_execution_does_not_hold_the_project_writer_lock(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="concurrent-tool-work",
+            title="Allow governed progress during external execution",
+            actor_id="owner",
+        )
+    )
+    monkeypatch.setattr("agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}")
+    completed: list[str] = []
+    errors: list[BaseException] = []
+    governed: AgoraWorkspace
+
+    def run_tool(
+        command: list[str], cwd: Path, environment: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        def mutate() -> None:
+            try:
+                governed.block_work(
+                    ChangeWorkStatusInput(
+                        id="block-during-tool",
+                        swarm_id="delivery",
+                        work_id="concurrent-tool-work",
+                        actor_id="developer",
+                        reason="External execution is waiting",
+                    )
+                )
+                completed.append("mutation")
+            except BaseException as error:  # pragma: no cover - asserted below
+                errors.append(error)
+
+        thread = threading.Thread(target=mutate)
+        thread.start()
+        thread.join(timeout=1)
+        if thread.is_alive():
+            raise AssertionError("external execution retained the project writer lock")
+        return subprocess.CompletedProcess(command, 0, stdout="clean", stderr="")
+
+    governed = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        tool_runner=run_tool,
+        lock_timeout=0.1,
+    )
+
+    result = governed.invoke_tool(
+        InvokeToolInput(
+            id="lock-free-external-run",
+            tool_id="repository",
+            operation_id="status",
+            actor_id="developer",
+            swarm_id="delivery",
+            launch=True,
+        )
+    )
+
+    assert result.status == "completed"
+    assert completed == ["mutation"]
+    assert errors == []
+    assert governed.show_work("delivery", "concurrent-tool-work").operational_status == "blocked"
 
 
 def test_rejects_a_tool_result_bound_to_another_run(

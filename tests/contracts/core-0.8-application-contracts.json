@@ -26,13 +26,20 @@
     "authorization_payload": "{}\n",
     "authorization_digest": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "freshness": "governed-material/v2",
+    "evidence_references": [
+      "https://evidence.example.invalid/report"
+    ],
+    "evidence_content_sha256": {
+      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
     "prepared_at": "2026-08-20T15:00:00Z",
     "expires_at": "2026-08-20T15:15:00Z"
   },
   "gate_option": {
     "schema": "agora/application/gate-decision-option-summary/v3",
     "evidence_content_sha256": {
-      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "https://evidence.example.invalid/unselected": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     },
     "content_addressed_evidence_required": true
   },

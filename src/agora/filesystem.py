@@ -1,5 +1,7 @@
+import hashlib
 import os
 import re
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -36,6 +38,27 @@ class _FileSnapshot:
     contents: str | None
     mode: int | None
 
+    @property
+    def fingerprint(self) -> "FileFingerprint":
+        return FileFingerprint(
+            exists=self.contents is not None,
+            content_sha256=(
+                hashlib.sha256(self.contents.encode("utf-8")).hexdigest()
+                if self.contents is not None
+                else None
+            ),
+            mode=self.mode,
+        )
+
+
+@dataclass(frozen=True)
+class FileFingerprint:
+    """Content, existence, and permission identity for one durable Markdown path."""
+
+    exists: bool
+    content_sha256: str | None
+    mode: int | None
+
 
 class FilesystemTransactionFailure(OSError):
     """A compound Markdown commit failed, optionally leaving indeterminate state."""
@@ -47,26 +70,42 @@ class FilesystemTransactionFailure(OSError):
         phase: str,
         write_set: tuple[str, ...],
         rollback_errors: tuple[str, ...] = (),
+        verification_errors: tuple[str, ...] = (),
+        indeterminate: bool | None = None,
     ) -> None:
         super().__init__(message)
         self.phase = phase
         self.write_set = write_set
         self.rollback_errors = rollback_errors
-        self.indeterminate = bool(rollback_errors)
-        self.recovery_hint = (
-            "Stop mutations, inspect Git and run `agora validate` before recovery."
-            if self.indeterminate
-            else "Correct the persistence failure and retry the complete operation."
-        )
+        self.verification_errors = verification_errors
+        self.indeterminate = bool(verification_errors) if indeterminate is None else indeterminate
+        if self.indeterminate:
+            self.recovery_hint = (
+                "Stop mutations, inspect Git and run `agora validate` before recovery."
+            )
+        elif phase == "rollback":
+            self.recovery_hint = (
+                "Rollback reported an error, but verification matched the original snapshots; "
+                "inspect the project before a reviewed retry."
+            )
+        elif phase == "concurrent-edit":
+            self.recovery_hint = "Refresh durable state and retry after the external writer stops."
+        else:
+            self.recovery_hint = "Correct the persistence failure and retry the complete operation."
 
 
 class FilesystemTransaction:
     """Stage related Markdown writes and commit or roll them back as one mutation."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        expected_fingerprints: dict[Path, FileFingerprint] | None = None,
+    ) -> None:
         self._writes: dict[Path, str] = {}
+        self._expected_fingerprints = dict(expected_fingerprints or {})
 
     def write(self, path: Path, contents: str) -> None:
+        self._capture_expected(path)
         self._writes[path] = contents
 
     def contains(self, path: Path) -> bool:
@@ -82,16 +121,41 @@ class FilesystemTransaction:
             raise FileExistsError(
                 f"Refusing to overwrite existing file: {path}. Pass --force to replace it."
             )
-        self._writes[path] = contents
+        self.write(path, contents)
 
     def append(self, path: Path, entry: str) -> None:
+        self._capture_expected(path)
         contents = self._writes.get(path)
         if contents is None:
             contents = path.read_text(encoding="utf-8") if path.exists() else ""
         self._writes[path] = f"{contents}{entry.rstrip()}\n"
 
+    def expect(self, path: Path, fingerprint: FileFingerprint) -> None:
+        """Bind a prepared operation to the exact path identity it reviewed."""
+
+        current = self._expected_fingerprints.get(path)
+        if current is not None and current != fingerprint:
+            raise ValueError(f"Conflicting expected fingerprint for {path}")
+        self._expected_fingerprints[path] = fingerprint
+
+    def _capture_expected(self, path: Path) -> None:
+        if path not in self._expected_fingerprints:
+            self._expected_fingerprints[path] = filesystem_fingerprint(path)
+
     def commit(self) -> None:
-        snapshots: dict[Path, _FileSnapshot] = {}
+        snapshots = {path: _file_snapshot(path) for path in self._writes}
+        write_set = tuple(str(path) for path in self._writes)
+        changed_before_commit = [
+            path
+            for path, snapshot in snapshots.items()
+            if snapshot.fingerprint != self._expected_fingerprints[path]
+        ]
+        if changed_before_commit:
+            raise FilesystemTransactionFailure(
+                "Filesystem transaction aborted because durable state changed before commit",
+                phase="concurrent-edit",
+                write_set=write_set,
+            )
         applied: list[Path] = []
         created_directories = {
             directory
@@ -100,12 +164,17 @@ class FilesystemTransaction:
         }
         try:
             for path, contents in self._writes.items():
-                snapshots[path] = _FileSnapshot(
-                    contents=path.read_text(encoding="utf-8") if path.exists() else None,
-                    mode=path.stat().st_mode if path.exists() else None,
-                )
+                if _file_snapshot(path) != snapshots[path]:
+                    raise _ConcurrentFilesystemEdit(
+                        "Durable state changed while the transaction was committing"
+                    )
                 _atomic_write_direct(path, contents)
                 applied.append(path)
+                if snapshots[path].mode is not None:
+                    path.chmod(snapshots[path].mode)
+            post_commit_errors = _verify_committed_writes(self._writes, snapshots)
+            if post_commit_errors:
+                raise OSError("Post-commit verification did not match staged contents")
         except Exception as error:
             rollback_errors: list[Exception] = []
             for path in reversed(applied):
@@ -125,16 +194,42 @@ class FilesystemTransaction:
             for directory in ordered_directories:
                 try:
                     directory.rmdir()
-                except OSError:
-                    pass
-            write_set = tuple(str(path) for path in self._writes)
-            if rollback_errors:
+                except FileNotFoundError:
+                    continue
+                except OSError as rollback_error:
+                    rollback_errors.append(rollback_error)
+            verification_paths = (
+                applied if isinstance(error, _ConcurrentFilesystemEdit) else list(self._writes)
+            )
+            verification_errors = _verify_restored_snapshots(
+                snapshots,
+                verification_paths,
+                created_directories,
+            )
+            if verification_errors:
                 raise FilesystemTransactionFailure(
-                    "Filesystem transaction failed and rollback was incomplete: "
-                    + "; ".join(str(item) for item in rollback_errors),
+                    "Filesystem transaction failed and restoration could not be verified",
                     phase="rollback",
                     write_set=write_set,
                     rollback_errors=tuple(str(item) for item in rollback_errors),
+                    verification_errors=verification_errors,
+                    indeterminate=True,
+                ) from error
+            if isinstance(error, _ConcurrentFilesystemEdit):
+                raise FilesystemTransactionFailure(
+                    "Filesystem transaction aborted because durable state changed during commit",
+                    phase="concurrent-edit",
+                    write_set=write_set,
+                    rollback_errors=tuple(str(item) for item in rollback_errors),
+                    indeterminate=False,
+                ) from error
+            if rollback_errors:
+                raise FilesystemTransactionFailure(
+                    "Filesystem transaction rollback reported an error but verification passed",
+                    phase="rollback",
+                    write_set=write_set,
+                    rollback_errors=tuple(str(item) for item in rollback_errors),
+                    indeterminate=False,
                 ) from error
             raise FilesystemTransactionFailure(
                 f"Filesystem transaction commit failed: {error}",
@@ -149,12 +244,16 @@ _ACTIVE_TRANSACTION: ContextVar[FilesystemTransaction | None] = ContextVar(
 
 
 @contextmanager
-def filesystem_transaction() -> Iterator[FilesystemTransaction]:
+def filesystem_transaction(
+    expected_fingerprints: dict[Path, FileFingerprint] | None = None,
+) -> Iterator[FilesystemTransaction]:
     current = _ACTIVE_TRANSACTION.get()
     if current is not None:
+        for path, fingerprint in (expected_fingerprints or {}).items():
+            current.expect(path, fingerprint)
         yield current
         return
-    transaction = FilesystemTransaction()
+    transaction = FilesystemTransaction(expected_fingerprints)
     token = _ACTIVE_TRANSACTION.set(transaction)
     try:
         yield transaction
@@ -208,6 +307,62 @@ def staged_contents(path: Path) -> str | None:
 
     transaction = _ACTIVE_TRANSACTION.get()
     return None if transaction is None else transaction.contents(path)
+
+
+def filesystem_fingerprint(path: Path) -> FileFingerprint:
+    """Return a content-based identity without relying on filesystem timestamps."""
+
+    return _file_snapshot(path).fingerprint
+
+
+class _ConcurrentFilesystemEdit(OSError):
+    pass
+
+
+def _file_snapshot(path: Path) -> _FileSnapshot:
+    if not path.exists():
+        return _FileSnapshot(contents=None, mode=None)
+    return _FileSnapshot(
+        contents=path.read_text(encoding="utf-8"),
+        mode=stat.S_IMODE(path.stat().st_mode),
+    )
+
+
+def _verify_committed_writes(
+    writes: dict[Path, str], snapshots: dict[Path, _FileSnapshot]
+) -> tuple[str, ...]:
+    failures: list[str] = []
+    for path, contents in writes.items():
+        try:
+            current = _file_snapshot(path)
+        except OSError:
+            failures.append("unreadable-written-path")
+            continue
+        if current.contents != contents:
+            failures.append("written-content-mismatch")
+        expected_mode = snapshots[path].mode
+        if expected_mode is not None and current.mode != expected_mode:
+            failures.append("written-permission-mismatch")
+    return tuple(failures)
+
+
+def _verify_restored_snapshots(
+    snapshots: dict[Path, _FileSnapshot],
+    paths: list[Path],
+    created_directories: set[Path],
+) -> tuple[str, ...]:
+    failures: list[str] = []
+    for path in paths:
+        try:
+            current = _file_snapshot(path)
+        except OSError:
+            failures.append("unreadable-restored-path")
+            continue
+        if current != snapshots[path]:
+            failures.append("restored-snapshot-mismatch")
+    if any(directory.exists() for directory in created_directories):
+        failures.append("new-directory-remains")
+    return tuple(failures)
 
 
 def _missing_parent_directories(path: Path) -> list[Path]:

@@ -43,11 +43,14 @@ provenance or rollback guarantees.
 Core 0.8 adopts the shared reentrant transaction for work transitions, criterion satisfaction,
 artifact and evidence registration, approvals, gate decisions, status changes, and the domain/event/
 Activity write-set of usage, decomposition, delegation create/accept/collect, signed lifecycle-action
-application, and budget amendments. Fault injection covers first, intermediate, final, Activity,
-commit, rollback, new-file removal, and permission restoration. An incomplete rollback surfaces
-`transaction.indeterminate` with a recovery hint instead of hiding the failure.
+preparation/application, actor key rotation/revocation/recovery, handoffs, Session state transitions,
+Tool Run state transitions, and budget amendments. Session and Tool Run external processes remain
+outside both filesystem transactions and the project lock. Fault injection covers first,
+intermediate, final, Activity, commit, rollback, new-file removal, permission restoration, and retry.
+Post-rollback verification distinguishes a reported rollback error from an indeterminate durable
+state.
 
-Remaining work: audit less common checklist, handoff, session, Tool Run, actor identity, pack,
+Remaining work: audit less common checklist and advisory-output families and keep evaluating pack,
 registry, trust, and upgrade families before unifying their specialized staging semantics.
 
 Acceptance conditions retained for future families:

@@ -96,9 +96,12 @@ persists the decision and Activity event in one transaction. The result contains
 record emitted by that transaction; it never searches for a later matching event.
 
 Command v4 requires the apply-time `precondition_digest`, Core-issued `prepared_at`, and optional
-`expires_at`. Preparation also returns the selected `evidence_content_sha256` map and actor
-fingerprint; confirmation must echo them unchanged so Core can classify evidence and actor-key
-changes independently. Clients first
+`expires_at`. Preparation returns an exact `evidence_content_sha256` map containing every selected
+evidence reference, and only those references. Each selected reference has one entry; its value is
+the lowercase content SHA-256 or explicit `null` when content identity is unavailable and policy
+allows it. Confirmation must echo the complete map and actor fingerprint unchanged. An empty map,
+missing key, additional key, changed digest, or digest changed to `null` returns
+`command.governed-material-stale` with `details.stale_reason: evidence-changed`. Clients first
 submit the command
 without a digest to `prepare_gate_decision()`, which returns
 `agora/application/prepared-gate-decision/v3`. Only Core calculates the digest. It covers project,
@@ -146,6 +149,21 @@ Stable provider-neutral families include:
 - `transaction.commit-failed`, `transaction.rollback-failed`, and
   `transaction.indeterminate`;
 - `runtime.incompatible` and `provider.execution-failed`.
+
+Transaction codes have evidence-based, non-overlapping semantics:
+
+- `transaction.commit-failed`: commit failed and post-rollback verification proved that existence,
+  content, permissions, and new-path cleanup match the original snapshots;
+- `transaction.rollback-failed`: rollback reported an error, but that same verification still
+  proved complete restoration;
+- `transaction.indeterminate`: verification could not prove complete restoration. This is
+  non-retryable until an operator follows the recovery hint.
+
+The transaction snapshots the complete staged write-set before its first replacement, checks each
+destination immediately before writing, and verifies the staged contents after commit. A detectable
+external edit aborts as `durable-state.concurrent-edit` for reads or
+`command.governed-material-stale` with `external-edit` for governed commands. These checks do not
+claim operating-system or distributed isolation.
 
 Compatibility subclasses retain the earlier 0.x read and command codes where existing callers use
 them. Stale error details distinguish `state-changed`, `governed-material-changed`,

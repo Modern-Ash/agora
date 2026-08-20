@@ -21,6 +21,7 @@ from agora.application.commands import (
     canonicalize_approve_gate_command,
 )
 from agora.application.errors import (
+    AgoraApplicationError,
     AuthorityDeniedError,
     CommandPersistenceError,
     GateAlreadyResolvedError,
@@ -351,12 +352,16 @@ class AgoraCommandService:
         except (FileNotFoundError, ValueError) as error:
             raise InvalidCommandError(str(error)) from error
 
+        selected_content_sha256 = {
+            reference: prepared_record.option.evidence_content_sha256.get(reference)
+            for reference in command.evidence_references
+        }
         command = replace(
             command,
             precondition_digest=prepared_record.precondition_digest,
             prepared_at=prepared_record.prepared_at,
             expires_at=prepared_record.expires_at,
-            evidence_content_sha256=prepared_record.option.evidence_content_sha256,
+            evidence_content_sha256=selected_content_sha256,
             actor_fingerprint=prepared_record.option.authentication_fingerprint,
         )
         payload = approve_gate_authorization_payload(command)
@@ -467,9 +472,6 @@ class AgoraCommandService:
             or re.fullmatch(r"[0-9a-f]{64}", command.actor_fingerprint) is None
         ):
             raise InvalidCommandError("Prepared actor fingerprint must be SHA-256 or null")
-        unknown_digests = set(command.evidence_content_sha256) - set(command.evidence_references)
-        if unknown_digests:
-            raise InvalidCommandError("Evidence content digests contain unselected references")
         if any(
             digest is not None
             and (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None)
@@ -575,12 +577,19 @@ class AgoraCommandService:
                 raise InvalidCommandError("Authentication fingerprint must be SHA-256")
 
     @staticmethod
-    def _transaction_error(error: FilesystemTransactionFailure) -> CommandPersistenceError:
+    def _transaction_error(error: FilesystemTransactionFailure) -> AgoraApplicationError:
         details = {
             "phase": error.phase,
             "write_count": len(error.write_set),
             "rollback_error_count": len(error.rollback_errors),
+            "verification_error_count": len(error.verification_errors),
         }
+        if error.phase == "concurrent-edit":
+            return GovernedMaterialStaleError(
+                "Durable material changed while the transaction was committing",
+                recovery_hint=error.recovery_hint,
+                details={**details, "stale_reason": "external-edit"},
+            )
         if error.indeterminate:
             return TransactionIndeterminateError(
                 "Filesystem transaction state is indeterminate",

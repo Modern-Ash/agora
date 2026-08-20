@@ -255,19 +255,32 @@ Compound mutations distinguish three guarantees:
 | Work creation | Stage the work document, companion registers, event streams, and Activity Ledger; roll back every applied write if commit fails |
 | Adopted work lifecycle mutations | Stage domain record, work event, and Activity together; restore content and mode and remove new files on failure |
 | Gate decisions and budget amendments | Revalidate the governed read-set immediately before one transaction and return its exact Activity record |
+| Actor identity and handoffs | Stage identity/assignment records, history, events, and Activity together |
+| Sessions and Tool Runs | Commit prepare, running, and terminal states separately; never hold a filesystem transaction while external code runs |
 | Specialized pack, registry, and upgrade changes | Use their reviewed staging and rollback mechanisms before publishing the new composition |
 
 The filesystem transaction is reentrant within one execution context. A nested helper contributes
 to the active transaction instead of committing independently, so creating a work item and appending
-its events share one outcome. The project writer lock prevents another local mutation from
-interleaving with that commit. This is rollback protection, not a distributed filesystem
-transaction: process or machine loss during a compound commit still requires Git reconciliation and
-`agora validate`.
+its events share one outcome. Before applying its first replacement, the transaction snapshots the
+complete staged write-set. A prepared caller may supply expected content fingerprints; staging also
+captures content-based expectations automatically. Each destination must still match immediately
+before its write, and every committed destination is reread to verify the staged content. These
+checks use existence, SHA-256 content identity, and permissions rather than mtime.
 
-If commit fails, Core reports `transaction.commit-failed` after a successful rollback. If rollback
-also fails, it reports non-retryable `transaction.indeterminate` and instructs the operator to stop
-mutations, inspect Git, and validate. Public details contain phase and counts, never the private
-absolute write-set.
+The project writer lock prevents another local Core mutation from interleaving with the commit. An
+external editor that changes a destination before or during the ordered writes causes an abort and
+rollback of Core-applied writes. This is rollback protection and optimistic conflict detection, not
+operating-system, distributed, or crash-safe isolation. A process can still write after Core's final
+verification, and process or machine loss during a compound commit still requires Git
+reconciliation and `agora validate`.
+
+Transaction errors have non-overlapping meanings. `transaction.commit-failed` means commit failed
+and post-rollback verification matched every original snapshot. `transaction.rollback-failed`
+means a rollback operation reported an error but the same verification still proved complete
+restoration. `transaction.indeterminate` means Core could not prove restoration of existence,
+content, permissions, or newly created paths; operators must stop mutations, inspect Git, and run
+validation. Public details contain phase and counts, never the private absolute write-set or durable
+content.
 
 Project protocol versions are independent from individual Markdown schema identifiers. A CLI update
 does not mutate a workspace. `agora upgrade` first produces a read-only plan; `--apply` backs up all
@@ -317,9 +330,11 @@ not stream provider reasoning or bypass the persisted session result.
 `SESSION.md` and the Activity Ledger record the runtime actually selected, so fallback behavior is
 auditable and does not rewrite actor configuration.
 
-Session preparation and finalization use short project locks. Agora releases the lock before the
-external runtime starts so that actor-owned Agora commands can persist work while `SESSION.md` is
-`running`.
+Session preparation, transition to `running`, and finalization use separate short transactions and
+project locks. Each state has matching events and Activity. Agora releases both lock and transaction
+before the external runtime starts so that actor-owned Agora commands can persist work while
+`SESSION.md` is `running`. A finalization persistence failure leaves the explicit `running` state for
+operator reconciliation instead of publishing a partial terminal result.
 
 ## External integrations
 
@@ -347,6 +362,11 @@ The observability pack applies the same adapter boundary to health signals and i
 resolution distinct from evidence that recovery actually occurred.
 The code-review pack separates review reads, review writing, review decisions, and merge authority.
 Its GitHub Pull Requests adapter uses `gh`; no bundled role receives `review.merge`.
+
+Tool Run preparation, transition to `running`, and result finalization are separate short
+transactions. The external executable runs after the project lock is released. Finalization writes
+`RUN.md`, `RESULT.md`, project/work events, and Activity atomically; a persistence failure leaves the
+durable run in `running` for explicit recovery and never disguises a partial result as completed.
 
 External runtimes and adapters may submit provider-neutral Usage records with authoritative evidence
 references. Agora accumulates those append-only integer dimensions against work budget limits and

@@ -3585,6 +3585,7 @@ class AgoraWorkspace:
         return record
 
     @_locked_mutation("actor-runtime")
+    @_compound_mutation
     def rotate_actor_key(self, data: RotateActorKeyInput) -> ActorKeyRecord:
         if not data.reason.strip():
             raise ValueError("Actor key rotation reason cannot be empty")
@@ -3809,6 +3810,7 @@ class AgoraWorkspace:
         return replacement
 
     @_locked_mutation("actor-runtime")
+    @_compound_mutation
     def revoke_actor_key(self, data: RevokeActorKeyInput) -> ActorKeyRecord:
         if not data.reason.strip():
             raise ValueError("Actor key revocation reason cannot be empty")
@@ -4097,6 +4099,7 @@ class AgoraWorkspace:
         return swarm
 
     @_locked_mutation("project")
+    @_compound_mutation
     def handoff_actor(self, data: HandoffActorInput) -> HandoffRecord:
         root = self.project_root()
         context = self._validate_handoff(root, data)
@@ -7057,9 +7060,7 @@ class AgoraWorkspace:
             reference: current_options[0].evidence_content_sha256.get(reference)
             for reference in evidence_refs
         }
-        if data.evidence_content_sha256 and (
-            data.evidence_content_sha256 != current_evidence_digests
-        ):
+        if data.evidence_content_sha256 != current_evidence_digests:
             raise GovernedMaterialStaleRuleError(
                 "Evidence content identity changed since the decision was prepared",
                 stale_reason="evidence-changed",
@@ -7279,6 +7280,7 @@ class AgoraWorkspace:
                     activity_sink=captured_activity,
                     gate_id=data.gate_id,
                     evidence_refs=evidence_refs,
+                    evidence_content_sha256=current_evidence_digests,
                     precondition_digest=current_digest,
                     decision_reason=reason,
                 )
@@ -7287,11 +7289,18 @@ class AgoraWorkspace:
                 decision_activity = captured_activity[0]
             else:
                 references = ",".join(evidence_refs) or "none"
+                content_digests = json.dumps(
+                    current_evidence_digests,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
                 decision_activity = self._append_work_event(
                     work,
                     "gate.rejected",
                     f"gate={data.gate_id} role={role_id} actor={actor.reference} "
                     f"evidence={references} precondition={precondition} "
+                    f"evidence-content-sha256={content_digests} "
                     f"authentication={authentication_fingerprint or 'none'} reason={reason}",
                 )
                 updated_work = self._load_work(swarm, work.id)
@@ -7383,6 +7392,7 @@ class AgoraWorkspace:
         activity_sink: list[ActivityRecord] | None = None,
         gate_id: str | None = None,
         evidence_refs: list[str] | None = None,
+        evidence_content_sha256: dict[str, str | None] | None = None,
         precondition_digest: str | None = None,
         decision_reason: str | None = None,
     ) -> WorkRecord:
@@ -7399,6 +7409,7 @@ class AgoraWorkspace:
                 activity_sink,
                 gate_id,
                 evidence_refs,
+                evidence_content_sha256,
                 precondition_digest,
                 decision_reason,
             )
@@ -7416,6 +7427,7 @@ class AgoraWorkspace:
         activity_sink: list[ActivityRecord] | None = None,
         gate_id: str | None = None,
         evidence_refs: list[str] | None = None,
+        evidence_content_sha256: dict[str, str | None] | None = None,
         precondition_digest: str | None = None,
         decision_reason: str | None = None,
     ) -> WorkRecord:
@@ -7453,8 +7465,15 @@ class AgoraWorkspace:
             detail += f" authentication={authentication_fingerprint}"
         if gate_id is not None:
             references = ",".join(evidence_refs or []) or "none"
+            content_digests = json.dumps(
+                evidence_content_sha256 or {},
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
             detail += (
                 f" gate={gate_id} evidence={references}"
+                f" evidence-content-sha256={content_digests}"
                 f" precondition={precondition_digest or 'none'}"
                 f" reason={decision_reason or note_value}"
             )
@@ -7520,24 +7539,25 @@ class AgoraWorkspace:
             path=str(action_root),
             created_at=self._timestamp(),
         )
-        write_new(action_root / "ACTION.md", self._render_lifecycle_action(record))
-        append_entry(
-            root / ".agora" / "events.md",
-            (
-                f"- {self._timestamp()} | lifecycle-action.prepared | action={record.id} "
-                f"kind={record.action} actor={record.actor} swarm={record.swarm_id} "
-                f"work={record.work_id}"
-            ),
-        )
-        self._append_activity(
-            root,
-            "lifecycle-action.prepared",
-            f"Prepared signed intent for {record.action}",
-            actor=actor.reference,
-            swarm_id=swarm.id,
-            work_id=work.id if work is not None else None,
-            source=action_root / "ACTION.md",
-        )
+        with filesystem_transaction():
+            write_new(action_root / "ACTION.md", self._render_lifecycle_action(record))
+            append_entry(
+                root / ".agora" / "events.md",
+                (
+                    f"- {self._timestamp()} | lifecycle-action.prepared | action={record.id} "
+                    f"kind={record.action} actor={record.actor} swarm={record.swarm_id} "
+                    f"work={record.work_id}"
+                ),
+            )
+            self._append_activity(
+                root,
+                "lifecycle-action.prepared",
+                f"Prepared signed intent for {record.action}",
+                actor=actor.reference,
+                swarm_id=swarm.id,
+                work_id=work.id if work is not None else None,
+                source=action_root / "ACTION.md",
+            )
         return record
 
     def prepare_lifecycle_authorization(
@@ -9857,7 +9877,8 @@ class AgoraWorkspace:
                     f"Actor {actor.reference} requires a signed lifecycle action; "
                     "prepare session.prepare before materializing its context"
                 )
-            record = self._apply_session_preparation(root, data, context, None)
+            with filesystem_transaction():
+                record = self._apply_session_preparation(root, data, context, None)
             if not data.launch:
                 return record
             running = self._mark_session_running(record)
@@ -10180,7 +10201,26 @@ class AgoraWorkspace:
 
     def _mark_session_running(self, record: SessionRecord) -> SessionRecord:
         running = SessionRecord(**{**record.__dict__, "status": "running", "exit_code": None})
-        atomic_write(Path(record.path) / "SESSION.md", self._render_session(running))
+        session_path = Path(record.path)
+        root = session_path.parents[2]
+        timestamp = self._timestamp()
+        with filesystem_transaction():
+            atomic_write(session_path / "SESSION.md", self._render_session(running))
+            append_entry(
+                root / ".agora" / "events.md",
+                f"- {timestamp} | session.running | session={record.id}",
+            )
+            self._append_activity(
+                root,
+                "session.running",
+                "Session runtime started",
+                actor=record.actor,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                session_id=record.id,
+                source=session_path / "SESSION.md",
+                timestamp=timestamp,
+            )
         return running
 
     def _run_session_process(
@@ -10247,42 +10287,43 @@ class AgoraWorkspace:
             current = self._load_session(session_path)
             if current.status != "running":
                 raise ValueError(f"Running session state changed during execution: {running.id}")
-            atomic_write(session_path / "SESSION.md", self._render_session(finished))
-            result_contents = self._render_session_result(finished, stdout, stderr)
-            result_sha256 = hashlib.sha256(result_contents.encode("utf-8")).hexdigest()
-            completed_at = self._timestamp()
-            atomic_write(session_path / "RESULT.md", result_contents)
-            atomic_write(
-                session_path / "SUMMARY.md",
-                self._render_session_summary(
-                    finished,
-                    completed_at=completed_at,
-                    result_sha256=result_sha256,
-                ),
-            )
-            append_entry(
-                root / ".agora" / "events.md",
-                (
-                    f"- {completed_at} | session.{status} | session={running.id} "
-                    f"exit-code={exit_code if exit_code is not None else 'unavailable'}"
-                ),
-            )
-            self._append_activity(
-                root,
-                f"session.{status}",
-                (
-                    f"Session {status}; exit-code="
-                    f"{exit_code if exit_code is not None else 'unavailable'}; "
-                    f"output-bytes={finished.output_bytes}; executor={executor.reference}; "
-                    f"result-sha256={result_sha256}"
-                ),
-                actor=actor.reference,
-                swarm_id=swarm.id,
-                work_id=work.id if work is not None else None,
-                session_id=running.id,
-                source=session_path / "SUMMARY.md",
-                timestamp=completed_at,
-            )
+            with filesystem_transaction():
+                atomic_write(session_path / "SESSION.md", self._render_session(finished))
+                result_contents = self._render_session_result(finished, stdout, stderr)
+                result_sha256 = hashlib.sha256(result_contents.encode("utf-8")).hexdigest()
+                completed_at = self._timestamp()
+                atomic_write(session_path / "RESULT.md", result_contents)
+                atomic_write(
+                    session_path / "SUMMARY.md",
+                    self._render_session_summary(
+                        finished,
+                        completed_at=completed_at,
+                        result_sha256=result_sha256,
+                    ),
+                )
+                append_entry(
+                    root / ".agora" / "events.md",
+                    (
+                        f"- {completed_at} | session.{status} | session={running.id} "
+                        f"exit-code={exit_code if exit_code is not None else 'unavailable'}"
+                    ),
+                )
+                self._append_activity(
+                    root,
+                    f"session.{status}",
+                    (
+                        f"Session {status}; exit-code="
+                        f"{exit_code if exit_code is not None else 'unavailable'}; "
+                        f"output-bytes={finished.output_bytes}; executor={executor.reference}; "
+                        f"result-sha256={result_sha256}"
+                    ),
+                    actor=actor.reference,
+                    swarm_id=swarm.id,
+                    work_id=work.id if work is not None else None,
+                    session_id=running.id,
+                    source=session_path / "SUMMARY.md",
+                    timestamp=completed_at,
+                )
         if launch_error is not None:
             raise launch_error
         if exit_code != 0:
@@ -10362,21 +10403,22 @@ class AgoraWorkspace:
         progress_path = Path(record.path) / "PROGRESS.md"
         self._validate_session_progress(record)
         timestamp = self._timestamp()
-        append_entry(
-            progress_path,
-            f"- {timestamp} | executor={executor.reference} | {normalized}",
-        )
-        self._append_activity(
-            root,
-            "session.progress",
-            normalized,
-            actor=record.actor,
-            swarm_id=record.swarm_id,
-            work_id=record.work_id,
-            session_id=record.id,
-            source=progress_path,
-            timestamp=timestamp,
-        )
+        with filesystem_transaction():
+            append_entry(
+                progress_path,
+                f"- {timestamp} | executor={executor.reference} | {normalized}",
+            )
+            self._append_activity(
+                root,
+                "session.progress",
+                normalized,
+                actor=record.actor,
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                session_id=record.id,
+                source=progress_path,
+                timestamp=timestamp,
+            )
         return {
             "session": record.id,
             "responsible": record.actor,
@@ -10604,8 +10646,24 @@ class AgoraWorkspace:
             count += 1
         return {"rebuilt": count, "path": str(activity_path)}
 
-    @_locked_mutation("project")
     def invoke_tool(self, data: InvokeToolInput) -> ToolRunRecord:
+        root, record, contract, actor, swarm, work = self._prepare_tool_run(data)
+        if not data.launch:
+            return record
+        return self._execute_tool_run(root, record, contract, actor, swarm, work, data.force)
+
+    @_locked_mutation("project")
+    @_compound_mutation
+    def _prepare_tool_run(
+        self, data: InvokeToolInput
+    ) -> tuple[
+        Path,
+        ToolRunRecord,
+        ToolContract,
+        ActorRecord,
+        SwarmRecord,
+        WorkRecord | None,
+    ]:
         assert_slug(data.tool_id, "Tool id")
         assert_slug(data.operation_id, "Tool operation id")
         root = self.project_root()
@@ -10727,10 +10785,7 @@ class AgoraWorkspace:
                 "tool.prepared",
                 f"run={run_id} tool={contract.id} operation={operation.id} actor={actor.reference}",
             )
-        if not data.launch:
-            return record
-
-        return self._execute_tool_run(root, record, contract, actor, swarm, work, data.force)
+        return root, record, contract, actor, swarm, work
 
     def prepare_tool_authorization(
         self, data: PrepareToolAuthorizationInput
@@ -10758,8 +10813,21 @@ class AgoraWorkspace:
             path=str(output),
         )
 
-    @_locked_mutation("project")
     def launch_tool_run(self, data: LaunchToolRunInput) -> ToolRunRecord:
+        root, record, contract, actor, swarm, work = self._validate_tool_run_launch(data)
+        return self._execute_tool_run(root, record, contract, actor, swarm, work)
+
+    @_locked_mutation("project")
+    def _validate_tool_run_launch(
+        self, data: LaunchToolRunInput
+    ) -> tuple[
+        Path,
+        ToolRunRecord,
+        ToolContract,
+        ActorRecord,
+        SwarmRecord,
+        WorkRecord | None,
+    ]:
         assert_slug(data.run_id, "Tool run id")
         root = self.project_root()
         record = self._load_tool_run(root / ".agora" / "tool-runs" / data.run_id)
@@ -10872,7 +10940,7 @@ class AgoraWorkspace:
                 "authorization_signature": authorization_signature,
             }
         )
-        return self._execute_tool_run(root, authorized, contract, actor, swarm, work)
+        return root, authorized, contract, actor, swarm, work
 
     def _execute_tool_run(
         self,
@@ -10886,7 +10954,21 @@ class AgoraWorkspace:
     ) -> ToolRunRecord:
         run_path = Path(record.path)
         running = ToolRunRecord(**{**record.__dict__, "status": "running"})
-        atomic_write(run_path / "RUN.md", self._render_tool_run(running, contract))
+        with self._mutation_lock((root,), "start_tool_run"):
+            current = self._load_tool_run(run_path)
+            if current.status != "prepared":
+                raise ValueError(f"Tool run must still be prepared before execution: {record.id}")
+            if tool_authorization_payload(current) != tool_authorization_payload(record):
+                raise ValueError(f"Prepared Tool Run changed before execution: {record.id}")
+            with filesystem_transaction():
+                atomic_write(run_path / "RUN.md", self._render_tool_run(running, contract))
+                self._append_tool_event(root, running, "running")
+                if work is not None:
+                    self._append_work_event(
+                        work,
+                        "tool.running",
+                        f"run={record.id} actor={actor.reference}",
+                    )
         environment = {
             **os.environ,
             "AGORA_PROJECT": str(root),
@@ -10898,36 +10980,54 @@ class AgoraWorkspace:
             environment["AGORA_WORK"] = work.id
         if record.environment_id is not None:
             environment["AGORA_ENVIRONMENT"] = record.environment_id
-        if self._tool_runner is None:
-            result = _run_tool_process(
+        execution_error: BaseException | None = None
+        try:
+            if self._tool_runner is None:
+                result = _run_tool_process(
+                    record.command,
+                    root,
+                    environment,
+                    timeout_seconds=record.timeout_seconds,
+                    max_output_bytes=record.max_output_bytes,
+                )
+            else:
+                result = _bound_tool_output(
+                    self._tool_runner(record.command, root, environment),
+                    record.max_output_bytes,
+                )
+        except BaseException as error:
+            execution_error = error
+            message = f"{type(error).__name__}: {error}"
+            result = subprocess.CompletedProcess(
                 record.command,
-                root,
-                environment,
-                timeout_seconds=record.timeout_seconds,
-                max_output_bytes=record.max_output_bytes,
-            )
-        else:
-            result = _bound_tool_output(
-                self._tool_runner(record.command, root, environment),
-                record.max_output_bytes,
+                1,
+                "",
+                message[: record.max_output_bytes],
             )
         status = "completed" if result.returncode == 0 else "failed"
         finished = ToolRunRecord(
             **{**record.__dict__, "status": status, "exit_code": result.returncode}
         )
-        atomic_write(run_path / "RUN.md", self._render_tool_run(finished, contract))
-        write_new(
-            run_path / "RESULT.md",
-            self._render_tool_result(finished, result.stdout, result.stderr),
-            force,
-        )
-        self._append_tool_event(root, finished, status)
-        if work is not None:
-            self._append_work_event(
-                work,
-                f"tool.{status}",
-                f"run={record.id} exit-code={result.returncode}",
-            )
+        with self._mutation_lock((root,), "finish_tool_run"):
+            current = self._load_tool_run(run_path)
+            if current.status != "running":
+                raise ValueError(f"Running Tool Run state changed during execution: {record.id}")
+            with filesystem_transaction():
+                atomic_write(run_path / "RUN.md", self._render_tool_run(finished, contract))
+                write_new(
+                    run_path / "RESULT.md",
+                    self._render_tool_result(finished, result.stdout, result.stderr),
+                    force,
+                )
+                self._append_tool_event(root, finished, status)
+                if work is not None:
+                    self._append_work_event(
+                        work,
+                        f"tool.{status}",
+                        f"run={record.id} exit-code={result.returncode}",
+                    )
+        if execution_error is not None:
+            raise execution_error
         if result.returncode != 0:
             raise RuntimeError(
                 f"Tool operation exited with code {result.returncode}: {' '.join(record.command)}"
@@ -15031,9 +15131,23 @@ class AgoraWorkspace:
         )
         if not event_path.exists():
             write_new(event_path, "# Agora events\n\n")
+        timestamp = self._timestamp()
         append_entry(
             event_path,
-            f"- {self._timestamp()} | {type_} | actor={actor.reference} {detail}",
+            f"- {timestamp} | {type_} | actor={actor.reference} {detail}",
+        )
+        source = event_path
+        try:
+            source.resolve().relative_to(root.resolve())
+        except ValueError:
+            source = root / ".agora" / "project.md"
+        self._append_activity(
+            root,
+            type_,
+            detail,
+            actor=actor.reference,
+            source=source,
+            timestamp=timestamp,
         )
 
     def _require_actor_for_action(

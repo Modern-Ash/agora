@@ -24,6 +24,7 @@ from agora.application import (
     SignatureRequiredError,
     StalePreconditionError,
     TransactionIndeterminateError,
+    TransactionRollbackError,
     approve_gate_authorization_payload,
 )
 from agora.domain_errors import EvidenceMissingRuleError, GateDecisionRoleRuleError
@@ -178,6 +179,35 @@ def prepared_command(service: AgoraCommandService, **changes: object) -> Approve
         expires_at=prepared.expires_at,
         evidence_content_sha256=prepared.evidence_content_sha256,
         actor_fingerprint=prepared.actor_fingerprint,
+    )
+
+
+def add_external_evidence(
+    workspace: AgoraWorkspace,
+    *,
+    uri: str,
+    digest: str | None,
+    evidence_type: str = "test-run",
+) -> None:
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="developer",
+            kind="external-report",
+            uri=uri,
+            content_sha256=digest,
+        )
+    )
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="release",
+            actor_id="developer",
+            type=evidence_type,
+            result="success",
+            artifact_refs=[uri],
+        )
     )
 
 
@@ -348,6 +378,138 @@ def test_prepares_a_stable_canonical_authorization_payload(
     assert prepared.authentication_public_key is None
     assert prepared.freshness == "governed-material/v2"
     assert re.fullmatch(r"[0-9a-f]{64}", prepared.precondition_digest)
+
+
+def test_prepared_digest_map_contains_only_the_selected_eligible_subset(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, workspace, service = gate_project
+    unselected = "https://evidence.example.invalid/unselected"
+    add_external_evidence(workspace, uri=unselected, digest="b" * 64)
+
+    option = next(
+        item
+        for item in AgoraReadService(workspace).gate_decision_options("delivery", "release").options
+        if item.decision == "approved"
+    )
+    assert set(option.evidence_content_sha256) == {
+        "repo://reports/release.txt",
+        unselected,
+    }
+
+    prepared = service.prepare_gate_decision(command())
+    assert prepared.evidence_content_sha256 == {
+        "repo://reports/release.txt": hashlib.sha256(b"passed\n").hexdigest()
+    }
+
+    result = service.approve_gate(
+        replace(
+            command(),
+            precondition_digest=prepared.precondition_digest,
+            prepared_at=prepared.prepared_at,
+            expires_at=prepared.expires_at,
+            evidence_content_sha256=prepared.evidence_content_sha256,
+            actor_fingerprint=prepared.actor_fingerprint,
+        )
+    )
+    assert result.evidence_content_sha256 == prepared.evidence_content_sha256
+
+
+def test_prepared_digest_map_has_one_exact_entry_for_each_selected_required_type(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    root, workspace, service = gate_project
+    external = "https://evidence.example.invalid/external-audit"
+    add_external_evidence(
+        workspace,
+        uri=external,
+        digest="c" * 64,
+        evidence_type="external-audit",
+    )
+    gate = root / ".agora" / "methods" / "scrum" / "gates" / "completion.md"
+    gate.write_text(
+        gate.read_text(encoding="utf-8").replace(
+            "require-successful-evidence: true",
+            "require-successful-evidence: true\n"
+            'required-evidence-types: ["test-run","external-audit"]',
+        ),
+        encoding="utf-8",
+    )
+    references = ("repo://reports/release.txt", external)
+
+    prepared = service.prepare_gate_decision(command(evidence_references=references))
+
+    assert tuple(prepared.evidence_content_sha256) == references
+    assert prepared.evidence_content_sha256[external] == "c" * 64
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["empty", "missing", "additional", "changed", "null"],
+)
+def test_confirmation_rejects_any_non_exact_evidence_digest_map_as_stale(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    mutation: str,
+) -> None:
+    _, workspace, service = gate_project
+    external = "https://evidence.example.invalid/selected"
+    add_external_evidence(workspace, uri=external, digest="d" * 64)
+    raw = command(evidence_references=("repo://reports/release.txt", external))
+    prepared = service.prepare_gate_decision(raw)
+    exact = dict(prepared.evidence_content_sha256)
+    if mutation == "empty":
+        changed: dict[str, str | None] = {}
+    elif mutation == "missing":
+        changed = {external: exact[external]}
+    elif mutation == "additional":
+        changed = {**exact, "https://evidence.example.invalid/extra": "e" * 64}
+    elif mutation == "changed":
+        changed = {**exact, external: "f" * 64}
+    else:
+        changed = {**exact, external: None}
+    request = replace(
+        raw,
+        precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+        evidence_content_sha256=changed,
+        actor_fingerprint=prepared.actor_fingerprint,
+    )
+
+    with pytest.raises(GovernedMaterialStaleError) as captured:
+        service.approve_gate(request)
+
+    assert captured.value.to_dict()["details"]["stale_reason"] == "evidence-changed"
+    assert workspace.show_work("delivery", "release").approval_roles == []
+
+
+def test_selected_evidence_without_a_digest_round_trips_as_an_explicit_null(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, workspace, service = gate_project
+    external = "https://evidence.example.invalid/informational"
+    add_external_evidence(
+        workspace,
+        uri=external,
+        digest=None,
+        evidence_type="informational-review",
+    )
+    raw = command(evidence_references=(external,))
+
+    prepared = service.prepare_gate_decision(raw)
+    assert prepared.evidence_content_sha256 == {external: None}
+
+    result = service.approve_gate(
+        replace(
+            raw,
+            precondition_digest=prepared.precondition_digest,
+            prepared_at=prepared.prepared_at,
+            expires_at=prepared.expires_at,
+            evidence_content_sha256=prepared.evidence_content_sha256,
+            actor_fingerprint=prepared.actor_fingerprint,
+        )
+    )
+    assert result.evidence_content_sha256 == {external: None}
 
 
 def test_canonicalizes_reason_and_evidence_once_for_payload_projection_and_persistence(
@@ -785,6 +947,11 @@ def test_verifies_inline_authentication_against_the_current_actor_key(
 
     monkeypatch.setattr(workspace, "_find_actor", authenticated_actor)
     monkeypatch.setattr(workspace, "_assert_current_actor_key", lambda actor: None)
+    add_external_evidence(
+        workspace,
+        uri="https://evidence.example.invalid/not-selected",
+        digest="9" * 64,
+    )
     unsigned = command(
         reason="  Evidence\n\t reviewed and accepted  ",
         evidence_references=(
@@ -820,10 +987,19 @@ def test_verifies_inline_authentication_against_the_current_actor_key(
     assert result.decision == "approved"
     assert result.reason == "Evidence reviewed and accepted"
     assert result.evidence_references == ("repo://reports/release.txt",)
+    assert result.evidence_content_sha256 == prepared.evidence_content_sha256
+    assert (
+        json.loads(prepared.authorization_payload)["evidence_content_sha256"]
+        == (prepared.to_dict()["evidence_content_sha256"])
+    )
     event = workspace.list_events(
         swarm_id="delivery", work_id="release", type_="approval.added", limit=1
     )[0]
     assert f"authentication={fingerprint}" in event.detail
+    durable_digests = json.loads(
+        workspace._event_detail_value(event.detail, "evidence-content-sha256") or "{}"
+    )
+    assert durable_digests == prepared.to_dict()["evidence_content_sha256"]
 
 
 @pytest.mark.parametrize("failure", ["reason", "fingerprint", "signature"])
@@ -1198,6 +1374,79 @@ def test_surfaces_an_indeterminate_transaction_when_rollback_also_fails(
     assert payload["retryable"] is False
     assert "inspect Git" in payload["recovery_hint"]
     assert "write_set" not in payload["details"]
+
+
+def test_maps_verified_rollback_failure_from_the_real_command_service(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, workspace, service = gate_project
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    calls = 0
+
+    def restore_then_report_error(path: Path, contents: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected commit failure")
+        original(path, contents)
+        if calls == 3:
+            raise OSError("injected rollback report after restoration")
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", restore_then_report_error)
+
+    with pytest.raises(TransactionRollbackError) as captured:
+        service.approve_gate(prepared_command(service))
+
+    payload = captured.value.to_dict()
+    assert payload["code"] == "transaction.rollback-failed"
+    assert payload["category"] == "transaction"
+    assert payload["retryable"] is False
+    assert "verification matched" in payload["recovery_hint"]
+    assert payload["details"] == {
+        "phase": "rollback",
+        "write_count": 3,
+        "rollback_error_count": 1,
+        "verification_error_count": 0,
+    }
+    assert workspace.show_work("delivery", "release").approval_roles == []
+
+
+def test_maps_an_interleaved_external_transaction_edit_to_stale_without_partial_decision(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace, service = gate_project
+    from agora import filesystem
+
+    work_root = root / ".agora" / "swarms" / "delivery" / "work" / "release"
+    approvals = work_root / "approvals.md"
+    events = work_root / "events.md"
+    approvals_before = approvals.read_bytes()
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def external_edit_between_writes(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        original(path, contents)
+        if writes == 1:
+            events.write_text(
+                events.read_text(encoding="utf-8") + "\nExternal editor event.\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", external_edit_between_writes)
+
+    with pytest.raises(GovernedMaterialStaleError) as captured:
+        service.approve_gate(prepared_command(service))
+
+    assert captured.value.to_dict()["details"]["stale_reason"] == "external-edit"
+    assert approvals.read_bytes() == approvals_before
+    assert "External editor event." in events.read_text(encoding="utf-8")
+    assert workspace.show_work("delivery", "release").approval_roles == []
 
 
 def test_translates_domain_failures_by_type_and_never_by_message(
