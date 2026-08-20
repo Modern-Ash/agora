@@ -5,6 +5,10 @@ The Developer plans, implements, and verifies against the accepted specification
 drafting until its criteria are satisfied and a `spec` artifact is registered — clarification is a
 gate, not a convention.
 
+Guided clarifications and non-binding checklists may improve the draft, while consistency reports
+and generated Gherkin may support verification. None of them satisfy a criterion or transition work
+without the existing gate and role actions.
+
 The same actor may hold both roles when project policy allows it, but the two responsibilities stay
 distinguishable: clarifying scope is not the same action as implementing it.
 

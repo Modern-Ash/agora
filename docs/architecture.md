@@ -78,7 +78,7 @@ application-service boundary. It does not maintain a server or database, invoke 
 project source languages, or impose a development methodology.
 `src/agora/workspace.py` materializes and validates documents, capabilities, actions, workflows,
 gates, granular waivers, direct and delegated approvals, handoffs, interruptions, work delegations,
-sessions, and tool runs.
+advisory specification outputs, sessions, and tool runs.
 `src/agora/methods.py` loads
 transition graphs, WIP limits, and gate policies. `src/agora/tools.py` validates provider-neutral
 Tool Packs and structured external operations. `src/agora/markdown.py` implements the
@@ -127,8 +127,9 @@ through Core ports and adapters; Studio Web has no filesystem mutation path.
 Read operations traverse those same records to produce deterministic JSON lists and summaries.
 There is no query database or generated index. Full validation catches errors per record, continues
 the scan, then checks portable commands, generated adapters, cross-record ownership, references,
-lifecycle state, recursive graphs, and terminal results. This makes `agora validate` suitable for CI
-without changing the source of truth.
+lifecycle state, recursive graphs, terminal results, and advisory-output provenance. Stale or legacy
+provenance is reported as a warning rather than a lifecycle failure. This makes `agora validate`
+suitable for CI without changing the source of truth.
 
 ### Packs
 
@@ -255,11 +256,20 @@ Adding an adapter must not change Method Packs or domain rules.
 Provider and model identifiers are opaque configuration values. The core has no LLM SDK dependency;
 an adapter or execution environment decides how a configured model is reached.
 
+Specification assistance uses the same boundary. Clarification, consistency, and Gherkin commands
+invoke the selected native CLI or an explicit structured runner. A generic runner receives the
+reviewed prompt path through `AGORA_ADVISORY_PROMPT` and returns the documented JSON contract on
+standard output. Generated files and their input hashes are persisted as Markdown or Gherkin in the
+work directory; no model response becomes hidden state.
+
 ### Session launcher
 
 `agora start` and `agora run` compile durable context from the active project, actor, swarm, method,
 role, and work.
-Actor runtime fields override project defaults. Without `--launch`, the command only prepares files.
+Actor runtime fields override project defaults. Actors may also define ordered runtime fallbacks.
+A fresh session selects the first configuration whose executable is available and advances past a
+selected runtime only for recognized quota or rate-limit failures; an ordinary runtime failure is
+preserved and not silently retried elsewhere. Without `--launch`, the command only prepares files.
 With `--launch`, it delegates to `codex`, `claude`, or an explicit runner and exports `AGORA_PROJECT`,
 `AGORA_SESSION`, `AGORA_CONTEXT`, `AGORA_ACTOR`, `AGORA_SWARM`, and optional `AGORA_WORK` variables.
 The external runtime remains responsible for model authentication and execution. Codex and Claude
@@ -270,6 +280,9 @@ and stops at human attention, missing authority, unchanged governance state, or 
 mode, and execution bounds without preparing a session. Interactive runs observe structured
 controller events for selection, session completion, state movement, and stop conditions; they do
 not stream provider reasoning or bypass the persisted session result.
+
+`SESSION.md` and the Activity Ledger record the runtime actually selected, so fallback behavior is
+auditable and does not rewrite actor configuration.
 
 Session preparation and finalization use short project locks. Agora releases the lock before the
 external runtime starts so that actor-owned Agora commands can persist work while `SESSION.md` is
@@ -381,9 +394,10 @@ agent Session records bound direct processes by elapsed time and captured output
 persisted and covered by signed actor authorization. The built-in runners terminate timeout and
 output violations and retain bounded `RESULT.md` evidence, but do not isolate filesystems, networks,
 syscalls, resources, credentials, or detached descendants. Signed actor authorization currently
-covers work creation and decomposition, criteria,
-artifacts, evidence, transitions, interruptions, approvals, handoffs, actor key rotation, independently
-authorized revocation and recovery, actor runtime updates, vacant-role assignment, the complete
-delegation lifecycle, Tool Run launch, and agent-session preparation and launch. Agora does not
+covers work creation and decomposition, criteria, artifacts, evidence, clarifications, checklists,
+consistency and Gherkin generation, transitions, interruptions, approvals, handoffs, actor key
+rotation, independently authorized revocation and recovery, actor runtime updates, vacant-role
+assignment, the complete delegation lifecycle, Tool Run launch, and agent-session preparation and
+launch. Agora does not
 implement an operating-system sandbox, remote lease service, or scheduler. Optional lease adapters
 coordinate writers without turning chat history or a proprietary service into the source of truth.

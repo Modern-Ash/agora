@@ -22,7 +22,9 @@ durable work records, and externally owned product artifacts.
 
 For the current hardening sequence, see the [core improvement roadmap](roadmap.md). The implemented
 transaction, Tool Result, and Jira exercise changes are recorded in [Core hardening and observable
-Jira integration](changes/2026-08-core-hardening-and-jira.md).
+Jira integration](changes/2026-08-core-hardening-and-jira.md). Advisory specification tooling,
+runtime fallbacks, provenance, traceability, and the aggregate board are recorded in
+[Spec tooling and runtime resilience](changes/2026-08-spec-tooling-runtime-resilience.md).
 
 ## Operational Markdown
 
@@ -48,6 +50,9 @@ do not exist as one static agent file in this repository.
   a time, or reproduce the same plan non-interactively.
 - [Operational agent loop](guides/operational-loop.md): create guided work, continue one bounded
   action, diagnose failures, and stop at human authority.
+- [Spec tooling and runtime resilience](guides/spec-tooling-and-runtime-resilience.md): clarify
+  intent, maintain non-binding checklists, verify artifacts, generate Gherkin, configure runtime
+  fallbacks, and render the aggregate board.
 - [Getting started](getting-started.md): follow the governed workflow from installation to completed
   work.
 - [Installation and customization](guides/installation-and-customization.md): configure user,
@@ -150,6 +155,9 @@ do not exist as one static agent file in this repository.
 - [Tool Pack reference](reference/tool-packs.md): govern external CLIs and persist results.
 - [ADR 0001](decisions/0001-initial-architecture.md): why Agora is local, Markdown-first, and
   Git-native.
+- [ADR 0002](decisions/0002-spec-tooling-and-runtime-resilience-additions.md): why advisory spec
+  tooling, runtime fallbacks, provenance, traceability, and the aggregate board preserve the same
+  governance boundaries.
 - [ADR 0003](decisions/0003-core-studio-cli-boundaries.md): why Core owns lifecycle behavior while
   CLI and local-first Studio share versioned application-service contracts.
 

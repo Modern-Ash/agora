@@ -1,6 +1,6 @@
 # ADR 0002: Spec-tooling parity and runtime resilience additions
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-20
 
 ## Context
@@ -84,16 +84,16 @@ its `spec`, or that a `verification-report` actually addresses every acceptance 
 
 **Design.**
 - `agora work verify-consistency --swarm <id> --work <id> --by <actor>`.
-- Read-only: resolves the work's registered artifact URIs (already validated `repo://` paths, same
+- Non-destructive analysis: resolves the work's registered artifact URIs (already validated
+  `repo://` paths, same
   boundary `lifecycle.py._spec_uris` and `artifacts.py` use), reads their contents, and asks the
   assigned actor's runtime to report contradictions and coverage gaps against the acceptance
   criteria already on the work item.
-- Output is **evidence**, not a gate: `agora evidence add --type consistency-check --result
-  {success,failure}` using the existing `evidence add` command and schema — no new evidence type
-  category needs to be invented at the model layer beyond the `type` string.
-- A project may opt a gate into requiring this evidence type via existing Method Pack gate
-  configuration (`require-successful-evidence` already exists) — no core change needed for a Method
-  Pack to make it binding; it stays advisory by default.
+- Output is a bounded `consistency-report` artifact plus `consistency-check` evidence using the
+  existing artifact and evidence schemas — no new evidence category is needed at the model layer
+  beyond the `type` string.
+- A project may opt a gate into requiring this evidence type through
+  `required-evidence-types: ["consistency-check"]`; it stays advisory by default.
 
 **Why it fits.** Reuses the existing evidence model exactly as designed — "evidence" already means
 "a recorded check with a result," and gates already know how to require evidence. No new concepts.
@@ -142,10 +142,9 @@ no equivalent, even though the structured input already exists natively in `WORK
 - `agora work gherkin --swarm <id> --work <id> --by <actor>`, delegating to the assigned actor's
   runtime with the work's `acceptance_criteria` as fixed structured input (not free text) and a
   reviewed prompt to produce one `.feature` file per criterion.
-- Registered as a new artifact kind, `gherkin-feature`, via the existing `agora artifact add`
-  command — no schema change to the artifact model, `kind` is already a free string validated
-  against a Method Pack's `artifact-kinds` allowlist (`artifacts.md` front matter), so a Method Pack
-  opts in by listing `gherkin-feature` alongside `spec`/`implementation-plan`.
+- Registered as the artifact kind `gherkin-feature` through the existing open artifact model. A
+  work contract or Method Pack gate opts into making the output mandatory by requiring that kind;
+  generation remains optional otherwise.
 - Non-goal: executing the generated features. Agora does not become a test runner; the artifact is
   registered for human/CI consumption exactly like `implementation-plan` is today.
 
@@ -185,18 +184,25 @@ no new mutation surface.
 
 ## Consequences
 
-Items 1, 2, 3, and 5 are purely additive Markdown records and reuse of existing schemas
+Items 1, 2, 3, and 5 are purely additive Markdown or Gherkin records and reuse of existing schemas
 (evidence, artifacts, checklists-as-a-new-but-isolated-record-type) — low risk, no changes to
 `_gate_blockers`, transition validation, or the permission model. Item 6 is presentation-only.
 
 Item 4 is the only one that touches the runtime-resolution path
 (`_validate_session_preparation`/`resume_session`) that was already modified once this cycle (see
-the `resume`-recomputes-runtime and `claude`-permission-mode fixes merged 2026-08-19). It should be
-implemented and reviewed with that context in hand, and needs its own test coverage for: fallback
-selection order, what counts as a "provider unavailable" signal (must not become a general excuse to
-retry past legitimate task failures — an actual implementation bug in the agent's work must still
-surface as a normal failed session, not trigger a silent runtime switch), and Activity-ledger
-attribution of which runtime actually executed a given session.
+the `resume`-recomputes-runtime and `claude`-permission-mode fixes merged 2026-08-19). Its coverage
+therefore includes fallback selection order, executable availability, recognized quota/rate-limit
+signals, ordinary failures that must not switch runtime, and Activity Ledger attribution of the
+runtime that executed each session.
+
+## Implemented provenance and traceability extension
+
+The accepted implementation also records canonical SHA-256 provenance on clarification rows,
+consistency reports, and Gherkin features. `agora work traceability` derives criterion-to-feature,
+evidence, and artifact coverage without creating another state store. `agora validate` reports stale
+or legacy provenance as non-failing warnings. Gherkin regeneration updates existing criterion files
+without duplicating artifact rows; consistency inputs are bounded to 256 KiB and exclude earlier
+consistency reports.
 
 ## Future work
 

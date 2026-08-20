@@ -37,6 +37,7 @@ from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddChecklistInput,
     AddEnvironmentInput,
     AddEvidenceInput,
     AddOrganizationTrustRootInput,
@@ -52,6 +53,7 @@ from agora.model import (
     AuditRegistryUpdatesInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
+    CheckChecklistItemInput,
     ConfigureCoordinationInput,
     ConfigureInput,
     CreateDelegationInput,
@@ -2343,6 +2345,12 @@ def _build_parser() -> argparse.ArgumentParser:
     actor_runtime.add_argument("--provider")
     actor_runtime.add_argument("--model")
     actor_runtime.add_argument("--clear", action="store_true")
+    actor_runtime.add_argument(
+        "--fallback",
+        action="append",
+        help="Ordered fallback as integration:provider:model (repeatable)",
+    )
+    actor_runtime.add_argument("--clear-fallbacks", action="store_true")
 
     actor_runtime_prepare = actor.add_parser(
         "runtime-prepare", help="Prepare a signed actor runtime change"
@@ -2354,6 +2362,12 @@ def _build_parser() -> argparse.ArgumentParser:
     actor_runtime_prepare.add_argument("--provider")
     actor_runtime_prepare.add_argument("--model")
     actor_runtime_prepare.add_argument("--clear", action="store_true")
+    actor_runtime_prepare.add_argument(
+        "--fallback",
+        action="append",
+        help="Ordered fallback as integration:provider:model (repeatable)",
+    )
+    actor_runtime_prepare.add_argument("--clear-fallbacks", action="store_true")
 
     actor_key = actor.add_parser(
         "key", help="Rotate, revoke, or inspect actor authentication keys"
@@ -2550,6 +2564,96 @@ def _build_parser() -> argparse.ArgumentParser:
     work_list.add_argument("--swarm")
     work_list.add_argument("--state")
     work_list.add_argument("--operational-status", choices=("active", "blocked", "cancelled"))
+    traceability = work.add_parser(
+        "traceability", help="Trace criteria through generated artifacts and evidence"
+    )
+    traceability.add_argument("--swarm", required=True)
+    traceability.add_argument("--work", required=True)
+
+    clarify = work.add_parser("clarify", help="Generate guided pre-drafting clarifications")
+    clarify.add_argument("--swarm", required=True)
+    clarify.add_argument("--work", required=True)
+    clarify.add_argument("--by", required=True)
+    clarify.add_argument("--runner", help="Structured runner for a generic integration")
+    clarify_prepare = work.add_parser(
+        "clarify-prepare", help="Prepare a signed clarification intent"
+    )
+    clarify_prepare.add_argument("--id", required=True)
+    clarify_prepare.add_argument("--swarm", required=True)
+    clarify_prepare.add_argument("--work", required=True)
+    clarify_prepare.add_argument("--by", required=True)
+    clarify_prepare.add_argument("--runner", help="Structured runner for a generic integration")
+
+    consistency = work.add_parser(
+        "verify-consistency", help="Check artifacts against acceptance criteria"
+    )
+    consistency.add_argument("--swarm", required=True)
+    consistency.add_argument("--work", required=True)
+    consistency.add_argument("--by", required=True)
+    consistency.add_argument("--runner", help="Structured runner for a generic integration")
+    consistency_prepare = work.add_parser(
+        "verify-consistency-prepare", help="Prepare a signed consistency-check intent"
+    )
+    consistency_prepare.add_argument("--id", required=True)
+    consistency_prepare.add_argument("--swarm", required=True)
+    consistency_prepare.add_argument("--work", required=True)
+    consistency_prepare.add_argument("--by", required=True)
+    consistency_prepare.add_argument("--runner", help="Structured runner for a generic integration")
+
+    gherkin = work.add_parser("gherkin", help="Generate Gherkin features from criteria")
+    gherkin.add_argument("--swarm", required=True)
+    gherkin.add_argument("--work", required=True)
+    gherkin.add_argument("--by", required=True)
+    gherkin.add_argument("--runner", help="Structured runner for a generic integration")
+    gherkin_prepare = work.add_parser(
+        "gherkin-prepare", help="Prepare a signed Gherkin-generation intent"
+    )
+    gherkin_prepare.add_argument("--id", required=True)
+    gherkin_prepare.add_argument("--swarm", required=True)
+    gherkin_prepare.add_argument("--work", required=True)
+    gherkin_prepare.add_argument("--by", required=True)
+    gherkin_prepare.add_argument("--runner", help="Structured runner for a generic integration")
+
+    checklist = work.add_parser(
+        "checklist", help="Manage non-binding quality checklists"
+    ).add_subparsers(dest="checklist_command", required=True)
+    checklist_add = checklist.add_parser("add", help="Add a non-binding checklist")
+    checklist_add.add_argument("--swarm", required=True)
+    checklist_add.add_argument("--work", required=True)
+    checklist_add.add_argument("--title", required=True)
+    checklist_add.add_argument("--item", action="append", required=True)
+    checklist_add.add_argument("--by", required=True)
+    checklist_add_prepare = checklist.add_parser(
+        "add-prepare", help="Prepare a signed checklist creation intent"
+    )
+    checklist_add_prepare.add_argument("--id", required=True)
+    checklist_add_prepare.add_argument("--swarm", required=True)
+    checklist_add_prepare.add_argument("--work", required=True)
+    checklist_add_prepare.add_argument("--title", required=True)
+    checklist_add_prepare.add_argument("--item", action="append", required=True)
+    checklist_add_prepare.add_argument("--by", required=True)
+    checklist_check = checklist.add_parser("check", help="Check one checklist item")
+    checklist_check.add_argument("--swarm", required=True)
+    checklist_check.add_argument("--work", required=True)
+    checklist_check.add_argument("--checklist", required=True)
+    checklist_check.add_argument("--item", type=int, required=True)
+    checklist_check.add_argument("--by", required=True)
+    checklist_check_prepare = checklist.add_parser(
+        "check-prepare", help="Prepare a signed checklist-item toggle intent"
+    )
+    checklist_check_prepare.add_argument("--id", required=True)
+    checklist_check_prepare.add_argument("--swarm", required=True)
+    checklist_check_prepare.add_argument("--work", required=True)
+    checklist_check_prepare.add_argument("--checklist", required=True)
+    checklist_check_prepare.add_argument("--item", type=int, required=True)
+    checklist_check_prepare.add_argument("--by", required=True)
+    checklist_show = checklist.add_parser("show", help="Show one checklist")
+    checklist_show.add_argument("--swarm", required=True)
+    checklist_show.add_argument("--work", required=True)
+    checklist_show.add_argument("--checklist", required=True)
+    checklist_list = checklist.add_parser("list", help="List work checklists")
+    checklist_list.add_argument("--swarm", required=True)
+    checklist_list.add_argument("--work", required=True)
 
     gate = commands.add_parser("gate", help="Manage explicit gate exceptions").add_subparsers(
         dest="gate_command", required=True
@@ -3341,6 +3445,8 @@ def _dispatch(
                 provider=args.provider,
                 model=args.model,
                 clear=args.clear,
+                fallbacks=args.fallback,
+                clear_fallbacks=args.clear_fallbacks,
             )
         )
     if args.command == "actor" and args.actor_command == "runtime-prepare":
@@ -3354,6 +3460,8 @@ def _dispatch(
                     provider=args.provider,
                     model=args.model,
                     clear=args.clear,
+                    fallbacks=args.fallback,
+                    clear_fallbacks=args.clear_fallbacks,
                 ),
             )
         )
@@ -3705,6 +3813,90 @@ def _dispatch(
                 kind=args.kind,
                 uri=args.uri,
             )
+        )
+    if args.command == "work" and args.work_command == "checklist":
+        if args.checklist_command == "add":
+            return workspace.add_checklist(
+                AddChecklistInput(
+                    swarm_id=args.swarm,
+                    work_id=args.work,
+                    actor_id=args.by,
+                    title=args.title,
+                    items=args.item,
+                )
+            )
+        if args.checklist_command == "check":
+            return workspace.check_checklist_item(
+                CheckChecklistItemInput(
+                    swarm_id=args.swarm,
+                    work_id=args.work,
+                    actor_id=args.by,
+                    checklist_id=args.checklist,
+                    item_index=args.item,
+                )
+            )
+        if args.checklist_command == "add-prepare":
+            return workspace.prepare_checklist_action(
+                args.id,
+                AddChecklistInput(
+                    swarm_id=args.swarm,
+                    work_id=args.work,
+                    actor_id=args.by,
+                    title=args.title,
+                    items=args.item,
+                ),
+            )
+        if args.checklist_command == "check-prepare":
+            return workspace.prepare_checklist_action(
+                args.id,
+                CheckChecklistItemInput(
+                    swarm_id=args.swarm,
+                    work_id=args.work,
+                    actor_id=args.by,
+                    checklist_id=args.checklist,
+                    item_index=args.item,
+                ),
+            )
+        if args.checklist_command == "show":
+            return workspace.show_checklist(args.swarm, args.work, args.checklist)
+        if args.checklist_command == "list":
+            return workspace.list_checklists(args.swarm, args.work)
+    if args.command == "work" and args.work_command == "traceability":
+        return workspace.work_traceability(args.swarm, args.work)
+    if args.command == "work" and args.work_command == "clarify":
+        return workspace.clarify_work(
+            WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
+            runner=args.runner,
+        )
+    if args.command == "work" and args.work_command == "clarify-prepare":
+        return workspace.prepare_work_clarification(
+            args.id,
+            WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
+            runner=args.runner,
+        )
+    if args.command == "work" and args.work_command == "verify-consistency":
+        return workspace.verify_work_consistency(
+            WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
+            runner=args.runner,
+        )
+    if args.command == "work" and args.work_command == "verify-consistency-prepare":
+        return workspace.prepare_advisory_work_action(
+            args.id,
+            WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
+            "work.verify-consistency",
+            runner=args.runner,
+        )
+    if args.command == "work" and args.work_command == "gherkin":
+        return workspace.generate_work_gherkin(
+            WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
+            runner=args.runner,
+        )
+    if args.command == "work" and args.work_command == "gherkin-prepare":
+        return workspace.prepare_advisory_work_action(
+            args.id,
+            WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
+            "work.gherkin",
+            runner=args.runner,
         )
     if args.command == "evidence" and args.evidence_command == "add":
         return workspace.add_evidence(

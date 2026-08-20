@@ -59,6 +59,7 @@ class ActorRecord:
     integration: Integration | None = None
     provider: str | None = None
     model: str | None = None
+    runtime_fallbacks: list[dict[str, str]] = field(default_factory=list)
     represented_swarm: str | None = None
     authentication_required: bool = False
     authentication_algorithm: str | None = None
@@ -1379,6 +1380,8 @@ class SetActorRuntimeInput:
     provider: str | None = None
     model: str | None = None
     clear: bool = False
+    fallbacks: list[str] | None = None
+    clear_fallbacks: bool = False
 
 
 @dataclass(frozen=True)
@@ -1641,6 +1644,39 @@ class PrepareArtifactInput(AddArtifactInput):
 @dataclass(frozen=True)
 class PrepareEvidenceInput(AddEvidenceInput):
     id: str = ""
+
+
+@dataclass(frozen=True)
+class AddClarificationInput(WorkActorInput):
+    question: str = ""
+    answer: str | None = None
+
+
+@dataclass(frozen=True)
+class AddChecklistInput(WorkActorInput):
+    title: str = ""
+    items: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CheckChecklistItemInput(WorkActorInput):
+    checklist_id: str = ""
+    item_index: int = 0
+
+
+@dataclass(frozen=True)
+class ChecklistRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    title: str
+    items: list[str]
+    checked_items: list[int]
+    created_by: str
+    created_at: str
+    updated_by: str | None
+    updated_at: str | None
+    path: str
 
 
 @dataclass(frozen=True)

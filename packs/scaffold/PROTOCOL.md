@@ -27,6 +27,12 @@ project: "{{PROJECT_NAME}}"
     local and distributed writer coordination are cumulative.
 14. During a running session, record concise material milestones through `agora session progress`.
     Do not persist chain-of-thought, hidden reasoning, credentials, or raw provider output there.
+15. Treat clarifications, checklists, consistency reports, and generated Gherkin as advisory until
+    the active Method Pack's existing criteria, evidence, artifact, approval, and transition rules
+    make an exact durable record binding. Runtime fallback changes execution backend only; it never
+    changes actor identity or authority.
+16. Before relying on generated advisory output, inspect `agora work traceability` or validation
+    warnings and regenerate records whose bound input SHA-256 no longer matches current work.
 
 The repository and its active branch are the shared source of truth. Chat history is not durable
 project state unless its relevant outcome is recorded in Agora files. `RESULT.md` retains bounded
