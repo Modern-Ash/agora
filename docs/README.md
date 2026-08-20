@@ -78,6 +78,8 @@ do not exist as one static agent file in this repository.
   audit durable records.
 - [Activity Ledger](guides/activity-ledger.md): follow linked work, session, and Tool Run activity
   from a concise chronology to its durable evidence and bounded logs.
+- [Application Services contracts](reference/application-services.md): consume the versioned Core
+  read and command boundary from CLI, Studio API, or another local adapter.
 - [Operational agent loop](guides/operational-loop.md): derive next actions, run bounded external
   actors, stop at human authority, and resume durable failures.
 - [Complete verification](guides/verification.md): run format, lint, tests, documentation, samples,

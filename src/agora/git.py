@@ -1,5 +1,11 @@
+import os
+import re
 import subprocess
 from pathlib import Path
+
+from agora.model import SpecificationHistoryRecord, SpecificationRevisionRecord
+
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def is_git_repository(cwd: Path) -> bool:
@@ -77,6 +83,117 @@ def ignored_paths(cwd: Path, paths: list[Path]) -> set[str]:
     if result.returncode not in {0, 1}:
         raise RuntimeError(f"Git command failed: {result.stderr.strip()}")
     return {item for item in result.stdout.split("\0") if item}
+
+
+def file_history(
+    cwd: Path,
+    relative_path: str,
+    *,
+    max_revisions: int = 80,
+    max_output_bytes: int = 262_144,
+) -> SpecificationHistoryRecord:
+    """Read bounded, local Git history for one already-validated repository file."""
+
+    if not is_git_repository(cwd):
+        return SpecificationHistoryRecord(
+            available=False,
+            uri=None,
+            revisions=[],
+            has_history=False,
+            working_tree=False,
+            truncated=False,
+            reason="Project is not a Git repository",
+        )
+    log = _run_bounded_git(
+        cwd,
+        (
+            "log",
+            "--follow",
+            f"--max-count={max_revisions}",
+            "--format=%H%x1f%aI%x1f%an%x1f%s",
+            "--",
+            relative_path,
+        ),
+        max_output_bytes,
+    )
+    revisions: list[SpecificationRevisionRecord] = []
+    for line in log[0].splitlines():
+        values = line.split("\x1f", 3)
+        if len(values) != 4 or _COMMIT_SHA.fullmatch(values[0]) is None:
+            continue
+        sha, timestamp, author, subject = values
+        revisions.append(
+            SpecificationRevisionRecord(
+                id=sha,
+                kind="commit",
+                sha=sha,
+                short_sha=sha[:10],
+                timestamp=timestamp,
+                author=author,
+                subject=subject,
+                uncommitted=False,
+            )
+        )
+    status = _run_bounded_git(
+        cwd,
+        ("status", "--porcelain=v1", "--", relative_path),
+        max_output_bytes,
+    )
+    working_tree = bool(status[0].strip())
+    if working_tree:
+        revisions.insert(
+            0,
+            SpecificationRevisionRecord(
+                id="working-tree",
+                kind="working-tree",
+                sha=None,
+                short_sha="WORKTREE",
+                timestamp=None,
+                author=None,
+                subject="Modified, uncommitted specification",
+                uncommitted=True,
+            ),
+        )
+    return SpecificationHistoryRecord(
+        available=True,
+        uri=None,
+        revisions=revisions,
+        has_history=any(not revision.uncommitted for revision in revisions),
+        working_tree=working_tree,
+        truncated=log[1] or status[1] or len(revisions) >= max_revisions,
+    )
+
+
+def _run_bounded_git(
+    cwd: Path, arguments: tuple[str, ...], max_output_bytes: int
+) -> tuple[str, bool]:
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "LC_ALL": "C",
+        "LANG": "C",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_PAGER": "cat",
+        "PAGER": "cat",
+    }
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            env=environment,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as error:
+        raise RuntimeError("Bounded Git history read failed") from error
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Git could not read specification history (exit code {result.returncode})"
+        )
+    encoded = result.stdout.encode("utf-8", errors="replace")
+    truncated = len(encoded) > max_output_bytes
+    return encoded[:max_output_bytes].decode("utf-8", errors="replace"), truncated
 
 
 def create_branch(cwd: Path, branch: str) -> None:

@@ -35,3 +35,9 @@ class ActivityFilters(SerializableDTO):
     type: str | None = None
     limit: int = 50
     schema: str = field(default="agora/application/activity-filters/v1", init=False)
+
+
+@dataclass(frozen=True)
+class SessionFilters(SerializableDTO):
+    status: str | None = None
+    schema: str = field(default="agora/application/session-filters/v1", init=False)

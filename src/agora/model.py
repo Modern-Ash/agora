@@ -175,6 +175,83 @@ class MethodContract:
     criterion_stage_roles: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class GateBlockerRecord:
+    code: str
+    category: str
+    message: str
+    references: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TransitionAssessmentRecord:
+    source: str
+    target: str
+    roles: list[str]
+    gate_id: str | None
+    required_approval_roles: list[str]
+    available: bool
+    blockers: list[GateBlockerRecord] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class WorkLifecycleAssessment:
+    swarm_id: str
+    work_id: str
+    method: MethodContract
+    current_state: str
+    operational_status: str
+    transitions: list[TransitionAssessmentRecord]
+
+
+@dataclass(frozen=True)
+class ArtifactRecord:
+    kind: str
+    uri: str
+    produced_by: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    type: str
+    result: str
+    artifact_references: list[str]
+    produced_by: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class ApprovalRecord:
+    role: str
+    actor: str
+    note: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class SpecificationRevisionRecord:
+    id: str
+    kind: Literal["commit", "working-tree"]
+    sha: str | None
+    short_sha: str
+    timestamp: str | None
+    author: str | None
+    subject: str
+    uncommitted: bool
+
+
+@dataclass(frozen=True)
+class SpecificationHistoryRecord:
+    available: bool
+    uri: str | None
+    revisions: list[SpecificationRevisionRecord]
+    has_history: bool
+    working_tree: bool
+    truncated: bool
+    reason: str | None = None
+
+
 @dataclass
 class SwarmRecord:
     id: str
@@ -946,6 +1023,13 @@ class ActivityRecord:
     tool_run_id: str | None
     source: str
     path: str
+
+
+@dataclass(frozen=True)
+class GateDecisionResult:
+    work: WorkRecord
+    activity: ActivityRecord
+    role_id: str
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ agora init
 - [Get started](getting-started.md)
 - [Adopt into an existing project](adoption.md#adopt-an-existing-codebase)
 - [Architecture](architecture.md)
+- [Application Services contracts](reference/application-services.md)
 - [Full documentation](README.md)
 - [Roadmap](roadmap.md)
 - [Source on GitHub](https://github.com/fabianaguero/agora)
@@ -32,4 +33,4 @@ agora init
   Confluence) behind provider-neutral Tool Packs.
 - **Multi-org trust** — Ed25519-signed packs and registries, optional transparency log.
 
-Status: alpha (0.4.0), ready for controlled pilots. See the [roadmap](roadmap.md) for open gaps.
+Status: alpha (0.5.0), ready for controlled pilots. See the [roadmap](roadmap.md) for open gaps.

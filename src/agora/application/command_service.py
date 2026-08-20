@@ -21,8 +21,16 @@ from agora.application.errors import (
     SignatureRequiredError,
     StalePreconditionError,
 )
-from agora.application.queries import ActivityFilters
 from agora.application.read_service import AgoraReadService
+from agora.domain_errors import (
+    ActorUnauthorizedRuleError,
+    EvidenceMissingRuleError,
+    GateAlreadyResolvedRuleError,
+    GateDecisionRoleRuleError,
+    ProjectIdentityMismatchRuleError,
+    SignatureRequiredRuleError,
+    StalePreconditionRuleError,
+)
 from agora.filesystem import assert_slug
 from agora.model import GateDecisionInput
 from agora.workspace import AgoraWorkspace
@@ -43,7 +51,7 @@ class AgoraCommandService:
         self._validate(command)
         authentication = command.authentication or {}
         try:
-            updated = self._workspace.decide_gate(
+            result = self._workspace.decide_gate(
                 GateDecisionInput(
                     project_identity=command.project_identity,
                     swarm_id=command.swarm_id,
@@ -61,44 +69,46 @@ class AgoraCommandService:
                     authentication_fingerprint=authentication.get("fingerprint"),
                 )
             )
+        except SignatureRequiredRuleError as error:
+            raise SignatureRequiredError(str(error)) from error
+        except ActorUnauthorizedRuleError as error:
+            raise ActorUnauthorizedError(str(error)) from error
+        except ProjectIdentityMismatchRuleError as error:
+            raise ProjectIdentityMismatchError(str(error)) from error
+        except StalePreconditionRuleError as error:
+            raise StalePreconditionError(str(error)) from error
+        except GateAlreadyResolvedRuleError as error:
+            raise GateAlreadyResolvedError(str(error)) from error
+        except EvidenceMissingRuleError as error:
+            raise EvidenceMissingError(str(error)) from error
+        except GateDecisionRoleRuleError as error:
+            raise InvalidCommandError(str(error)) from error
         except PermissionError as error:
             if error.errno is not None:
                 raise CommandPersistenceError(
                     "Agora could not persist the gate decision"
                 ) from error
-            if "requires a signed lifecycle action" in str(error):
-                raise SignatureRequiredError(str(error)) from error
             raise ActorUnauthorizedError(str(error)) from error
         except FileNotFoundError as error:
             raise InvalidCommandError(str(error)) from error
         except ValueError as error:
-            raise self._translate_value_error(error) from error
+            raise InvalidCommandError(str(error)) from error
         except OSError as error:
             raise CommandPersistenceError("Agora could not persist the gate decision") from error
+        except RuntimeError as error:
+            raise CommandPersistenceError("Agora could not persist the gate decision") from error
 
-        event_type = "approval.added" if command.decision == "approved" else "gate.rejected"
-        events = self._reads.activity(
-            ActivityFilters(
-                swarm_id=command.swarm_id,
-                work_id=command.work_id,
-                type=event_type,
-                limit=1,
-            )
-        )
-        if not events:
-            raise CommandPersistenceError("The durable gate decision has no Activity event")
-        role_id = self._decision_role(command, updated.approval_roles)
         return GateDecisionProjection(
             project_identity=command.project_identity,
             swarm_id=command.swarm_id,
             work_id=command.work_id,
             gate_id=command.gate_id,
-            actor_id=events[-1].actor or command.actor_id,
-            role_id=role_id,
+            actor_id=result.activity.actor or command.actor_id,
+            role_id=result.role_id,
             decision=command.decision,
             reason=" ".join(command.reason.split()),
             lifecycle=self._reads.lifecycle(command.swarm_id, command.work_id),
-            activity=events[-1],
+            activity=self._reads.activity_entry(result.activity),
         )
 
     @staticmethod
@@ -169,35 +179,3 @@ class AgoraCommandService:
                 raise InvalidCommandError("Authentication values must be non-empty strings")
             if re.fullmatch(r"[0-9a-f]{64}", command.authentication["fingerprint"]) is None:
                 raise InvalidCommandError("Authentication fingerprint must be SHA-256")
-
-    @staticmethod
-    def _translate_value_error(error: ValueError) -> InvalidCommandError:
-        message = str(error)
-        lowered = message.lower()
-        if "project identity mismatch" in lowered:
-            return ProjectIdentityMismatchError(message)
-        if "stale work state" in lowered:
-            return StalePreconditionError(message)
-        if "already resolved" in lowered or "already has this rejection" in lowered:
-            return GateAlreadyResolvedError(message)
-        if "evidence" in lowered or "preconditions are not satisfied" in lowered:
-            return EvidenceMissingError(message)
-        return InvalidCommandError(message)
-
-    def _decision_role(self, command: ApproveGateCommand, approval_roles: list[str]) -> str:
-        swarm = self._workspace.show_swarm(command.swarm_id)
-        actor_candidates = {
-            command.actor_id,
-            f"project:{command.actor_id}",
-            f"user:{command.actor_id}",
-        }
-        contract = self._workspace.method_contract(command.swarm_id)
-        gate = contract.gates[command.gate_id]
-        roles = [
-            role
-            for role, actor in swarm.assignments.items()
-            if actor in actor_candidates and role in gate.required_approval_roles
-        ]
-        if command.decision == "approved":
-            roles = [role for role in roles if role in approval_roles]
-        return roles[0] if roles else ""

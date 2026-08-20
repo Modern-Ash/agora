@@ -29,6 +29,15 @@ from agora.coordination import (
     render_coordination_policy,
 )
 from agora.credentials import CredentialChainResolution, resolve_credential_chain
+from agora.domain_errors import (
+    ActorUnauthorizedRuleError,
+    EvidenceMissingRuleError,
+    GateAlreadyResolvedRuleError,
+    GateDecisionRoleRuleError,
+    ProjectIdentityMismatchRuleError,
+    SignatureRequiredRuleError,
+    StalePreconditionRuleError,
+)
 from agora.filesystem import (
     agora_home,
     append_entry,
@@ -46,6 +55,7 @@ from agora.git import (
     create_branch,
     current_branch,
     delete_branch,
+    file_history,
     ignored_paths,
     is_git_repository,
     ref_exists,
@@ -114,6 +124,8 @@ from agora.model import (
     ApplyLifecycleActionInput,
     ApplyPackUpdateAuditInput,
     ApprovalDelegationRecord,
+    ApprovalRecord,
+    ArtifactRecord,
     AssignActorInput,
     AuditPackUpdatesInput,
     AuditRegistryUpdatesInput,
@@ -135,7 +147,10 @@ from agora.model import (
     DoctorCheck,
     EnvironmentPolicyRecord,
     EventRecord,
+    EvidenceRecord,
+    GateBlockerRecord,
     GateDecisionInput,
+    GateDecisionResult,
     GatePolicy,
     GateWaiverRecord,
     HandoffActorInput,
@@ -222,6 +237,7 @@ from agora.model import (
     SessionAuthorizationRecord,
     SessionRecord,
     SetActorRuntimeInput,
+    SpecificationHistoryRecord,
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
@@ -235,6 +251,7 @@ from agora.model import (
     ToolRunInspection,
     ToolRunRecord,
     ToolRuntimeProbe,
+    TransitionAssessmentRecord,
     TransitionRule,
     TransitionWorkInput,
     TransparencyInclusionProofRecord,
@@ -252,6 +269,7 @@ from agora.model import (
     VerifyTransparencyProofInput,
     WaiveGateInput,
     WorkActorInput,
+    WorkLifecycleAssessment,
     WorkOperationalStatus,
     WorkRecord,
     WorkspaceLockStatus,
@@ -2858,6 +2876,112 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, swarm_id)
         return load_method_contract(root / ".agora" / "methods" / swarm.method)
 
+    def inspect_work_lifecycle(self, swarm_id: str, work_id: str) -> WorkLifecycleAssessment:
+        """Evaluate Method Pack topology and transition preconditions for one work item."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        transitions: list[TransitionAssessmentRecord] = []
+        for transition in contract.transitions:
+            blockers: list[GateBlockerRecord] = []
+            if transition.source != work.state:
+                blockers.append(
+                    GateBlockerRecord(
+                        code="transition.source-state-mismatch",
+                        category="state",
+                        message=(
+                            f"Transition requires state {transition.source}; "
+                            f"current state is {work.state}"
+                        ),
+                        references=[transition.source, work.state],
+                    )
+                )
+            elif work.operational_status != "active":
+                blockers.append(
+                    GateBlockerRecord(
+                        code="work.not-active",
+                        category="operational-status",
+                        message=(
+                            f"Work is {work.operational_status}; resume it before transitioning"
+                        ),
+                        references=[work.operational_status],
+                    )
+                )
+            elif work.state == contract.terminal_state:
+                blockers.append(
+                    GateBlockerRecord(
+                        code="work.terminal",
+                        category="state",
+                        message="Completed work cannot transition",
+                        references=[work.state],
+                    )
+                )
+            else:
+                if transition.target == contract.terminal_state:
+                    try:
+                        self._assert_child_work_closed(root, swarm, work)
+                    except ValueError as error:
+                        blockers.append(
+                            GateBlockerRecord(
+                                code="work.open-child-work",
+                                category="dependency",
+                                message=str(error),
+                                references=list(work.child_work_refs),
+                            )
+                        )
+                    active_delegations = self._active_approval_delegation_ids(work)
+                    if active_delegations:
+                        blockers.append(
+                            GateBlockerRecord(
+                                code="approval-delegation.active",
+                                category="approval",
+                                message="Active approval delegations must be consumed or revoked",
+                                references=active_delegations,
+                            )
+                        )
+                try:
+                    self._assert_wip_limit(swarm, work, transition.target, contract.wip_limits)
+                except ValueError as error:
+                    blockers.append(
+                        GateBlockerRecord(
+                            code="transition.wip-limit",
+                            category="wip",
+                            message=str(error),
+                            references=[transition.target],
+                        )
+                    )
+                if transition.gate is not None:
+                    assessment = self._work_gate_assessment(
+                        root, work, contract.gates[transition.gate], transition.gate
+                    )
+                    blockers.extend(self._gate_blocker_records(assessment))
+            required_roles = (
+                list(contract.gates[transition.gate].required_approval_roles)
+                if transition.gate is not None
+                else []
+            )
+            transitions.append(
+                TransitionAssessmentRecord(
+                    source=transition.source,
+                    target=transition.target,
+                    roles=list(transition.roles),
+                    gate_id=transition.gate,
+                    required_approval_roles=required_roles,
+                    available=not blockers,
+                    blockers=blockers,
+                )
+            )
+        return WorkLifecycleAssessment(
+            swarm_id=swarm.id,
+            work_id=work.id,
+            method=contract,
+            current_state=work.state,
+            operational_status=work.operational_status,
+            transitions=transitions,
+        )
+
     def list_tools(self) -> list[ToolPackRecord]:
         tool_root = self.project_root() / ".agora" / "tools"
         return [
@@ -5116,38 +5240,154 @@ class AgoraWorkspace:
             self._assert_artifact_reference(root, reference)
         return swarm, actor, work
 
-    @staticmethod
-    def _work_artifact_references(work: WorkRecord) -> set[str]:
+    def list_work_artifacts(self, swarm_id: str, work_id: str) -> list[ArtifactRecord]:
+        """Return canonical artifact registrations with their durable provenance."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        records = self._work_artifact_records(work)
+        for record in records:
+            self._assert_artifact_reference(root, record.uri)
+        return records
+
+    def list_work_evidence(self, swarm_id: str, work_id: str) -> list[EvidenceRecord]:
+        """Return canonical evidence registrations without inferring relationships."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        records = self._work_evidence_records(work)
+        artifacts = self._work_artifact_records(work)
+        for artifact in artifacts:
+            self._assert_artifact_reference(root, artifact.uri)
+        registered = {record.uri for record in artifacts}
+        for record in records:
+            missing = sorted(set(record.artifact_references) - registered)
+            if missing:
+                raise ValueError(
+                    "Evidence references unregistered work artifacts: " + ", ".join(missing)
+                )
+        return records
+
+    def list_work_approvals(self, swarm_id: str, work_id: str) -> list[ApprovalRecord]:
+        """Return canonical approval registrations with durable actor and timestamp."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        return self._work_approval_records(work)
+
+    def work_specification_history(self, swarm_id: str, work_id: str) -> SpecificationHistoryRecord:
+        """Return bounded Git evolution for the unique registered specification artifact."""
+
+        root = self.project_root()
+        specifications = [
+            record
+            for record in self.list_work_artifacts(swarm_id, work_id)
+            if record.kind == "spec"
+        ]
+        if not specifications:
+            return SpecificationHistoryRecord(
+                available=False,
+                uri=None,
+                revisions=[],
+                has_history=False,
+                working_tree=False,
+                truncated=False,
+                reason="No registered specification artifact is available",
+            )
+        if len(specifications) != 1:
+            return SpecificationHistoryRecord(
+                available=False,
+                uri=None,
+                revisions=[],
+                has_history=False,
+                working_tree=False,
+                truncated=False,
+                reason="Registered specification artifacts are ambiguous",
+            )
+        uri = specifications[0].uri
+        if not uri.startswith("repo://"):
+            return SpecificationHistoryRecord(
+                available=False,
+                uri=uri,
+                revisions=[],
+                has_history=False,
+                working_tree=False,
+                truncated=False,
+                reason="The registered specification is not a repository URI",
+            )
+        try:
+            history = file_history(root, uri.removeprefix("repo://"))
+        except RuntimeError as error:
+            return SpecificationHistoryRecord(
+                available=False,
+                uri=uri,
+                revisions=[],
+                has_history=False,
+                working_tree=False,
+                truncated=False,
+                reason=str(error),
+            )
+        return replace(history, uri=uri)
+
+    @classmethod
+    def _work_artifact_records(cls, work: WorkRecord) -> list[ArtifactRecord]:
         document = read_markdown(Path(work.path) / "artifacts.md")
-        rows = AgoraWorkspace._markdown_table_rows(
+        rows = cls._markdown_table_rows(
             document.body,
             ("Kind", "URI", "Produced by", "Timestamp"),
         )
-        return {row[1] for row in rows}
+        return [
+            ArtifactRecord(kind=row[0], uri=row[1], produced_by=row[2], timestamp=row[3])
+            for row in rows
+        ]
 
-    @staticmethod
-    def _work_artifact_rows(work: WorkRecord) -> list[tuple[str, str]]:
-        document = read_markdown(Path(work.path) / "artifacts.md")
-        rows = AgoraWorkspace._markdown_table_rows(
-            document.body,
-            ("Kind", "URI", "Produced by", "Timestamp"),
-        )
-        return [(row[0], row[1]) for row in rows]
-
-    @staticmethod
-    def _work_evidence_rows(work: WorkRecord) -> list[tuple[str, str, list[str]]]:
+    @classmethod
+    def _work_evidence_records(cls, work: WorkRecord) -> list[EvidenceRecord]:
         document = read_markdown(Path(work.path) / "evidence.md")
-        rows = AgoraWorkspace._markdown_table_rows(
+        rows = cls._markdown_table_rows(
             document.body,
             ("Type", "Result", "Artifact references", "Produced by", "Timestamp"),
         )
         return [
-            (
-                row[0],
-                row[1],
-                [] if row[2] == "none" else [item.strip() for item in row[2].split(", ")],
+            EvidenceRecord(
+                type=row[0],
+                result=row[1],
+                artifact_references=(
+                    [] if row[2] == "none" else [item.strip() for item in row[2].split(", ")]
+                ),
+                produced_by=row[3],
+                timestamp=row[4],
             )
             for row in rows
+        ]
+
+    @classmethod
+    def _work_approval_records(cls, work: WorkRecord) -> list[ApprovalRecord]:
+        document = read_markdown(Path(work.path) / "approvals.md")
+        rows = cls._markdown_table_rows(
+            document.body,
+            ("Role", "Approved by", "Note", "Timestamp"),
+        )
+        return [
+            ApprovalRecord(role=row[0], actor=row[1], note=row[2], timestamp=row[3]) for row in rows
+        ]
+
+    @classmethod
+    def _work_artifact_references(cls, work: WorkRecord) -> set[str]:
+        return {record.uri for record in cls._work_artifact_records(work)}
+
+    @classmethod
+    def _work_artifact_rows(cls, work: WorkRecord) -> list[tuple[str, str]]:
+        return [(record.kind, record.uri) for record in cls._work_artifact_records(work)]
+
+    @classmethod
+    def _work_evidence_rows(cls, work: WorkRecord) -> list[tuple[str, str, list[str]]]:
+        return [
+            (record.type, record.result, record.artifact_references)
+            for record in cls._work_evidence_records(work)
         ]
 
     @staticmethod
@@ -5614,7 +5854,7 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
-    def decide_gate(self, data: GateDecisionInput) -> WorkRecord:
+    def decide_gate(self, data: GateDecisionInput) -> GateDecisionResult:
         """Apply one governed gate decision using the existing approval rules."""
 
         assert_slug(data.swarm_id, "Swarm id")
@@ -5629,14 +5869,14 @@ class AgoraWorkspace:
         root = self.project_root()
         project = self._load_project_configuration(root)
         if data.project_identity != project.project:
-            raise ValueError(
+            raise ProjectIdentityMismatchRuleError(
                 "Project identity mismatch: "
                 f"expected {project.project}, got {data.project_identity}"
             )
         swarm = self._load_swarm(root, data.swarm_id)
         work = self._load_work(swarm, data.work_id)
         if work.state != data.expected_state:
-            raise ValueError(
+            raise StalePreconditionRuleError(
                 f"Stale work state: expected {data.expected_state}, current {work.state}"
             )
         self._assert_work_mutable(root, swarm, work)
@@ -5651,10 +5891,12 @@ class AgoraWorkspace:
             None,
         )
         if transition is None or data.gate_id not in contract.gates:
-            raise ValueError(f"Gate {data.gate_id} is not active for work state {work.state}")
+            raise GateDecisionRoleRuleError(
+                f"Gate {data.gate_id} is not active for work state {work.state}"
+            )
         gate = contract.gates[data.gate_id]
         if not gate.required_approval_roles:
-            raise ValueError(f"Gate {data.gate_id} has no approval decision")
+            raise GateDecisionRoleRuleError(f"Gate {data.gate_id} has no approval decision")
 
         actor_candidates = [
             item
@@ -5663,17 +5905,21 @@ class AgoraWorkspace:
             and item["role"] in gate.required_approval_roles
         ]
         if not actor_candidates:
-            raise PermissionError(
+            raise ActorUnauthorizedRuleError(
                 f"Actor {data.actor_id} is not authorized for gate {data.gate_id}"
             )
         pending_candidates = [
             item for item in actor_candidates if item["role"] not in work.approval_roles
         ]
         if not pending_candidates:
-            raise ValueError(f"Gate {data.gate_id} is already resolved for this actor")
+            raise GateAlreadyResolvedRuleError(
+                f"Gate {data.gate_id} is already resolved for this actor"
+            )
         if len(pending_candidates) != 1:
             roles = ", ".join(item["role"] for item in pending_candidates)
-            raise ValueError(f"Gate decision role is ambiguous for actor {data.actor_id}: {roles}")
+            raise GateDecisionRoleRuleError(
+                f"Gate decision role is ambiguous for actor {data.actor_id}: {roles}"
+            )
         role_id = pending_candidates[0]["role"]
 
         evidence_refs = list(
@@ -5690,11 +5936,13 @@ class AgoraWorkspace:
             reference for reference in evidence_refs if reference not in successful_refs
         ]
         if missing_refs:
-            raise ValueError(
+            raise EvidenceMissingRuleError(
                 "Gate evidence references are missing or not successful: " + ", ".join(missing_refs)
             )
         if (gate.require_successful_evidence or gate.required_evidence_types) and not evidence_refs:
-            raise ValueError(f"Gate {data.gate_id} requires durable evidence references")
+            raise EvidenceMissingRuleError(
+                f"Gate {data.gate_id} requires durable evidence references"
+            )
 
         assessment = self._work_gate_assessment(root, work, gate, data.gate_id)
         blockers = [
@@ -5706,7 +5954,7 @@ class AgoraWorkspace:
         if assessment["evidence_missing"]:
             blockers.append("successful-evidence")
         if blockers:
-            raise ValueError(
+            raise EvidenceMissingRuleError(
                 f"Gate {data.gate_id} evidence or preconditions are not satisfied: "
                 + ", ".join(blockers)
             )
@@ -5722,12 +5970,12 @@ class AgoraWorkspace:
                     data.authentication_fingerprint,
                 )
             ):
-                raise PermissionError(
+                raise SignatureRequiredRuleError(
                     f"Actor {actor.reference} requires a signed lifecycle action for gate decisions"
                 )
             self._assert_current_actor_key(actor)
             if data.authentication_fingerprint != actor.authentication_fingerprint:
-                raise PermissionError(
+                raise ActorUnauthorizedRuleError(
                     f"Gate decision authentication fingerprint does not match {actor.reference}"
                 )
             assert data.authentication_payload is not None
@@ -5740,7 +5988,7 @@ class AgoraWorkspace:
                     f"Gate decision signature is invalid for {actor.reference}",
                 )
             except ValueError as error:
-                raise PermissionError(str(error)) from error
+                raise ActorUnauthorizedRuleError(str(error)) from error
         elif any(
             value is not None
             for value in (
@@ -5765,8 +6013,11 @@ class AgoraWorkspace:
                 and self._event_detail_value(item.detail, "precondition") == precondition
                 for item in prior
             ):
-                raise ValueError(f"Gate {data.gate_id} already has this rejection")
+                raise GateAlreadyResolvedRuleError(
+                    f"Gate {data.gate_id} already has this rejection"
+                )
 
+        decision_activity: ActivityRecord
         with filesystem_transaction():
             if data.decision == "approved":
                 approval = AddApprovalInput(
@@ -5779,7 +6030,8 @@ class AgoraWorkspace:
                 _, validated_actor, validated_work, delegation = self._validate_approval(
                     root, approval
                 )
-                self._apply_approval(
+                captured_activity: list[ActivityRecord] = []
+                updated_work = self._apply_approval(
                     swarm,
                     validated_actor,
                     validated_work,
@@ -5787,17 +6039,26 @@ class AgoraWorkspace:
                     reason,
                     delegation=delegation,
                     authentication_fingerprint=authentication_fingerprint,
+                    activity_sink=captured_activity,
                 )
+                if len(captured_activity) != 1:
+                    raise RuntimeError("Gate approval did not produce exactly one Activity event")
+                decision_activity = captured_activity[0]
             else:
                 references = ",".join(evidence_refs) or "none"
-                self._append_work_event(
+                decision_activity = self._append_work_event(
                     work,
                     "gate.rejected",
                     f"gate={data.gate_id} role={role_id} actor={actor.reference} "
                     f"evidence={references} precondition={precondition} "
                     f"authentication={authentication_fingerprint or 'none'} reason={reason}",
                 )
-        return self._load_work(swarm, work.id)
+                updated_work = self._load_work(swarm, work.id)
+        return GateDecisionResult(
+            work=updated_work,
+            activity=decision_activity,
+            role_id=role_id,
+        )
 
     @_locked_mutation("project")
     def prepare_approval(self, data: PrepareApprovalInput) -> LifecycleActionRecord:
@@ -5877,6 +6138,7 @@ class AgoraWorkspace:
         delegation: ApprovalDelegationRecord | None = None,
         action_id: str | None = None,
         authentication_fingerprint: str | None = None,
+        activity_sink: list[ActivityRecord] | None = None,
     ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
@@ -5914,7 +6176,9 @@ class AgoraWorkspace:
         )
         if authentication_fingerprint is not None:
             detail += f" authentication={authentication_fingerprint}"
-        self._append_work_event(work, "approval.added", detail)
+        activity = self._append_work_event(work, "approval.added", detail)
+        if activity_sink is not None:
+            activity_sink.append(activity)
         return self._load_work(swarm, work.id)
 
     @_locked_mutation("project")
@@ -7128,6 +7392,8 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, swarm_id)
         work = self._load_work(swarm, work_id)
         artifact_rows = self._work_artifact_rows(work)
+        for _, uri in artifact_rows:
+            self._assert_artifact_reference(root, uri)
         evidence_rows = self._work_evidence_rows(work)
         clarification_hash = self._clarification_input_sha256(work)
         gherkin_hash = self._gherkin_input_sha256(work)
@@ -7391,16 +7657,19 @@ class AgoraWorkspace:
             )
 
     def _assert_no_active_approval_delegations(self, work: WorkRecord) -> None:
-        active = [
-            delegation.id
-            for delegation in self._load_approval_delegations(work)
-            if delegation.status == "active"
-        ]
+        active = self._active_approval_delegation_ids(work)
         if active:
             raise ValueError(
                 f"Work {work.swarm_id}/{work.id} has active Approval Delegations; "
                 f"consume or revoke them first: {', '.join(active)}"
             )
+
+    def _active_approval_delegation_ids(self, work: WorkRecord) -> list[str]:
+        return [
+            delegation.id
+            for delegation in self._load_approval_delegations(work)
+            if delegation.status == "active"
+        ]
 
     def _apply_work_status_change(
         self,
@@ -15894,6 +16163,62 @@ class AgoraWorkspace:
         }
 
     @staticmethod
+    def _gate_blocker_records(assessment: dict[str, Any]) -> list[GateBlockerRecord]:
+        records: list[GateBlockerRecord] = []
+
+        def add(code: str, category: str, message: str, references: list[str]) -> None:
+            if references:
+                records.append(
+                    GateBlockerRecord(
+                        code=code,
+                        category=category,
+                        message=message,
+                        references=references,
+                    )
+                )
+
+        add(
+            "gate.criteria-incomplete",
+            "criterion",
+            "Acceptance criteria have not reached the required stage",
+            list(assessment["unsatisfied"]),
+        )
+        add(
+            "gate.artifacts-missing",
+            "artifact",
+            "Required artifacts are missing",
+            list(assessment["missing_artifacts"]),
+        )
+        if assessment["evidence_missing"]:
+            records.append(
+                GateBlockerRecord(
+                    code="gate.successful-evidence-missing",
+                    category="evidence",
+                    message="Successful evidence is required",
+                    references=[],
+                )
+            )
+        add(
+            "gate.evidence-types-missing",
+            "evidence",
+            "Required successful evidence types are missing",
+            list(assessment["missing_evidence_types"]),
+        )
+        add(
+            "gate.approvals-missing",
+            "approval",
+            "Required approval roles are missing",
+            list(assessment["missing_approvals"]),
+        )
+        add(
+            "gate.git-preconditions-failed",
+            "git",
+            "Git preconditions are not satisfied",
+            list(assessment["git_issues"]),
+        )
+        return records
+
+    @staticmethod
     def _required_artifacts_for_gate(work: WorkRecord, gate: GatePolicy) -> list[str]:
         if not gate.require_required_artifacts:
             return []
@@ -15917,14 +16242,14 @@ class AgoraWorkspace:
             timestamp=timestamp,
         )
 
-    def _append_work_event(self, work: WorkRecord, type_: str, detail: str) -> None:
+    def _append_work_event(self, work: WorkRecord, type_: str, detail: str) -> ActivityRecord:
         path = Path(work.path) / "events.md"
         if not path.exists():
             write_new(path, "# Work events\n\n")
         timestamp = self._timestamp()
         append_entry(path, f"- {timestamp} | {type_} | {detail}")
         root = Path(work.path).parents[4]
-        self._append_activity(
+        return self._append_activity(
             root,
             type_,
             detail,
@@ -15975,7 +16300,7 @@ class AgoraWorkspace:
         tool_run_id: str | None = None,
         source: Path,
         timestamp: str | None = None,
-    ) -> None:
+    ) -> ActivityRecord:
         ledger = root / ".agora" / "activity.md"
         if not ledger.is_file():
             write_new(
@@ -16003,9 +16328,22 @@ class AgoraWorkspace:
             )
         )
         normalized_summary = " ".join(summary.split())
+        activity_timestamp = timestamp or self._timestamp()
         append_entry(
             ledger,
-            f"- {timestamp or self._timestamp()} | {type_} | {context} | {normalized_summary}",
+            f"- {activity_timestamp} | {type_} | {context} | {normalized_summary}",
+        )
+        return ActivityRecord(
+            timestamp=activity_timestamp,
+            type=type_,
+            summary=normalized_summary,
+            actor=actor,
+            swarm_id=swarm_id,
+            work_id=work_id,
+            session_id=session_id,
+            tool_run_id=tool_run_id,
+            source=f"repo://{relative_source.as_posix()}",
+            path=str(ledger),
         )
 
     @staticmethod

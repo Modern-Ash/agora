@@ -106,6 +106,99 @@ class SwarmSummary(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class SessionSummary(SerializableDTO):
+    id: str
+    actor: str
+    executor: str
+    swarm_id: str
+    work_id: str | None
+    roles: tuple[str, ...]
+    integration: str
+    provider: str
+    model: str
+    status: str
+    record_uri: str
+    context_uri: str
+    launch_command: tuple[str, ...]
+    runtime_available: bool
+    created_at: str
+    exit_code: int | None
+    timeout_seconds: int
+    max_output_bytes: int
+    output_bytes: int
+    termination_reason: str | None
+    context_sha256: str | None
+    authentication_verified: bool
+    authentication_fingerprint: str | None
+    authentication_public_key: str | None
+    authorization_sha256: str | None
+    authorization_signature: str | None
+    preparation_action_id: str | None
+    schema: str = field(default="agora/application/session-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class MethodStateSummary(SerializableDTO):
+    id: str
+    initial: bool
+    terminal: bool
+    schema: str = field(default="agora/application/method-state-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class GateBlockerSummary(SerializableDTO):
+    code: str
+    category: str
+    message: str
+    references: tuple[str, ...]
+    schema: str = field(default="agora/application/gate-blocker-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class GateSummary(SerializableDTO):
+    id: str
+    require_all_criteria: bool
+    require_required_artifacts: bool
+    required_artifacts: tuple[str, ...] | None
+    required_criterion_stage: str | None
+    require_successful_evidence: bool
+    required_evidence_types: tuple[str, ...]
+    required_approval_roles: tuple[str, ...]
+    require_clean_git: bool
+    require_git_commit: bool
+    blockers: tuple[GateBlockerSummary, ...] = ()
+    satisfied: bool | None = None
+    schema: str = field(default="agora/application/gate-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class TransitionSummary(SerializableDTO):
+    source: str
+    target: str
+    authorized_roles: tuple[str, ...]
+    gate_id: str | None
+    required_approval_roles: tuple[str, ...]
+    available: bool | None
+    blockers: tuple[GateBlockerSummary, ...] = ()
+    schema: str = field(default="agora/application/transition-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class MethodSummary(SerializableDTO):
+    id: str
+    name: str
+    version: str
+    required_roles: tuple[str, ...]
+    states: tuple[MethodStateSummary, ...]
+    transitions: tuple[TransitionSummary, ...]
+    gates: tuple[GateSummary, ...]
+    wip_limits: Mapping[str, int]
+    criterion_stages: tuple[str, ...]
+    criterion_stage_roles: Mapping[str, tuple[str, ...]]
+    schema: str = field(default="agora/application/method-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
 class WorkItemSummary(SerializableDTO):
     id: str
     swarm_id: str
@@ -134,7 +227,10 @@ class WorkItemSummary(SerializableDTO):
 class ArtifactSummary(SerializableDTO):
     kind: str
     uri: str
-    schema: str = field(default="agora/application/artifact-summary/v1", init=False)
+    produced_by: str
+    timestamp: str
+    activity: ActivityEntry | None = None
+    schema: str = field(default="agora/application/artifact-summary/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -142,13 +238,21 @@ class EvidenceSummary(SerializableDTO):
     type: str
     result: str
     artifact_references: tuple[str, ...]
-    schema: str = field(default="agora/application/evidence-summary/v1", init=False)
+    produced_by: str
+    timestamp: str
+    activity: ActivityEntry | None = None
+    schema: str = field(default="agora/application/evidence-summary/v2", init=False)
 
 
 @dataclass(frozen=True)
 class ApprovalSummary(SerializableDTO):
     role: str
-    schema: str = field(default="agora/application/approval-summary/v1", init=False)
+    actor: str
+    decision: str
+    note: str
+    timestamp: str
+    activity: ActivityEntry | None = None
+    schema: str = field(default="agora/application/approval-summary/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -194,6 +298,47 @@ class ActivityEntry(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class TraceabilitySummary(SerializableDTO):
+    swarm_id: str
+    work_id: str
+    state: str
+    stale: bool
+    criteria: tuple[Mapping[str, Any], ...]
+    clarifications: Mapping[str, Any]
+    gherkin: tuple[Mapping[str, Any], ...]
+    consistency: tuple[Mapping[str, Any], ...]
+    artifacts: tuple[ArtifactSummary, ...]
+    evidence: tuple[EvidenceSummary, ...]
+    activity: tuple[ActivityEntry, ...]
+    schema: str = field(default="agora/application/traceability-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class SpecificationRevisionSummary(SerializableDTO):
+    id: str
+    kind: str
+    sha: str | None
+    short_sha: str
+    timestamp: str | None
+    author: str | None
+    subject: str
+    uncommitted: bool
+    schema: str = field(default="agora/application/specification-revision-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class SpecificationSummary(SerializableDTO):
+    available: bool
+    uri: str | None
+    revisions: tuple[SpecificationRevisionSummary, ...]
+    has_history: bool
+    working_tree: bool
+    truncated: bool
+    reason: str | None = None
+    schema: str = field(default="agora/application/specification-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
 class LifecycleProjection(SerializableDTO):
     swarm_id: str
     work_id: str
@@ -209,4 +354,7 @@ class LifecycleProjection(SerializableDTO):
     artifact_kinds: tuple[str, ...]
     evidence_results: tuple[str, ...]
     approval_roles: tuple[str, ...]
-    schema: str = field(default="agora/application/lifecycle-projection/v1", init=False)
+    states: tuple[MethodStateSummary, ...] = ()
+    transitions: tuple[TransitionSummary, ...] = ()
+    gates: tuple[GateSummary, ...] = ()
+    schema: str = field(default="agora/application/lifecycle-projection/v2", init=False)

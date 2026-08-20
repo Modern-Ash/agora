@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 from dataclasses import FrozenInstanceError, asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,9 +15,11 @@ from agora.application import (
     InvalidReadQueryError,
     ProjectNotFoundError,
     ReadResourceNotFoundError,
+    SessionFilters,
     SwarmFilters,
     WorkItemFilters,
 )
+from agora.application.dto import ArtifactSummary, SerializableDTO
 from agora.cli import main
 from agora.model import (
     AddActorInput,
@@ -28,6 +31,7 @@ from agora.model import (
     CreateSwarmInput,
     CreateWorkInput,
     InitInput,
+    StartSessionInput,
 )
 from agora.workspace import AgoraWorkspace
 
@@ -158,12 +162,18 @@ def test_serializes_deeply_immutable_versioned_dtos(
     assert payload == detail.to_dict()
     assert payload["schema"] == "agora/application/work-item-detail/v1"
     assert payload["acceptance_criteria"] == {"contract": "Expose a versioned contract"}
-    assert payload["artifacts"][0]["schema"] == "agora/application/artifact-summary/v1"
+    assert payload["artifacts"][0]["schema"] == "agora/application/artifact-summary/v2"
     assert "path" not in json.dumps(payload)
     with pytest.raises(FrozenInstanceError):
         detail.title = "mutated"  # type: ignore[misc]
     with pytest.raises(TypeError):
         detail.acceptance_criteria["other"] = "mutated"  # type: ignore[index]
+
+    assert payload["artifacts"][0]["produced_by"] == "project:developer"
+    assert payload["evidence"][0]["timestamp"] == "2026-08-20T12:00:00Z"
+    assert payload["approvals"][0]["actor"] == "project:owner"
+    assert payload["approvals"][0]["decision"] == "approved"
+    assert payload["artifacts"][0]["activity"] is None
 
     query_payload = json.loads(WorkItemFilters(swarm_id="delivery").to_json())
     assert query_payload == {
@@ -212,9 +222,9 @@ def test_reads_a_valid_project_with_values_equivalent_to_workspace_reads(
         (item.timestamp, item.type, item.source) for item in current_activity
     ]
 
-    current_artifacts = workspace._work_artifact_rows(
-        workspace.show_work("delivery", "read-boundary")
-    )
+    current_artifacts = [
+        (item.kind, item.uri) for item in workspace.list_work_artifacts("delivery", "read-boundary")
+    ]
     assert [(item.kind, item.uri) for item in service.artifacts("delivery", "read-boundary")] == (
         current_artifacts
     )
@@ -257,6 +267,159 @@ def test_applies_actor_and_swarm_filters(
         service.list_actors(ActorFilters(scope="outside"))
 
 
+def test_reads_sessions_without_exposing_paths_or_internal_records(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, workspace, service = read_project
+    durable = workspace.start_session(
+        StartSessionInput(
+            id="studio-read",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="read-boundary",
+            launch=False,
+        )
+    )
+
+    session = service.get_session("studio-read")
+    payload = session.to_dict()
+
+    assert service.list_sessions(SessionFilters(status="prepared")) == (session,)
+    assert payload["schema"] == "agora/application/session-summary/v1"
+    assert payload["record_uri"] == "repo://.agora/sessions/studio-read/SESSION.md"
+    assert payload["context_uri"] == "repo://.agora/sessions/studio-read/CONTEXT.md"
+    assert "path" not in payload
+    assert str(root) not in session.to_json()
+    assert durable.path != session.record_uri
+
+
+def test_every_read_contract_is_json_serializable_immutable_and_rejects_path_values(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    _, workspace, service = read_project
+    workspace.start_session(
+        StartSessionInput(
+            id="contract-session",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="read-boundary",
+            launch=False,
+        )
+    )
+    lifecycle = service.lifecycle("delivery", "read-boundary")
+    values: tuple[SerializableDTO, ...] = (
+        service.project_overview(),
+        service.list_actors()[0],
+        service.list_swarms()[0],
+        service.list_work_items()[0],
+        service.get_work_item("delivery", "read-boundary"),
+        service.list_sessions()[0],
+        service.get_method("delivery"),
+        lifecycle,
+        lifecycle.states[0],
+        lifecycle.transitions[0],
+        lifecycle.gates[0],
+        service.artifacts("delivery", "read-boundary")[0],
+        service.evidence("delivery", "read-boundary")[0],
+        service.approvals("delivery", "read-boundary")[0],
+        service.activity(ActivityFilters(limit=1))[0],
+        service.work_traceability("delivery", "read-boundary"),
+        service.specification_history("delivery", "read-boundary"),
+    )
+
+    for value in values:
+        assert json.loads(value.to_json()) == value.to_dict()
+        assert value.to_dict()["schema"].startswith("agora/application/")
+        assert "PosixPath" not in value.to_json()
+
+    with pytest.raises(TypeError, match="cannot expose pathlib.Path"):
+        ArtifactSummary(
+            kind="spec",
+            uri="repo://docs/spec.md",
+            produced_by=Path("outside"),  # type: ignore[arg-type]
+            timestamp="2026-08-20T12:00:00Z",
+        )
+
+
+def test_projects_complete_method_topology_and_core_calculated_availability(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    _, _, service = read_project
+
+    method = service.get_method("delivery")
+    lifecycle = service.lifecycle("delivery", "read-boundary")
+
+    assert method.schema == "agora/application/method-summary/v1"
+    assert [state.id for state in method.states] == [
+        "specified",
+        "planned",
+        "implementing",
+        "reviewing",
+        "verifying",
+        "completed",
+    ]
+    assert method.states[0].initial is True
+    assert method.states[-1].terminal is True
+    assert any(transition.authorized_roles for transition in method.transitions)
+    current = [
+        transition
+        for transition in lifecycle.transitions
+        if transition.source == lifecycle.current_state
+    ]
+    assert current
+    assert all(transition.available is not None for transition in lifecycle.transitions)
+    assert lifecycle.schema == "agora/application/lifecycle-projection/v2"
+    assert lifecycle.gates[0].required_approval_roles == ("product-owner",)
+
+
+def test_reads_traceability_without_inferred_material_activity_links(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    _, _, service = read_project
+
+    traceability = service.work_traceability("delivery", "read-boundary")
+
+    assert traceability.schema == "agora/application/traceability-summary/v1"
+    assert traceability.artifacts[0].activity is None
+    assert traceability.evidence[0].activity is None
+    assert any(event.type == "artifact.added" for event in traceability.activity)
+
+
+def test_reads_bounded_specification_history_from_the_registered_artifact(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, workspace, service = read_project
+    specification = root / "docs" / "spec.md"
+    specification.parent.mkdir(exist_ok=True)
+    specification.write_text("# Version one\n", encoding="utf-8")
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="read-boundary",
+            actor_id="developer",
+            kind="spec",
+            uri="repo://docs/spec.md",
+        )
+    )
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Agora Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "agora@example.invalid"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(root), "add", "docs/spec.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "docs: add spec"], check=True)
+    specification.write_text("# Version two\n", encoding="utf-8")
+
+    history = service.specification_history("delivery", "read-boundary")
+
+    assert history.schema == "agora/application/specification-summary/v1"
+    assert history.available is True
+    assert history.working_tree is True
+    assert [revision.kind for revision in history.revisions] == ["working-tree", "commit"]
+    assert history.revisions[1].schema == ("agora/application/specification-revision-summary/v1")
+
+
 def test_rejects_missing_or_invalid_projects(tmp_path: Path) -> None:
     missing = AgoraReadService.from_path(tmp_path)
     with pytest.raises(ProjectNotFoundError) as missing_error:
@@ -281,7 +444,10 @@ def test_rejects_malformed_durable_project_state(
     assert error.value.to_dict()["code"] == "read.invalid-durable-state"
 
 
-@pytest.mark.parametrize("operation", ["detail", "lifecycle", "artifacts"])
+@pytest.mark.parametrize(
+    "operation",
+    ["detail", "lifecycle", "artifacts", "evidence", "approvals", "traceability", "specification"],
+)
 def test_rejects_invalid_slugs_before_resolving_records(
     read_project: tuple[Path, AgoraWorkspace, AgoraReadService], operation: str
 ) -> None:
@@ -290,10 +456,17 @@ def test_rejects_invalid_slugs_before_resolving_records(
         "detail": service.get_work_item,
         "lifecycle": service.lifecycle,
         "artifacts": service.artifacts,
+        "evidence": service.evidence,
+        "approvals": service.approvals,
+        "traceability": service.work_traceability,
+        "specification": service.specification_history,
     }
 
     with pytest.raises(InvalidReadQueryError, match=r"must match /\^"):
         calls[operation]("../outside", "read-boundary")
+
+    with pytest.raises(InvalidReadQueryError, match=r"must match /\^"):
+        service.get_session("../outside")
 
 
 def test_reports_missing_durable_records(
@@ -324,6 +497,8 @@ def test_rejects_repository_artifact_paths_resolving_outside_project(
 
     with pytest.raises(InvalidDurableStateError, match="escapes the project"):
         service.artifacts("delivery", "read-boundary")
+    with pytest.raises(InvalidDurableStateError, match="escapes the project"):
+        service.work_traceability("delivery", "read-boundary")
 
 
 def test_does_not_infer_absent_durable_relationships(
@@ -408,3 +583,41 @@ def test_cli_work_activity_and_material_characterization_is_preserved(
         asdict(item)
         for item in workspace.list_activity(swarm_id="delivery", work_id="read-boundary", limit=3)
     ]
+
+
+def test_cli_session_and_traceability_characterization_is_preserved(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, workspace, _ = read_project
+    session = workspace.start_session(
+        StartSessionInput(
+            id="cli-compatible",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="read-boundary",
+            launch=False,
+        )
+    )
+
+    assert _run_json(root, ["session", "show", "--session", session.id]) == asdict(session)
+    assert _run_json(root, ["session", "list", "--status", "prepared"]) == [asdict(session)]
+    assert _run_json(
+        root,
+        ["work", "traceability", "--swarm", "delivery", "--work", "read-boundary"],
+    ) == workspace.work_traceability("delivery", "read-boundary")
+
+
+def test_studio_consumer_contract_fixture_is_versioned_and_portable() -> None:
+    path = Path(__file__).parent / "contracts" / "core-0.5-read-contracts.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["core_version"] == "0.5.0"
+    assert payload["session"]["schema"] == "agora/application/session-summary/v1"
+    assert payload["method"]["schema"] == "agora/application/method-summary/v1"
+    assert payload["lifecycle"]["schema"] == "agora/application/lifecycle-projection/v2"
+    assert payload["artifact"]["schema"] == "agora/application/artifact-summary/v2"
+    assert payload["evidence"]["schema"] == "agora/application/evidence-summary/v2"
+    assert payload["approval"]["schema"] == "agora/application/approval-summary/v2"
+    assert payload["traceability"]["schema"] == ("agora/application/traceability-summary/v1")
+    assert payload["specification"]["schema"] == ("agora/application/specification-summary/v1")
+    assert "/tmp/" not in json.dumps(payload)
