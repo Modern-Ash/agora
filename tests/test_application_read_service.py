@@ -1027,6 +1027,13 @@ def test_core_0_8_fixture_versions_freshness_digests_errors_and_budgets() -> Non
         ).hexdigest()
     )
     assert fixture["gate_option"]["content_addressed_evidence_required"] is True
+    assert (
+        fixture["prepared_gate"]["evidence_content_sha256"]
+        == (fixture["gate_command"]["evidence_content_sha256"])
+    )
+    assert set(fixture["prepared_gate"]["evidence_content_sha256"]) < set(
+        fixture["gate_option"]["evidence_content_sha256"]
+    )
     assert fixture["work_control_projection_schema"].endswith("work-control-projection/v3")
     assert fixture["operational_error"]["schema"].endswith("error/v2")
     assert fixture["budget"]["projection_schema"].endswith("budget-amendment-projection/v1")

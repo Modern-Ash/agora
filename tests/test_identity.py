@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agora.cli import main as cli_main
+from agora.filesystem import FilesystemTransactionFailure
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
@@ -226,6 +227,142 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     report = workspace.validate()
     assert not report.ok
     assert any(issue.code == "lifecycle-action.invalid" for issue in report.issues)
+
+
+@pytest.mark.parametrize("fail_at", [1, 3, 5])
+def test_signed_lifecycle_apply_rolls_back_domain_event_activity_and_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at: int,
+) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    _create_authenticated_work(workspace, private_key, tmp_path)
+    transition = TransitionWorkInput(
+        swarm_id="delivery",
+        work_id="signed-work",
+        actor_id="developer",
+        target_state="planned",
+    )
+    action = workspace.prepare_work_transition(
+        PrepareWorkTransitionInput(id="atomic-signed-transition", **transition.__dict__)
+    )
+    payload = tmp_path / "atomic-signed-transition.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(action_id=action.id, output=str(payload))
+    )
+    signature = tmp_path / "atomic-signed-transition.sig"
+    signature.write_bytes(private_key.sign(payload.read_bytes()))
+    work_root = root / ".agora" / "swarms" / "delivery" / "work" / "signed-work"
+    action_path = root / ".agora" / "actions" / action.id / "ACTION.md"
+    tracked = [
+        work_root / "WORK.md",
+        work_root / "events.md",
+        root / ".agora" / "events.md",
+        root / ".agora" / "activity.md",
+        action_path,
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def fail_selected(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == fail_at:
+            raise OSError(f"signed lifecycle failure {fail_at}")
+        original(path, contents)
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action.id, signature=str(signature))
+        )
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert workspace.show_work("delivery", "signed-work").state == "specified"
+    assert workspace.list_lifecycle_actions("prepared")[-1].id == action.id
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", original)
+    assert (
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action.id, signature=str(signature))
+        ).status
+        == "applied"
+    )
+
+
+@pytest.mark.parametrize("fail_at", [1, 3, 6])
+def test_signed_actor_key_rotation_rolls_back_identity_history_event_and_activity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at: int,
+) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    replacement_key = Ed25519PrivateKey.generate()
+    replacement_path = _write_public_key(replacement_key, tmp_path / "replacement.pem")
+    rotation = RotateActorKeyInput(
+        actor_id="developer",
+        public_key=str(replacement_path),
+        reason="Rotate the developer identity before release",
+    )
+    action = workspace.prepare_actor_key_rotation(
+        PrepareActorKeyRotationInput(
+            action_id="atomic-key-rotation",
+            swarm_id="delivery",
+            rotation=rotation,
+        )
+    )
+    payload = tmp_path / "atomic-key-rotation.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(action_id=action.id, output=str(payload))
+    )
+    signature = tmp_path / "atomic-key-rotation.sig"
+    signature.write_bytes(private_key.sign(payload.read_bytes()))
+    actor = next(item for item in workspace.list_actors() if item.id == "developer")
+    assert actor.authentication_fingerprint is not None
+    key_root = Path(actor.path).with_suffix("") / "keys"
+    current_key = key_root / f"{actor.authentication_fingerprint}.md"
+    replacement_fingerprint = action.parameters["fingerprint"]
+    replacement_record = key_root / f"{replacement_fingerprint}.md"
+    action_path = root / ".agora" / "actions" / action.id / "ACTION.md"
+    tracked = [
+        Path(actor.path),
+        current_key,
+        root / ".agora" / "events.md",
+        root / ".agora" / "activity.md",
+        action_path,
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    from agora import filesystem
+
+    original = filesystem._atomic_write_direct
+    writes = 0
+
+    def fail_selected(path: Path, contents: str) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == fail_at:
+            raise OSError(f"actor key failure {fail_at}")
+        original(path, contents)
+
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action.id, signature=str(signature))
+        )
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not replacement_record.exists()
+    assert next(item for item in workspace.list_actors() if item.id == "developer") == actor
+    monkeypatch.setattr(filesystem, "_atomic_write_direct", original)
+    applied = workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(action_id=action.id, signature=str(signature))
+    )
+    assert applied.status == "applied"
+    assert replacement_record.exists()
 
 
 def test_applies_a_signed_granular_gate_waiver(tmp_path: Path, monkeypatch) -> None:
