@@ -19,6 +19,8 @@ authoritative.
 - A complete versioned read boundary for sessions, Method Packs, lifecycle blockers, materials,
   traceability, and bounded specification history, shared by CLI and Studio API.
 - Typed gate-decision domain failures and transaction-exact Activity results.
+- Exact multi-transition gate decision options, state-bound signing preparation, bounded
+  specification revision detail, and an aggregate work control projection for Studio consumers.
 - An executable Jira adapter scenario that shows reads, writes, provider output, and denied
   authority without requiring live credentials.
 

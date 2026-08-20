@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 from agora.application.commands import (
     ApproveGateCommand,
     GateDecisionProjection,
+    PreparedGateDecision,
     approve_gate_authorization_payload,
 )
 from agora.application.errors import (
@@ -61,6 +63,8 @@ class AgoraCommandService:
                     decision=command.decision,  # type: ignore[arg-type]
                     reason=command.reason,
                     expected_state=command.expected_state,
+                    transition_target=command.transition_target,
+                    role_id=command.role_id,
                     evidence_refs=list(command.evidence_references),
                     authentication_payload=(
                         approve_gate_authorization_payload(command) if authentication else None
@@ -106,9 +110,72 @@ class AgoraCommandService:
             actor_id=result.activity.actor or command.actor_id,
             role_id=result.role_id,
             decision=command.decision,
-            reason=" ".join(command.reason.split()),
+            reason=command.reason,
             lifecycle=self._reads.lifecycle(command.swarm_id, command.work_id),
             activity=self._reads.activity_entry(result.activity),
+        )
+
+    def prepare_gate_decision(self, command: ApproveGateCommand) -> PreparedGateDecision:
+        """Resolve an exact decision and return the canonical bytes an external signer uses."""
+
+        self._validate(command)
+        if command.authentication is not None:
+            raise InvalidCommandError("Prepared gate decisions must not include a signature")
+        try:
+            option = self._workspace.prepare_gate_decision(
+                GateDecisionInput(
+                    project_identity=command.project_identity,
+                    swarm_id=command.swarm_id,
+                    work_id=command.work_id,
+                    gate_id=command.gate_id,
+                    actor_id=command.actor_id,
+                    decision=command.decision,  # type: ignore[arg-type]
+                    reason=command.reason,
+                    expected_state=command.expected_state,
+                    transition_target=command.transition_target,
+                    role_id=command.role_id,
+                    evidence_refs=list(command.evidence_references),
+                )
+            )
+        except ActorUnauthorizedRuleError as error:
+            raise ActorUnauthorizedError(str(error)) from error
+        except ProjectIdentityMismatchRuleError as error:
+            raise ProjectIdentityMismatchError(str(error)) from error
+        except StalePreconditionRuleError as error:
+            raise StalePreconditionError(str(error)) from error
+        except GateAlreadyResolvedRuleError as error:
+            raise GateAlreadyResolvedError(str(error)) from error
+        except EvidenceMissingRuleError as error:
+            raise EvidenceMissingError(str(error)) from error
+        except GateDecisionRoleRuleError as error:
+            raise InvalidCommandError(str(error)) from error
+        except (FileNotFoundError, ValueError) as error:
+            raise InvalidCommandError(str(error)) from error
+
+        payload = approve_gate_authorization_payload(command)
+        assert option.actor_id is not None
+        return PreparedGateDecision(
+            command_schema=command.schema,
+            authorization_schema="agora/application/approve-gate-authorization/v2",
+            authorization_payload=payload.decode("ascii"),
+            authorization_digest=hashlib.sha256(payload).hexdigest(),
+            project_identity=command.project_identity,
+            swarm_id=command.swarm_id,
+            work_id=command.work_id,
+            expected_state=command.expected_state,
+            transition_target=command.transition_target,
+            gate_id=command.gate_id,
+            decision=command.decision,
+            actor_id=option.actor_id,
+            role_id=option.role_id,
+            reason=" ".join(command.reason.split()),
+            evidence_references=command.evidence_references,
+            authentication_required=option.authentication_required,
+            authentication_algorithm=option.authentication_algorithm,
+            authentication_fingerprint=option.authentication_fingerprint,
+            authentication_public_key=option.authentication_public_key,
+            freshness="expected-state",
+            expires_at=None,
         )
 
     @staticmethod
@@ -122,6 +189,8 @@ class AgoraCommandService:
             (command.decision, "Gate decision"),
             (command.reason, "Gate decision reason"),
             (command.expected_state, "Expected state"),
+            (command.transition_target, "Transition target"),
+            (command.role_id, "Gate decision role id"),
         )
         for value, label in string_fields:
             if not isinstance(value, str):
@@ -130,6 +199,8 @@ class AgoraCommandService:
             (command.swarm_id, "Swarm id"),
             (command.work_id, "Work id"),
             (command.gate_id, "Gate id"),
+            (command.transition_target, "Transition target"),
+            (command.role_id, "Gate decision role id"),
         ):
             try:
                 assert_slug(value, label)

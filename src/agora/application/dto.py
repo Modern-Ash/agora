@@ -280,7 +280,7 @@ class WorkItemDetail(SerializableDTO):
     artifact_kinds: tuple[str, ...] = ()
     evidence_results: tuple[str, ...] = ()
     approval_roles: tuple[str, ...] = ()
-    schema: str = field(default="agora/application/work-item-detail/v1", init=False)
+    schema: str = field(default="agora/application/work-item-detail/v2", init=False)
 
 
 @dataclass(frozen=True)
@@ -339,6 +339,63 @@ class SpecificationSummary(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class SpecificationRevisionDetail(SerializableDTO):
+    available: bool
+    uri: str | None
+    revision_id: str
+    kind: str | None
+    sha: str | None
+    previous_revision_id: str | None
+    timestamp: str | None
+    author: str | None
+    subject: str | None
+    content: str | None
+    diff: str | None
+    size_bytes: int
+    content_truncated: bool
+    diff_truncated: bool
+    encoding: str
+    binary: bool
+    reason: str | None = None
+    schema: str = field(default="agora/application/specification-revision-detail/v1", init=False)
+
+
+@dataclass(frozen=True)
+class GateDecisionOptionSummary(SerializableDTO):
+    swarm_id: str
+    work_id: str
+    expected_state: str
+    transition_source: str
+    transition_target: str
+    gate_id: str
+    decision: str
+    role_id: str
+    actor_id: str | None
+    allowed: bool
+    blockers: tuple[GateBlockerSummary, ...]
+    evidence_required: bool
+    required_evidence_types: tuple[str, ...]
+    evidence_references: tuple[str, ...]
+    authentication_required: bool
+    authentication_algorithm: str | None
+    authentication_fingerprint: str | None
+    unavailable_reason: str | None
+    schema: str = field(default="agora/application/gate-decision-option-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class GateDecisionOptionsProjection(SerializableDTO):
+    swarm_id: str
+    work_id: str
+    current_state: str
+    operational_status: str
+    terminal: bool
+    options: tuple[GateDecisionOptionSummary, ...]
+    reason: str | None = None
+    schema: str = field(default="agora/application/gate-decision-options-projection/v1", init=False)
+
+
+@dataclass(frozen=True)
 class LifecycleProjection(SerializableDTO):
     swarm_id: str
     work_id: str
@@ -358,3 +415,16 @@ class LifecycleProjection(SerializableDTO):
     transitions: tuple[TransitionSummary, ...] = ()
     gates: tuple[GateSummary, ...] = ()
     schema: str = field(default="agora/application/lifecycle-projection/v2", init=False)
+
+
+@dataclass(frozen=True)
+class WorkControlProjection(SerializableDTO):
+    work: WorkItemDetail
+    lifecycle: LifecycleProjection
+    artifacts: tuple[ArtifactSummary, ...]
+    evidence: tuple[EvidenceSummary, ...]
+    approvals: tuple[ApprovalSummary, ...]
+    traceability: TraceabilitySummary
+    specification_history: SpecificationSummary
+    gate_decision_options: GateDecisionOptionsProjection
+    schema: str = field(default="agora/application/work-control-projection/v1", init=False)

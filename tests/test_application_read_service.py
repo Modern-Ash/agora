@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import subprocess
@@ -160,7 +161,7 @@ def test_serializes_deeply_immutable_versioned_dtos(
     payload = json.loads(detail.to_json())
 
     assert payload == detail.to_dict()
-    assert payload["schema"] == "agora/application/work-item-detail/v1"
+    assert payload["schema"] == "agora/application/work-item-detail/v2"
     assert payload["acceptance_criteria"] == {"contract": "Expose a versioned contract"}
     assert payload["artifacts"][0]["schema"] == "agora/application/artifact-summary/v2"
     assert "path" not in json.dumps(payload)
@@ -325,6 +326,9 @@ def test_every_read_contract_is_json_serializable_immutable_and_rejects_path_val
         service.activity(ActivityFilters(limit=1))[0],
         service.work_traceability("delivery", "read-boundary"),
         service.specification_history("delivery", "read-boundary"),
+        service.specification_revision("delivery", "read-boundary", "invalid"),
+        service.gate_decision_options("delivery", "read-boundary"),
+        service.work_control_projection("delivery", "read-boundary"),
     )
 
     for value in values:
@@ -420,6 +424,162 @@ def test_reads_bounded_specification_history_from_the_registered_artifact(
     assert history.revisions[1].schema == ("agora/application/specification-revision-summary/v1")
 
 
+def test_reads_safe_commit_and_working_tree_specification_revision_details(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, workspace, service = read_project
+    specification = root / "docs" / "spec-detail.md"
+    specification.parent.mkdir(exist_ok=True)
+    specification.write_text("# Version one\n", encoding="utf-8")
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="read-boundary",
+            actor_id="developer",
+            kind="spec",
+            uri="repo://docs/spec-detail.md",
+        )
+    )
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Agora Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "agora@example.invalid"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(root), "add", "docs/spec-detail.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "docs: add spec"], check=True)
+    sha = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    specification.write_text("# Version two\n\nChanged safely.\n", encoding="utf-8")
+
+    committed = service.specification_revision("delivery", "read-boundary", sha)
+    working = service.specification_revision("delivery", "read-boundary", "working-tree")
+
+    assert committed.schema == ("agora/application/specification-revision-detail/v1")
+    assert committed.available is True
+    assert committed.kind == "commit"
+    assert committed.content == "# Version one\n"
+    assert committed.diff is not None and "Version one" in committed.diff
+    assert working.available is True
+    assert working.kind == "working-tree"
+    assert working.previous_revision_id == sha
+    assert working.content == "# Version two\n\nChanged safely.\n"
+    assert working.diff is not None and "+Changed safely." in working.diff
+    assert str(root) not in working.to_json()
+
+
+def test_specification_revision_bounds_large_and_binary_content(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, workspace, service = read_project
+    specification = root / "docs" / "bounded-spec.md"
+    specification.parent.mkdir(exist_ok=True)
+    specification.write_text("initial\n", encoding="utf-8")
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="read-boundary",
+            actor_id="developer",
+            kind="spec",
+            uri="repo://docs/bounded-spec.md",
+        )
+    )
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Agora Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "agora@example.invalid"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(root), "add", "docs/bounded-spec.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "docs: add spec"], check=True)
+
+    specification.write_text("line\n" * 40_000, encoding="utf-8")
+    large = service.specification_revision("delivery", "read-boundary", "working-tree")
+    assert large.size_bytes == 200_000
+    assert large.content_truncated is True
+    assert large.content is not None and len(large.content.splitlines()) <= 2_000
+
+    specification.write_bytes(b"binary\0contents")
+    binary = service.specification_revision("delivery", "read-boundary", "working-tree")
+    assert binary.available is True
+    assert binary.binary is True
+    assert binary.encoding == "binary"
+    assert binary.content is None
+
+
+def test_specification_revision_invalid_sha_and_git_timeout_are_safe_projections(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace, service = read_project
+    specification = root / "docs" / "timeout-spec.md"
+    specification.parent.mkdir(exist_ok=True)
+    specification.write_text("tracked\n", encoding="utf-8")
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="read-boundary",
+            actor_id="developer",
+            kind="spec",
+            uri="repo://docs/timeout-spec.md",
+        )
+    )
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Agora Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "agora@example.invalid"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(root), "add", "docs/timeout-spec.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "docs: add spec"], check=True)
+    sha = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    invalid = service.specification_revision("delivery", "read-boundary", "--help")
+    assert invalid.available is False
+    assert invalid.reason == "Specification revision id is invalid"
+
+    from agora import git
+
+    original = git.subprocess.run
+
+    def timeout_show(*args: object, **kwargs: object):
+        command = args[0]
+        if isinstance(command, list) and "show" in command:
+            raise subprocess.TimeoutExpired(command, 5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(git.subprocess, "run", timeout_show)
+    timed_out = service.specification_revision("delivery", "read-boundary", sha)
+    assert timed_out.available is False
+    assert timed_out.reason == "Git could not read specification revision"
+
+
+def test_work_control_projection_is_consistent_and_reuses_core_contracts(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    _, _, service = read_project
+
+    projection = service.work_control_projection("delivery", "read-boundary")
+
+    assert projection.schema == "agora/application/work-control-projection/v1"
+    assert projection.work.schema == "agora/application/work-item-detail/v2"
+    assert projection.lifecycle.current_state == projection.work.state
+    assert projection.traceability.state == projection.work.state
+    assert projection.artifacts == projection.work.artifacts
+    assert projection.evidence == projection.work.evidence
+    assert projection.approvals == projection.work.approvals
+    assert projection.gate_decision_options.current_state == projection.work.state
+
+
 def test_rejects_missing_or_invalid_projects(tmp_path: Path) -> None:
     missing = AgoraReadService.from_path(tmp_path)
     with pytest.raises(ProjectNotFoundError) as missing_error:
@@ -499,6 +659,25 @@ def test_rejects_repository_artifact_paths_resolving_outside_project(
         service.artifacts("delivery", "read-boundary")
     with pytest.raises(InvalidDurableStateError, match="escapes the project"):
         service.work_traceability("delivery", "read-boundary")
+    with pytest.raises(InvalidDurableStateError, match="escapes the project"):
+        service.specification_revision("delivery", "read-boundary", "working-tree")
+
+
+def test_specification_revision_rejects_repository_uri_traversal(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, _, service = read_project
+    artifacts_path = (
+        root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "artifacts.md"
+    )
+    artifacts_path.write_text(
+        f"{artifacts_path.read_text(encoding='utf-8').rstrip()}\n"
+        f"| spec | repo://../outside.md | project:developer | {TIMESTAMP.isoformat()} |\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InvalidDurableStateError, match="portable file path"):
+        service.specification_revision("delivery", "read-boundary", "working-tree")
 
 
 def test_does_not_infer_absent_durable_relationships(
@@ -621,3 +800,54 @@ def test_studio_consumer_contract_fixture_is_versioned_and_portable() -> None:
     assert payload["traceability"]["schema"] == ("agora/application/traceability-summary/v1")
     assert payload["specification"]["schema"] == ("agora/application/specification-summary/v1")
     assert "/tmp/" not in json.dumps(payload)
+
+
+def test_core_0_6_consumer_fixtures_are_complete_versioned_and_portable() -> None:
+    root = Path(__file__).parent / "contracts"
+    fixtures = {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in root.glob("core-0.6-*.json")
+    }
+
+    assert set(fixtures) == {
+        "core-0.6-gate-decision-options.json",
+        "core-0.6-prepared-gate-decision.json",
+        "core-0.6-specification-revisions.json",
+        "core-0.6-work-control-projection.json",
+    }
+    assert all(value["core_version"] == "0.6.0" for value in fixtures.values())
+    serialized = json.dumps(fixtures, sort_keys=True)
+    assert "/tmp/" not in serialized
+    assert "PosixPath" not in serialized
+    assert "private_key" not in serialized
+
+    control = fixtures["core-0.6-work-control-projection.json"]["projection"]
+    assert control["schema"] == "agora/application/work-control-projection/v1"
+    assert control["work"]["schema"] == "agora/application/work-item-detail/v2"
+    assert control["work"]["artifacts"][0]["schema"].endswith("artifact-summary/v2")
+    assert control["work"]["evidence"][0]["schema"].endswith("evidence-summary/v2")
+    assert control["work"]["approvals"][0]["schema"].endswith("approval-summary/v2")
+
+    scenarios = fixtures["core-0.6-gate-decision-options.json"]["scenarios"]
+    options = scenarios["multiple_transitions_gates_roles"]["options"]
+    assert {item["transition_target"] for item in options} == {"completed", "reviewing"}
+    assert {item["gate_id"] for item in options} == {"completion", "rework-review"}
+    assert {item["decision"] for item in options} == {"approved", "rejected"}
+    assert {item["role_id"] for item in options} == {"product-owner", "scrum-master"}
+    assert {item["authentication_required"] for item in options} == {False, True}
+
+    revisions = fixtures["core-0.6-specification-revisions.json"]
+    assert revisions["history"]["schema"].endswith("specification-summary/v1")
+    assert all(
+        item["schema"].endswith("specification-revision-detail/v1")
+        for item in revisions["details"].values()
+    )
+
+    prepared = fixtures["core-0.6-prepared-gate-decision.json"]
+    assert prepared["command"]["schema"] == "agora/application/approve-gate-command/v2"
+    for key in ("prepared_unsigned_actor", "prepared_signed_actor"):
+        item = prepared[key]
+        assert (
+            item["authorization_digest"]
+            == hashlib.sha256(item["authorization_payload"].encode("ascii")).hexdigest()
+        )

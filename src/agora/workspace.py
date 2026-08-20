@@ -56,6 +56,7 @@ from agora.git import (
     current_branch,
     delete_branch,
     file_history,
+    file_revision,
     ignored_paths,
     is_git_repository,
     ref_exists,
@@ -150,6 +151,7 @@ from agora.model import (
     EvidenceRecord,
     GateBlockerRecord,
     GateDecisionInput,
+    GateDecisionOptionRecord,
     GateDecisionResult,
     GatePolicy,
     GateWaiverRecord,
@@ -238,6 +240,7 @@ from agora.model import (
     SessionRecord,
     SetActorRuntimeInput,
     SpecificationHistoryRecord,
+    SpecificationRevisionDetailRecord,
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
@@ -2982,6 +2985,224 @@ class AgoraWorkspace:
             transitions=transitions,
         )
 
+    def inspect_gate_decision_options(
+        self, swarm_id: str, work_id: str
+    ) -> list[GateDecisionOptionRecord]:
+        """Return every exact gate decision Core can currently represent."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        assessment = self.inspect_work_lifecycle(swarm_id, work_id)
+        candidates = {
+            (item["role"], item["actor"]): item
+            for item in self.action_candidates(swarm.id, "approval.add")
+        }
+        successful_references = list(
+            dict.fromkeys(
+                reference
+                for _, result, references in self._work_evidence_rows(work)
+                if result == "success"
+                for reference in references
+            )
+        )
+        options: list[GateDecisionOptionRecord] = []
+        for transition in assessment.transitions:
+            if transition.source != work.state or transition.gate_id is None:
+                continue
+            gate = assessment.method.gates[transition.gate_id]
+            for role_id in gate.required_approval_roles:
+                actor_id = swarm.assignments.get(role_id)
+                actor = None
+                authority_blockers: list[GateBlockerRecord] = []
+                if actor_id is None:
+                    authority_blockers.append(
+                        GateBlockerRecord(
+                            code="gate.role-unassigned",
+                            category="authority",
+                            message="Required approval role is not assigned",
+                            references=[role_id],
+                        )
+                    )
+                elif (role_id, actor_id) not in candidates:
+                    authority_blockers.append(
+                        GateBlockerRecord(
+                            code="gate.actor-unauthorized",
+                            category="authority",
+                            message="Assigned actor is not authorized to decide this gate",
+                            references=[role_id, actor_id],
+                        )
+                    )
+                else:
+                    actor = self._find_actor(root, actor_id)
+                    if actor.authentication_required and (
+                        actor.authentication_algorithm != "ed25519"
+                        or actor.authentication_public_key is None
+                        or actor.authentication_fingerprint is None
+                        or actor.authentication_revoked_at is not None
+                    ):
+                        authority_blockers.append(
+                            GateBlockerRecord(
+                                code="gate.authentication-unavailable",
+                                category="authority",
+                                message="Actor authentication identity is not currently usable",
+                                references=[actor.reference],
+                            )
+                        )
+                if role_id in work.approval_roles:
+                    authority_blockers.append(
+                        GateBlockerRecord(
+                            code="gate.role-already-resolved",
+                            category="approval",
+                            message="Approval role is already resolved",
+                            references=[role_id],
+                        )
+                    )
+                for decision in ("approved", "rejected"):
+                    transition_blockers = [
+                        blocker
+                        for blocker in transition.blockers
+                        if (
+                            blocker.code != "gate.approvals-missing"
+                            if decision == "approved"
+                            else blocker.code in {"work.not-active", "work.terminal"}
+                        )
+                    ]
+                    blockers = [*transition_blockers, *authority_blockers]
+                    if decision == "rejected" and actor is not None:
+                        precondition = self._work_precondition_sha256(work)
+                        prior = self.list_events(
+                            swarm_id=swarm.id,
+                            work_id=work.id,
+                            type_="gate.rejected",
+                            limit=100,
+                        )
+                        if any(
+                            self._event_detail_value(item.detail, "gate") == transition.gate_id
+                            and self._event_detail_value(item.detail, "actor") == actor.reference
+                            and self._event_detail_value(item.detail, "precondition")
+                            == precondition
+                            for item in prior
+                        ):
+                            blockers.append(
+                                GateBlockerRecord(
+                                    code="gate.rejection-already-recorded",
+                                    category="approval",
+                                    message="This rejection is already durable",
+                                    references=[transition.gate_id, actor.reference],
+                                )
+                            )
+                    reason = blockers[0].message if blockers else None
+                    options.append(
+                        GateDecisionOptionRecord(
+                            swarm_id=swarm.id,
+                            work_id=work.id,
+                            expected_state=work.state,
+                            transition_source=transition.source,
+                            transition_target=transition.target,
+                            gate_id=transition.gate_id,
+                            decision=decision,
+                            role_id=role_id,
+                            actor_id=actor.reference if actor is not None else actor_id,
+                            allowed=not blockers,
+                            blockers=blockers,
+                            evidence_required=(
+                                decision == "approved"
+                                and (
+                                    gate.require_successful_evidence
+                                    or bool(gate.required_evidence_types)
+                                )
+                            ),
+                            required_evidence_types=(
+                                list(gate.required_evidence_types) if decision == "approved" else []
+                            ),
+                            evidence_references=successful_references,
+                            authentication_required=(
+                                actor.authentication_required if actor is not None else False
+                            ),
+                            authentication_algorithm=(
+                                actor.authentication_algorithm if actor is not None else None
+                            ),
+                            authentication_fingerprint=(
+                                actor.authentication_fingerprint if actor is not None else None
+                            ),
+                            authentication_public_key=(
+                                actor.authentication_public_key if actor is not None else None
+                            ),
+                            unavailable_reason=reason,
+                        )
+                    )
+        return options
+
+    def prepare_gate_decision(self, data: GateDecisionInput) -> GateDecisionOptionRecord:
+        """Revalidate and resolve one exact option before canonical signing."""
+
+        root = self.project_root()
+        project = self._load_project_configuration(root)
+        if data.project_identity != project.project:
+            raise ProjectIdentityMismatchRuleError(
+                "Project identity mismatch: "
+                f"expected {project.project}, got {data.project_identity}"
+            )
+        swarm = self._load_swarm(root, data.swarm_id)
+        work = self._load_work(swarm, data.work_id)
+        if work.state != data.expected_state:
+            raise StalePreconditionRuleError(
+                f"Stale work state: expected {data.expected_state}, current {work.state}"
+            )
+        matches = [
+            option
+            for option in self.inspect_gate_decision_options(data.swarm_id, data.work_id)
+            if option.gate_id == data.gate_id
+            and option.transition_target == data.transition_target
+            and option.role_id == data.role_id
+            and option.decision == data.decision
+            and option.actor_id
+            in {data.actor_id, f"project:{data.actor_id}", f"user:{data.actor_id}"}
+        ]
+        if not matches:
+            raise ActorUnauthorizedRuleError(
+                "No gate decision option matches the requested transition, role, and actor"
+            )
+        if len(matches) != 1:
+            raise GateDecisionRoleRuleError("Gate decision option is ambiguous")
+        option = matches[0]
+        if option.allowed:
+            evidence_refs = list(
+                dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+            )
+            missing = [
+                reference
+                for reference in evidence_refs
+                if reference not in option.evidence_references
+            ]
+            if missing:
+                raise EvidenceMissingRuleError(
+                    "Gate evidence references are missing or not successful: " + ", ".join(missing)
+                )
+            if option.evidence_required and not evidence_refs:
+                raise EvidenceMissingRuleError(
+                    f"Gate {data.gate_id} requires durable evidence references"
+                )
+            return option
+        codes = {blocker.code for blocker in option.blockers}
+        if codes & {"gate.role-already-resolved", "gate.rejection-already-recorded"}:
+            raise GateAlreadyResolvedRuleError(option.unavailable_reason or "Gate is resolved")
+        if any(
+            blocker.category in {"criterion", "artifact", "evidence", "git"}
+            for blocker in option.blockers
+        ):
+            raise EvidenceMissingRuleError(
+                option.unavailable_reason or "Gate preconditions are not satisfied"
+            )
+        if any(blocker.category == "authority" for blocker in option.blockers):
+            raise ActorUnauthorizedRuleError(
+                option.unavailable_reason or "Actor is not authorized for this gate"
+            )
+        raise GateDecisionRoleRuleError(
+            option.unavailable_reason or "Gate decision is not currently available"
+        )
+
     def list_tools(self) -> list[ToolPackRecord]:
         tool_root = self.project_root() / ".agora" / "tools"
         return [
@@ -5332,6 +5553,37 @@ class AgoraWorkspace:
             )
         return replace(history, uri=uri)
 
+    def work_specification_revision(
+        self, swarm_id: str, work_id: str, revision_id: str
+    ) -> SpecificationRevisionDetailRecord:
+        """Return bounded content and diff for one registered specification revision."""
+
+        root = self.project_root()
+        history = self.work_specification_history(swarm_id, work_id)
+        if not history.available or history.uri is None:
+            return SpecificationRevisionDetailRecord(
+                available=False,
+                uri=history.uri,
+                revision_id=revision_id,
+                kind=None,
+                sha=None,
+                previous_revision_id=None,
+                timestamp=None,
+                author=None,
+                subject=None,
+                content=None,
+                diff=None,
+                size_bytes=0,
+                content_truncated=False,
+                diff_truncated=False,
+                encoding="unavailable",
+                binary=False,
+                reason=history.reason or "Specification history is unavailable",
+            )
+        relative_path = history.uri.removeprefix("repo://")
+        detail = file_revision(root, relative_path, revision_id)
+        return replace(detail, uri=history.uri)
+
     @classmethod
     def _work_artifact_records(cls, work: WorkRecord) -> list[ArtifactRecord]:
         document = read_markdown(Path(work.path) / "artifacts.md")
@@ -5860,11 +6112,15 @@ class AgoraWorkspace:
         assert_slug(data.swarm_id, "Swarm id")
         assert_slug(data.work_id, "Work id")
         assert_slug(data.gate_id, "Gate id")
+        assert_slug(data.transition_target, "Transition target")
+        assert_slug(data.role_id, "Gate decision role id")
         if data.decision not in {"approved", "rejected"}:
             raise ValueError("Gate decision must be approved or rejected")
         reason = " ".join(data.reason.split())
         if not reason:
             raise ValueError("Gate decision reason cannot be empty")
+
+        self.prepare_gate_decision(data)
 
         root = self.project_root()
         project = self._load_project_configuration(root)
@@ -5886,7 +6142,9 @@ class AgoraWorkspace:
             (
                 item
                 for item in contract.transitions
-                if item.source == work.state and item.gate == data.gate_id
+                if item.source == work.state
+                and item.target == data.transition_target
+                and item.gate == data.gate_id
             ),
             None,
         )
@@ -5902,6 +6160,7 @@ class AgoraWorkspace:
             item
             for item in self.action_candidates(swarm.id, "approval.add")
             if item["actor"] in {data.actor_id, f"project:{data.actor_id}", f"user:{data.actor_id}"}
+            and item["role"] == data.role_id
             and item["role"] in gate.required_approval_roles
         ]
         if not actor_candidates:
@@ -5916,11 +6175,8 @@ class AgoraWorkspace:
                 f"Gate {data.gate_id} is already resolved for this actor"
             )
         if len(pending_candidates) != 1:
-            roles = ", ".join(item["role"] for item in pending_candidates)
-            raise GateDecisionRoleRuleError(
-                f"Gate decision role is ambiguous for actor {data.actor_id}: {roles}"
-            )
-        role_id = pending_candidates[0]["role"]
+            raise GateDecisionRoleRuleError("Gate decision role does not resolve uniquely")
+        role_id = data.role_id
 
         evidence_refs = list(
             dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
@@ -5939,25 +6195,30 @@ class AgoraWorkspace:
             raise EvidenceMissingRuleError(
                 "Gate evidence references are missing or not successful: " + ", ".join(missing_refs)
             )
-        if (gate.require_successful_evidence or gate.required_evidence_types) and not evidence_refs:
+        if (
+            data.decision == "approved"
+            and (gate.require_successful_evidence or gate.required_evidence_types)
+            and not evidence_refs
+        ):
             raise EvidenceMissingRuleError(
                 f"Gate {data.gate_id} requires durable evidence references"
             )
 
-        assessment = self._work_gate_assessment(root, work, gate, data.gate_id)
-        blockers = [
-            *assessment["unsatisfied"],
-            *assessment["missing_artifacts"],
-            *assessment["missing_evidence_types"],
-            *assessment["git_issues"],
-        ]
-        if assessment["evidence_missing"]:
-            blockers.append("successful-evidence")
-        if blockers:
-            raise EvidenceMissingRuleError(
-                f"Gate {data.gate_id} evidence or preconditions are not satisfied: "
-                + ", ".join(blockers)
-            )
+        if data.decision == "approved":
+            assessment = self._work_gate_assessment(root, work, gate, data.gate_id)
+            blockers = [
+                *assessment["unsatisfied"],
+                *assessment["missing_artifacts"],
+                *assessment["missing_evidence_types"],
+                *assessment["git_issues"],
+            ]
+            if assessment["evidence_missing"]:
+                blockers.append("successful-evidence")
+            if blockers:
+                raise EvidenceMissingRuleError(
+                    f"Gate {data.gate_id} evidence or preconditions are not satisfied: "
+                    + ", ".join(blockers)
+                )
 
         actor = self._find_actor(root, pending_candidates[0]["actor"])
         authentication_fingerprint: str | None = None

@@ -3,9 +3,15 @@ import re
 import subprocess
 from pathlib import Path
 
-from agora.model import SpecificationHistoryRecord, SpecificationRevisionRecord
+from agora.model import (
+    SpecificationHistoryRecord,
+    SpecificationRevisionDetailRecord,
+    SpecificationRevisionRecord,
+)
 
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_SPECIFICATION_MAX_BYTES = 131_072
+_SPECIFICATION_MAX_LINES = 2_000
 
 
 def is_git_repository(cwd: Path) -> bool:
@@ -162,6 +168,175 @@ def file_history(
         working_tree=working_tree,
         truncated=log[1] or status[1] or len(revisions) >= max_revisions,
     )
+
+
+def file_revision(
+    cwd: Path,
+    relative_path: str,
+    revision_id: str,
+    *,
+    max_output_bytes: int = _SPECIFICATION_MAX_BYTES,
+    max_lines: int = _SPECIFICATION_MAX_LINES,
+) -> SpecificationRevisionDetailRecord:
+    """Read one bounded revision of an already validated repository file."""
+
+    if revision_id != "working-tree" and _COMMIT_SHA.fullmatch(revision_id) is None:
+        return _unavailable_revision(revision_id, "Specification revision id is invalid")
+    if not is_git_repository(cwd):
+        return _unavailable_revision(revision_id, "Project is not a Git repository")
+
+    try:
+        history = file_history(cwd, relative_path)
+    except RuntimeError:
+        return _unavailable_revision(revision_id, "Git could not read specification history")
+    revision = next((item for item in history.revisions if item.id == revision_id), None)
+    if revision is None:
+        return _unavailable_revision(
+            revision_id,
+            "Specification revision is not present in the registered file history",
+        )
+    index = history.revisions.index(revision)
+    previous = next(
+        (item.id for item in history.revisions[index + 1 :] if item.id != "working-tree"),
+        None,
+    )
+    try:
+        if revision.kind == "working-tree":
+            raw_content = (cwd / relative_path).read_bytes()
+            raw_diff, diff_capture_truncated, _ = _run_bounded_git_bytes(
+                cwd,
+                ("diff", "--no-ext-diff", "--", relative_path),
+                max_output_bytes,
+            )
+            content_capture_truncated = len(raw_content) > max_output_bytes
+            content_size = len(raw_content)
+        else:
+            assert revision.sha is not None
+            raw_content, content_capture_truncated, content_size = _run_bounded_git_bytes(
+                cwd,
+                ("show", f"{revision.sha}:{relative_path}"),
+                max_output_bytes,
+            )
+            raw_diff, diff_capture_truncated, _ = _run_bounded_git_bytes(
+                cwd,
+                (
+                    "show",
+                    "--format=",
+                    "--no-ext-diff",
+                    "--unified=3",
+                    revision.sha,
+                    "--",
+                    relative_path,
+                ),
+                max_output_bytes,
+            )
+    except (OSError, RuntimeError):
+        return _unavailable_revision(revision_id, "Git could not read specification revision")
+
+    binary = b"\0" in raw_content
+    content, content_truncated, encoding = _bounded_text(
+        raw_content,
+        max_output_bytes=max_output_bytes,
+        max_lines=max_lines,
+        allow_binary=False,
+    )
+    diff, diff_truncated, _ = _bounded_text(
+        raw_diff,
+        max_output_bytes=max_output_bytes,
+        max_lines=max_lines,
+        allow_binary=True,
+    )
+    return SpecificationRevisionDetailRecord(
+        available=True,
+        uri=None,
+        revision_id=revision.id,
+        kind=revision.kind,
+        sha=revision.sha,
+        previous_revision_id=previous,
+        timestamp=revision.timestamp,
+        author=revision.author,
+        subject=revision.subject,
+        content=None if binary else content,
+        diff=diff,
+        size_bytes=content_size,
+        content_truncated=content_capture_truncated or content_truncated,
+        diff_truncated=diff_capture_truncated or diff_truncated,
+        encoding="binary" if binary else encoding,
+        binary=binary,
+    )
+
+
+def _unavailable_revision(revision_id: str, reason: str) -> SpecificationRevisionDetailRecord:
+    return SpecificationRevisionDetailRecord(
+        available=False,
+        uri=None,
+        revision_id=revision_id,
+        kind=None,
+        sha=None,
+        previous_revision_id=None,
+        timestamp=None,
+        author=None,
+        subject=None,
+        content=None,
+        diff=None,
+        size_bytes=0,
+        content_truncated=False,
+        diff_truncated=False,
+        encoding="unavailable",
+        binary=False,
+        reason=reason,
+    )
+
+
+def _bounded_text(
+    value: bytes,
+    *,
+    max_output_bytes: int,
+    max_lines: int,
+    allow_binary: bool,
+) -> tuple[str | None, bool, str]:
+    if b"\0" in value and not allow_binary:
+        return None, False, "binary"
+    byte_truncated = len(value) > max_output_bytes
+    bounded = value[:max_output_bytes]
+    decoded = bounded.decode("utf-8", errors="replace")
+    lines = decoded.splitlines(keepends=True)
+    line_truncated = len(lines) > max_lines
+    if line_truncated:
+        decoded = "".join(lines[:max_lines])
+    encoding = "utf-8" if "\ufffd" not in decoded else "utf-8-replacement"
+    return decoded, byte_truncated or line_truncated, encoding
+
+
+def _run_bounded_git_bytes(
+    cwd: Path, arguments: tuple[str, ...], max_output_bytes: int
+) -> tuple[bytes, bool, int]:
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "LC_ALL": "C",
+        "LANG": "C",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_PAGER": "cat",
+        "PAGER": "cat",
+    }
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), *arguments],
+            capture_output=True,
+            check=False,
+            timeout=5,
+            env=environment,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as error:
+        raise RuntimeError("Bounded Git revision read failed") from error
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Git could not read specification revision (exit code {result.returncode})"
+        )
+    size = len(result.stdout)
+    return result.stdout[:max_output_bytes], size > max_output_bytes, size
 
 
 def _run_bounded_git(
