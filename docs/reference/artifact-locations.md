@@ -110,6 +110,7 @@ Agora creates current collaboration state under `.agora/`. Common records includ
 .agora/sessions/<session>/PROGRESS.md
 .agora/sessions/<session>/RESULT.md
 .agora/swarms/<swarm>/work/<work>/usage/<usage>/USAGE.md
+.agora/swarms/<swarm>/work/<work>/budget-amendments/<amendment>/AMENDMENT.md
 .agora/tool-runs/<run>/RUN.md
 .agora/tool-runs/<run>/RESULT.md
 ```
@@ -131,8 +132,11 @@ logs as a replacement for the durable record.
 
 Agora normally references produced work rather than copying opaque content. A specification, source
 tree, test report, ticket, build, deployment, or external page remains in its owning repository or
-provider. The work item's `artifacts.md` records its kind, URI, producer, and timestamp. Its
-`evidence.md` records verification outcomes and artifact references used by lifecycle gates.
+provider. The work item's `artifacts.md` records its kind, URI, optional content SHA-256, producer,
+and timestamp. Its `evidence.md` records verification outcomes, artifact references, and the durable
+digest observed for each relationship. Remote content stays provider-owned and is never fetched
+automatically. `budget-amendments/*/AMENDMENT.md` preserves each authorized change to a child's
+current budget without rewriting the historical decision.
 
 Generated `consistency-report` and `gherkin-feature` artifacts follow the same rule. Generation does
 not make them lifecycle requirements; a work item's `required-artifacts` or a Method Pack gate must

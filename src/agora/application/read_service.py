@@ -34,6 +34,7 @@ from agora.application.dto import (
     WorkItemSummary,
 )
 from agora.application.errors import (
+    ConcurrentDurableEditError,
     InvalidDurableStateError,
     InvalidReadQueryError,
     ProjectNotFoundError,
@@ -89,6 +90,7 @@ class AgoraReadService:
                 default_method=configuration.default_method,
                 max_delegation_depth=configuration.max_delegation_depth,
                 created_at=configuration.created_at,
+                gate_decision_ttl_seconds=configuration.gate_decision_ttl_seconds,
                 branch=status.branch,
                 counts=status.counts,
                 swarm_statuses=status.swarm_statuses,
@@ -419,6 +421,10 @@ class AgoraReadService:
                     required_evidence_types=record.required_evidence_types,
                     evidence_references=record.evidence_references,
                     evidence_references_by_type=record.evidence_references_by_type,
+                    evidence_content_sha256=record.evidence_content_sha256,
+                    content_addressed_evidence_required=(
+                        record.content_addressed_evidence_required
+                    ),
                     authentication_required=record.authentication_required,
                     authentication_algorithm=record.authentication_algorithm,
                     authentication_fingerprint=record.authentication_fingerprint,
@@ -449,50 +455,59 @@ class AgoraReadService:
     def work_control_projection(self, swarm_id: str, work_id: str) -> WorkControlProjection:
         self._require_work_slugs(swarm_id, work_id)
 
+        def assemble() -> WorkControlProjection:
+            work = self.get_work_item(swarm_id, work_id)
+            lifecycle = self.lifecycle(swarm_id, work_id)
+            traceability = self.work_traceability(swarm_id, work_id)
+            specification = self.specification_history(swarm_id, work_id)
+            options = self.gate_decision_options(swarm_id, work_id)
+            if not (
+                work.state == lifecycle.current_state == traceability.state == options.current_state
+            ):
+                raise InvalidDurableStateError(
+                    "Work changed while its control projection was being read"
+                )
+            material = {
+                "work": work.to_dict(),
+                "lifecycle": lifecycle.to_dict(),
+                "artifacts": [item.to_dict() for item in work.artifacts],
+                "evidence": [item.to_dict() for item in work.evidence],
+                "approvals": [item.to_dict() for item in work.approvals],
+                "traceability": traceability.to_dict(),
+                "specification_history": specification.to_dict(),
+                "gate_decision_options": options.to_dict(),
+            }
+            snapshot_token = hashlib.sha256(
+                json.dumps(
+                    material,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("ascii")
+            ).hexdigest()
+            return WorkControlProjection(
+                snapshot_token=snapshot_token,
+                work=work,
+                lifecycle=lifecycle,
+                artifacts=work.artifacts,
+                evidence=work.evidence,
+                approvals=work.approvals,
+                traceability=traceability,
+                specification_history=specification,
+                gate_decision_options=options,
+            )
+
         def read() -> WorkControlProjection:
             with self._workspace.consistent_read("work-control-projection"):
-                work = self.get_work_item(swarm_id, work_id)
-                lifecycle = self.lifecycle(swarm_id, work_id)
-                traceability = self.work_traceability(swarm_id, work_id)
-                specification = self.specification_history(swarm_id, work_id)
-                options = self.gate_decision_options(swarm_id, work_id)
-                if not (
-                    work.state
-                    == lifecycle.current_state
-                    == traceability.state
-                    == options.current_state
-                ):
-                    raise InvalidDurableStateError(
-                        "Work changed while its control projection was being read"
-                    )
-                material = {
-                    "work": work.to_dict(),
-                    "lifecycle": lifecycle.to_dict(),
-                    "artifacts": [item.to_dict() for item in work.artifacts],
-                    "evidence": [item.to_dict() for item in work.evidence],
-                    "approvals": [item.to_dict() for item in work.approvals],
-                    "traceability": traceability.to_dict(),
-                    "specification_history": specification.to_dict(),
-                    "gate_decision_options": options.to_dict(),
-                }
-                snapshot_token = hashlib.sha256(
-                    json.dumps(
-                        material,
-                        ensure_ascii=True,
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    ).encode("ascii")
-                ).hexdigest()
-                return WorkControlProjection(
-                    snapshot_token=snapshot_token,
-                    work=work,
-                    lifecycle=lifecycle,
-                    artifacts=work.artifacts,
-                    evidence=work.evidence,
-                    approvals=work.approvals,
-                    traceability=traceability,
-                    specification_history=specification,
-                    gate_decision_options=options,
+                for _ in range(3):
+                    before = self._workspace.work_control_read_set_sha256(swarm_id, work_id)
+                    projection = assemble()
+                    after = self._workspace.work_control_read_set_sha256(swarm_id, work_id)
+                    if before == after:
+                        return projection
+                raise ConcurrentDurableEditError(
+                    "Durable work control material changed during three read attempts",
+                    details={"stale_reason": "external-edit"},
                 )
 
         return self._read(f"work control projection {swarm_id}/{work_id}", read)
@@ -662,6 +677,7 @@ class AgoraReadService:
             wip_limits=contract.wip_limits,
             criterion_stages=contract.criterion_stages,
             criterion_stage_roles=contract.criterion_stage_roles,
+            gate_decision_ttl_seconds=contract.gate_decision_ttl_seconds,
         )
 
     @staticmethod
@@ -699,6 +715,7 @@ class AgoraReadService:
             required_criterion_stage=gate.required_criterion_stage,
             require_successful_evidence=gate.require_successful_evidence,
             required_evidence_types=gate.required_evidence_types,
+            require_content_addressed_evidence=gate.require_content_addressed_evidence,
             required_approval_roles=gate.required_approval_roles,
             require_clean_git=gate.require_clean_git,
             require_git_commit=gate.require_git_commit,
@@ -713,6 +730,7 @@ class AgoraReadService:
             uri=record.uri,
             produced_by=record.produced_by,
             timestamp=record.timestamp,
+            content_sha256=record.content_sha256,
         )
 
     @staticmethod
@@ -721,6 +739,7 @@ class AgoraReadService:
             type=record.type,
             result=record.result,
             artifact_references=record.artifact_references,
+            artifact_content_sha256=record.artifact_content_sha256,
             produced_by=record.produced_by,
             timestamp=record.timestamp,
         )

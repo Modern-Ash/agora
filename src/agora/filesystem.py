@@ -37,6 +37,29 @@ class _FileSnapshot:
     mode: int | None
 
 
+class FilesystemTransactionFailure(OSError):
+    """A compound Markdown commit failed, optionally leaving indeterminate state."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        phase: str,
+        write_set: tuple[str, ...],
+        rollback_errors: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.phase = phase
+        self.write_set = write_set
+        self.rollback_errors = rollback_errors
+        self.indeterminate = bool(rollback_errors)
+        self.recovery_hint = (
+            "Stop mutations, inspect Git and run `agora validate` before recovery."
+            if self.indeterminate
+            else "Correct the persistence failure and retry the complete operation."
+        )
+
+
 class FilesystemTransaction:
     """Stage related Markdown writes and commit or roll them back as one mutation."""
 
@@ -46,7 +69,15 @@ class FilesystemTransaction:
     def write(self, path: Path, contents: str) -> None:
         self._writes[path] = contents
 
+    def contains(self, path: Path) -> bool:
+        return path in self._writes
+
+    def contents(self, path: Path) -> str | None:
+        return self._writes.get(path)
+
     def write_new(self, path: Path, contents: str, force: bool = False) -> None:
+        if path in self._writes and self._writes[path] == contents and not force:
+            return
         if (path in self._writes or path.exists()) and not force:
             raise FileExistsError(
                 f"Refusing to overwrite existing file: {path}. Pass --force to replace it."
@@ -96,12 +127,20 @@ class FilesystemTransaction:
                     directory.rmdir()
                 except OSError:
                     pass
+            write_set = tuple(str(path) for path in self._writes)
             if rollback_errors:
-                error.add_note(
-                    "Filesystem transaction rollback encountered errors: "
-                    + "; ".join(str(item) for item in rollback_errors)
-                )
-            raise
+                raise FilesystemTransactionFailure(
+                    "Filesystem transaction failed and rollback was incomplete: "
+                    + "; ".join(str(item) for item in rollback_errors),
+                    phase="rollback",
+                    write_set=write_set,
+                    rollback_errors=tuple(str(item) for item in rollback_errors),
+                ) from error
+            raise FilesystemTransactionFailure(
+                f"Filesystem transaction commit failed: {error}",
+                phase="commit",
+                write_set=write_set,
+            ) from error
 
 
 _ACTIVE_TRANSACTION: ContextVar[FilesystemTransaction | None] = ContextVar(
@@ -155,6 +194,20 @@ def append_entry(path: Path, entry: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
         stream.write(f"{entry.rstrip()}\n")
+
+
+def has_staged_write(path: Path) -> bool:
+    """Return whether the active compound transaction already owns this path."""
+
+    transaction = _ACTIVE_TRANSACTION.get()
+    return transaction is not None and transaction.contains(path)
+
+
+def staged_contents(path: Path) -> str | None:
+    """Read the latest staged value for transaction-local read-your-writes semantics."""
+
+    transaction = _ACTIVE_TRANSACTION.get()
+    return None if transaction is None else transaction.contents(path)
 
 
 def _missing_parent_directories(path: Path) -> list[Path]:

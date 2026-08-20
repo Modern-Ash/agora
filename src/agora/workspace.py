@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from threading import local
@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from agora.consistency import durable_read_set_sha256
 from agora.coordination import (
     ExternalLease,
     LeaseRunner,
@@ -35,7 +36,10 @@ from agora.domain_errors import (
     EvidenceMissingRuleError,
     GateAlreadyResolvedRuleError,
     GateDecisionRoleRuleError,
+    GovernedMaterialStaleRuleError,
+    PreparationExpiredRuleError,
     ProjectIdentityMismatchRuleError,
+    SignatureInvalidRuleError,
     SignatureRequiredRuleError,
     StalePreconditionRuleError,
 )
@@ -47,7 +51,9 @@ from agora.filesystem import (
     copy_template_tree,
     filesystem_transaction,
     find_project_root,
+    has_staged_write,
     packs_root,
+    staged_contents,
     write_new,
 )
 from agora.git import (
@@ -92,6 +98,7 @@ from agora.markdown import (
     MarkdownDocument,
     optional_integer_record_attribute,
     optional_string_attribute,
+    parse_markdown,
     read_markdown,
     record_attribute,
     render_markdown,
@@ -102,6 +109,7 @@ from agora.markdown import (
 from agora.methods import load_method_contract
 from agora.model import (
     ACTOR_KINDS,
+    DEFAULT_GATE_DECISION_TTL_SECONDS,
     DEFAULT_SESSION_MAX_OUTPUT_BYTES,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
     INTEGRATIONS,
@@ -131,6 +139,9 @@ from agora.model import (
     AssignActorInput,
     AuditPackUpdatesInput,
     AuditRegistryUpdatesInput,
+    BudgetAmendmentInput,
+    BudgetAmendmentRecord,
+    BudgetAmendmentResult,
     CatalogPackRecord,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
@@ -203,6 +214,7 @@ from agora.model import (
     PrepareCreateDelegationInput,
     PrepareCreateWorkInput,
     PrepareCriterionInput,
+    PreparedBudgetAmendmentRecord,
     PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
     PreparedGateDecisionRecord,
@@ -279,6 +291,12 @@ from agora.model import (
     WorkRecord,
     WorkspaceLockStatus,
     WorkspaceStatus,
+)
+from agora.mutation_handlers import (
+    ArtifactMutationContext,
+    CriterionMutationContext,
+    EvidenceMutationContext,
+    WorkLifecycleHandlers,
 )
 from agora.organization_trust import (
     advance_organization_trust_root,
@@ -366,6 +384,17 @@ def _locked_mutation(scope: str) -> Callable:
         return guarded
 
     return decorate
+
+
+def _compound_mutation(method: Callable) -> Callable:
+    """Join every nested durable write made by one operation into one transaction."""
+
+    @wraps(method)
+    def transactional(self: "AgoraWorkspace", *args: object, **kwargs: object) -> object:
+        with filesystem_transaction():
+            return method(self, *args, **kwargs)
+
+    return transactional
 
 
 class AgoraWorkspace:
@@ -457,9 +486,11 @@ class AgoraWorkspace:
                 else (user.max_delegation_depth if user else 3)
             ),
             created_at=self._timestamp(),
+            gate_decision_ttl_seconds=data.gate_decision_ttl_seconds,
         )
         self._assert_integration(configuration.integration)
         self._assert_delegation_depth(configuration.max_delegation_depth)
+        self._assert_gate_decision_ttl(configuration.gate_decision_ttl_seconds)
         self._assert_method_available(
             configuration.default_method,
             packs_root() / "methods",
@@ -480,6 +511,7 @@ class AgoraWorkspace:
                         "model": configuration.model,
                         "default-method": configuration.default_method,
                         "max-delegation-depth": configuration.max_delegation_depth,
+                        "gate-decision-ttl-seconds": (configuration.gate_decision_ttl_seconds or 0),
                         "created-at": configuration.created_at,
                     },
                     body=(
@@ -3000,11 +3032,20 @@ class AgoraWorkspace:
             for item in self.action_candidates(swarm.id, "approval.add")
         }
         successful_by_type: dict[str, list[str]] = {}
-        for evidence_type, result, references in self._work_evidence_rows(work):
-            if result != "success":
+        evidence_content_sha256: dict[str, str | None] = {}
+        for evidence_record in self._work_evidence_records(work):
+            if evidence_record.result != "success":
                 continue
-            bucket = successful_by_type.setdefault(evidence_type, [])
-            bucket.extend(reference for reference in references if reference not in bucket)
+            bucket = successful_by_type.setdefault(evidence_record.type, [])
+            bucket.extend(
+                reference
+                for reference in evidence_record.artifact_references
+                if reference not in bucket
+            )
+            for reference in evidence_record.artifact_references:
+                evidence_content_sha256[reference] = evidence_record.artifact_content_sha256.get(
+                    reference
+                )
         options: list[GateDecisionOptionRecord] = []
         for transition in assessment.transitions:
             if transition.source != work.state or transition.gate_id is None:
@@ -3133,6 +3174,13 @@ class AgoraWorkspace:
                             ),
                             evidence_references=eligible_references,
                             evidence_references_by_type=eligible_by_type,
+                            evidence_content_sha256={
+                                reference: evidence_content_sha256.get(reference)
+                                for reference in eligible_references
+                            },
+                            content_addressed_evidence_required=(
+                                decision == "approved" and gate.require_content_addressed_evidence
+                            ),
                             authentication_required=(
                                 actor.authentication_required if actor is not None else False
                             ),
@@ -3185,10 +3233,33 @@ class AgoraWorkspace:
         evidence_refs = list(
             dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
         )
+        if data.prepared_at is None:
+            if data.expires_at is not None:
+                raise GovernedMaterialStaleRuleError(
+                    "Gate decision expiration requires a preparation timestamp",
+                    stale_reason="preparation-invalid",
+                )
+            prepared_at, expires_at = self._gate_preparation_window(root, swarm)
+        else:
+            prepared_at, expires_at = data.prepared_at, data.expires_at
+            self._assert_preparation_window(prepared_at, expires_at)
         digest = self._gate_decision_precondition_sha256(
-            root, swarm, work, option, data.actor_id, " ".join(data.reason.split()), evidence_refs
+            root,
+            swarm,
+            work,
+            option,
+            data.actor_id,
+            " ".join(data.reason.split()),
+            evidence_refs,
+            prepared_at,
+            expires_at,
         )
-        prepared = PreparedGateDecisionRecord(option=option, precondition_digest=digest)
+        prepared = PreparedGateDecisionRecord(
+            option=option,
+            precondition_digest=digest,
+            prepared_at=prepared_at,
+            expires_at=expires_at,
+        )
         if option.actor_id not in {
             data.actor_id,
             f"project:{data.actor_id}",
@@ -3249,13 +3320,15 @@ class AgoraWorkspace:
         requested_actor_id: str,
         reason: str,
         evidence_refs: list[str],
+        prepared_at: str,
+        expires_at: str | None,
     ) -> str:
         """Hash the durable, governed material behind one exact gate option."""
 
         artifacts = []
         artifact_digests: dict[str, str | None] = {}
         for record in self._work_artifact_records(work):
-            digest: str | None = None
+            digest = record.content_sha256
             if record.uri.startswith("repo://"):
                 self._assert_artifact_reference(root, record.uri)
                 digest = hashlib.sha256(
@@ -3264,19 +3337,49 @@ class AgoraWorkspace:
             elif record.uri.startswith("git://"):
                 self._assert_artifact_reference(root, record.uri)
                 digest = record.uri.removeprefix("git://")
-            artifacts.append({"kind": record.kind, "uri": record.uri, "sha256": digest})
+            artifacts.append(
+                {
+                    "kind": record.kind,
+                    "uri": record.uri,
+                    "content-sha256": digest,
+                    "registered-content-sha256": record.content_sha256,
+                    "produced-by": record.produced_by,
+                    "timestamp": record.timestamp,
+                }
+            )
             artifact_digests[record.uri] = digest
+        evidence_records = self._work_evidence_records(work)
         evidence = [
             {
                 "type": record.type,
                 "result": record.result,
                 "references": record.artifact_references,
-                "reference-digests": {
+                "reference-content-sha256": record.artifact_content_sha256,
+                "current-reference-content-sha256": {
                     reference: artifact_digests.get(reference)
                     for reference in record.artifact_references
                 },
+                "produced-by": record.produced_by,
+                "timestamp": record.timestamp,
             }
-            for record in self._work_evidence_records(work)
+            for record in evidence_records
+        ]
+        selected_evidence = [
+            {
+                "uri": reference,
+                "artifact-content-sha256": artifact_digests.get(reference),
+                "evidence": [
+                    {
+                        "type": record.type,
+                        "result": record.result,
+                        "content-sha256": record.artifact_content_sha256.get(reference),
+                        "produced-by": record.produced_by,
+                    }
+                    for record in evidence_records
+                    if reference in record.artifact_references
+                ],
+            }
+            for reference in evidence_refs
         ]
         approvals = [
             {"role": record.role, "actor": record.actor, "note": record.note}
@@ -3292,7 +3395,7 @@ class AgoraWorkspace:
         ]
         return self._canonical_sha256(
             {
-                "schema": "agora/application/gate-decision-precondition/v1",
+                "schema": "agora/application/gate-decision-precondition/v2",
                 "project": self._load_project_configuration(root).project,
                 "swarm": swarm.id,
                 "work": work.id,
@@ -3315,7 +3418,9 @@ class AgoraWorkspace:
                 "specifications": [
                     artifact for artifact in artifacts if artifact["kind"] == "spec"
                 ],
-                "selected-evidence-references": evidence_refs,
+                "selected-evidence-references": selected_evidence,
+                "prepared-at": prepared_at,
+                "expires-at": expires_at,
                 "option": {
                     "expected-state": option.expected_state,
                     "transition-source": option.transition_source,
@@ -3331,6 +3436,49 @@ class AgoraWorkspace:
                 },
             }
         )
+
+    def _gate_preparation_window(self, root: Path, swarm: SwarmRecord) -> tuple[str, str | None]:
+        project_ttl = self._load_project_configuration(root).gate_decision_ttl_seconds
+        method_ttl = load_method_contract(
+            root / ".agora" / "methods" / swarm.method
+        ).gate_decision_ttl_seconds
+        ttl = project_ttl if method_ttl is None else (method_ttl or None)
+        now = self._now().astimezone(UTC)
+        prepared_at = self._format_timestamp(now)
+        expires_at = self._format_timestamp(now + timedelta(seconds=ttl)) if ttl else None
+        return prepared_at, expires_at
+
+    def _assert_preparation_window(self, prepared_at: str | None, expires_at: str | None) -> None:
+        if prepared_at is None:
+            raise GovernedMaterialStaleRuleError(
+                "Gate decision is missing its Core preparation timestamp",
+                stale_reason="preparation-missing",
+            )
+        prepared = self._parse_utc_timestamp(prepared_at, "prepared_at")
+        if expires_at is None:
+            return
+        expires = self._parse_utc_timestamp(expires_at, "expires_at")
+        if expires <= prepared:
+            raise GovernedMaterialStaleRuleError(
+                "Gate decision expiration does not follow its preparation time",
+                stale_reason="preparation-invalid",
+            )
+        if self._now().astimezone(UTC) >= expires:
+            raise PreparationExpiredRuleError("Gate decision preparation has expired")
+
+    @staticmethod
+    def _parse_utc_timestamp(value: str, label: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError(f"{label} must be an ISO-8601 timestamp") from error
+        if parsed.tzinfo is None:
+            raise ValueError(f"{label} must include a UTC offset")
+        return parsed.astimezone(UTC)
+
+    @staticmethod
+    def _format_timestamp(value: datetime) -> str:
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
     def list_tools(self) -> list[ToolPackRecord]:
         tool_root = self.project_root() / ".agora" / "tools"
@@ -4232,6 +4380,7 @@ class AgoraWorkspace:
                 "has_success": True,
                 "evidence_missing": False,
                 "missing_evidence_types": [],
+                "missing_content_digests": [],
                 "missing_approvals": [],
                 "git_issues": [],
             }
@@ -4242,6 +4391,7 @@ class AgoraWorkspace:
                 assessment["missing_artifacts"],
                 assessment["evidence_missing"],
                 assessment["missing_evidence_types"],
+                assessment["missing_content_digests"],
                 assessment["git_issues"],
             )
         )
@@ -4363,10 +4513,11 @@ class AgoraWorkspace:
                 path / "artifacts.md",
                 render_markdown(
                     MarkdownDocument(
-                        attributes={"schema": "agora/artifacts/v1", "artifact-kinds": []},
+                        attributes={"schema": "agora/artifacts/v2", "artifact-kinds": []},
                         body=(
-                            "# Artifacts\n\n| Kind | URI | Produced by | Timestamp |\n"
-                            "| --- | --- | --- | --- |"
+                            "# Artifacts\n\n"
+                            "| Kind | URI | Content SHA-256 | Produced by | Timestamp |\n"
+                            "| --- | --- | --- | --- | --- |"
                         ),
                     )
                 ),
@@ -4375,11 +4526,12 @@ class AgoraWorkspace:
                 path / "evidence.md",
                 render_markdown(
                     MarkdownDocument(
-                        attributes={"schema": "agora/evidence/v1", "results": []},
+                        attributes={"schema": "agora/evidence/v2", "results": []},
                         body=(
                             "# Evidence\n\n"
-                            "| Type | Result | Artifact references | Produced by | Timestamp |\n"
-                            "| --- | --- | --- | --- | --- |"
+                            "| Type | Result | Artifact references | Content SHA-256 | "
+                            "Produced by | Timestamp |\n"
+                            "| --- | --- | --- | --- | --- | --- |"
                         ),
                     )
                 ),
@@ -4468,6 +4620,7 @@ class AgoraWorkspace:
         context = self._validate_create_work(root, child, action="work.decompose")
         return parent, child, context
 
+    @_compound_mutation
     def _apply_decompose_work(
         self,
         parent: WorkRecord,
@@ -4644,6 +4797,17 @@ class AgoraWorkspace:
         work: WorkRecord,
         action_id: str | None = None,
     ) -> GateWaiverRecord:
+        with filesystem_transaction():
+            return self._apply_gate_waiver_writes(data, swarm, actor, work, action_id)
+
+    def _apply_gate_waiver_writes(
+        self,
+        data: WaiveGateInput,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        action_id: str | None = None,
+    ) -> GateWaiverRecord:
         waiver_root = Path(work.path) / "waivers" / data.id
         record = GateWaiverRecord(
             id=data.id,
@@ -4768,6 +4932,20 @@ class AgoraWorkspace:
         stage: str | None,
         criterion_stages: list[str],
     ) -> WorkRecord:
+        with filesystem_transaction():
+            return self._apply_satisfy_criterion_writes(
+                swarm, actor, work, criterion_id, stage, criterion_stages
+            )
+
+    def _apply_satisfy_criterion_writes(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        criterion_id: str,
+        stage: str | None,
+        criterion_stages: list[str],
+    ) -> WorkRecord:
         stages = criterion_stages if stage is None else [stage]
         work.criterion_statuses[criterion_id] = list(
             dict.fromkeys([*work.criterion_statuses.get(criterion_id, []), *stages])
@@ -4811,7 +4989,12 @@ class AgoraWorkspace:
             actor=actor,
             swarm=swarm,
             work=work,
-            parameters={"kind": data.kind, "uri": data.uri},
+            parameters={
+                "kind": data.kind,
+                "uri": data.uri,
+                "content-sha256": self._artifact_content_sha256(root, data.uri, data.content_sha256)
+                or "",
+            },
         )
 
     def _validate_add_artifact(
@@ -4820,6 +5003,7 @@ class AgoraWorkspace:
         if not data.kind.strip():
             raise ValueError("Artifact kind cannot be empty")
         self._assert_artifact_reference(root, data.uri)
+        self._artifact_content_sha256(root, data.uri, data.content_sha256)
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "artifact.add")
         work = self._load_work(swarm, data.work_id)
@@ -4833,16 +5017,49 @@ class AgoraWorkspace:
         work: WorkRecord,
         data: AddArtifactInput,
     ) -> WorkRecord:
-        self._record_artifact(work, data.kind, data.uri, actor.reference)
+        root = Path(work.path).parents[4]
+        self._record_artifact(
+            work,
+            data.kind,
+            data.uri,
+            actor.reference,
+            self._artifact_content_sha256(root, data.uri, data.content_sha256),
+        )
         return self._load_work(swarm, data.work_id)
 
-    def _record_artifact(self, work: WorkRecord, kind: str, uri: str, actor_reference: str) -> None:
+    def _record_artifact(
+        self,
+        work: WorkRecord,
+        kind: str,
+        uri: str,
+        actor_reference: str,
+        content_sha256: str | None = None,
+    ) -> None:
+        with filesystem_transaction():
+            self._record_artifact_writes(work, kind, uri, actor_reference, content_sha256)
+
+    def _record_artifact_writes(
+        self,
+        work: WorkRecord,
+        kind: str,
+        uri: str,
+        actor_reference: str,
+        content_sha256: str | None = None,
+    ) -> None:
         path = Path(work.path) / "artifacts.md"
-        document = read_markdown(path)
+        pending = staged_contents(path)
+        document = parse_markdown(pending) if pending is not None else read_markdown(path)
         kinds = strings_attribute(document.attributes, "artifact-kinds")
         document.attributes["artifact-kinds"] = list(dict.fromkeys([*kinds, kind]))
+        schema = string_attribute(document.attributes, "schema")
+        if schema == "agora/artifacts/v1":
+            document.attributes["schema"] = "agora/artifacts/v2"
+            existing = self._work_artifact_records(work)
+            document.body = self._render_artifact_register(existing)
+        elif schema != "agora/artifacts/v2":
+            raise ValueError(f"Unsupported artifacts schema: {schema}")
         document.body = (
-            f"{document.body.rstrip()}\n| {kind} | {uri} | "
+            f"{document.body.rstrip()}\n| {kind} | {uri} | {content_sha256 or 'none'} | "
             f"{actor_reference} | {self._timestamp()} |"
         )
         atomic_write(path, render_markdown(document))
@@ -5715,22 +5932,71 @@ class AgoraWorkspace:
 
     @classmethod
     def _work_artifact_records(cls, work: WorkRecord) -> list[ArtifactRecord]:
-        document = read_markdown(Path(work.path) / "artifacts.md")
+        path = Path(work.path) / "artifacts.md"
+        pending = staged_contents(path)
+        document = parse_markdown(pending) if pending is not None else read_markdown(path)
+        schema = string_attribute(document.attributes, "schema")
+        if schema == "agora/artifacts/v1":
+            rows = cls._markdown_table_rows(
+                document.body,
+                ("Kind", "URI", "Produced by", "Timestamp"),
+            )
+            return [
+                ArtifactRecord(kind=row[0], uri=row[1], produced_by=row[2], timestamp=row[3])
+                for row in rows
+            ]
+        if schema != "agora/artifacts/v2":
+            raise ValueError(f"Unsupported artifacts schema: {schema}")
         rows = cls._markdown_table_rows(
             document.body,
-            ("Kind", "URI", "Produced by", "Timestamp"),
+            ("Kind", "URI", "Content SHA-256", "Produced by", "Timestamp"),
         )
         return [
-            ArtifactRecord(kind=row[0], uri=row[1], produced_by=row[2], timestamp=row[3])
+            ArtifactRecord(
+                kind=row[0],
+                uri=row[1],
+                content_sha256=cls._optional_content_sha256(row[2]),
+                produced_by=row[3],
+                timestamp=row[4],
+            )
             for row in rows
         ]
 
     @classmethod
     def _work_evidence_records(cls, work: WorkRecord) -> list[EvidenceRecord]:
-        document = read_markdown(Path(work.path) / "evidence.md")
+        path = Path(work.path) / "evidence.md"
+        pending = staged_contents(path)
+        document = parse_markdown(pending) if pending is not None else read_markdown(path)
+        schema = string_attribute(document.attributes, "schema")
+        if schema == "agora/evidence/v1":
+            rows = cls._markdown_table_rows(
+                document.body,
+                ("Type", "Result", "Artifact references", "Produced by", "Timestamp"),
+            )
+            return [
+                EvidenceRecord(
+                    type=row[0],
+                    result=row[1],
+                    artifact_references=(
+                        [] if row[2] == "none" else [item.strip() for item in row[2].split(", ")]
+                    ),
+                    produced_by=row[3],
+                    timestamp=row[4],
+                )
+                for row in rows
+            ]
+        if schema != "agora/evidence/v2":
+            raise ValueError(f"Unsupported evidence schema: {schema}")
         rows = cls._markdown_table_rows(
             document.body,
-            ("Type", "Result", "Artifact references", "Produced by", "Timestamp"),
+            (
+                "Type",
+                "Result",
+                "Artifact references",
+                "Content SHA-256",
+                "Produced by",
+                "Timestamp",
+            ),
         )
         return [
             EvidenceRecord(
@@ -5739,11 +6005,46 @@ class AgoraWorkspace:
                 artifact_references=(
                     [] if row[2] == "none" else [item.strip() for item in row[2].split(", ")]
                 ),
-                produced_by=row[3],
-                timestamp=row[4],
+                artifact_content_sha256=cls._evidence_digest_map(row[2], row[3]),
+                produced_by=row[4],
+                timestamp=row[5],
             )
             for row in rows
         ]
+
+    @staticmethod
+    def _evidence_digest_map(references: str, digests: str) -> dict[str, str | None]:
+        reference_values = [] if references == "none" else references.split(", ")
+        digest_values = (
+            ["none"] * len(reference_values) if digests == "none" else digests.split(", ")
+        )
+        if reference_values and len(reference_values) != len(digest_values):
+            raise ValueError("Evidence content digests must align with artifact references")
+        return {
+            reference: AgoraWorkspace._optional_content_sha256(digest)
+            for reference, digest in zip(reference_values, digest_values, strict=True)
+        }
+
+    @staticmethod
+    def _optional_content_sha256(value: str) -> str | None:
+        if value == "none":
+            return None
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError("Artifact content SHA-256 must be 64 lowercase hexadecimal characters")
+        return value
+
+    @staticmethod
+    def _render_artifact_register(records: list[ArtifactRecord]) -> str:
+        body = (
+            "# Artifacts\n\n| Kind | URI | Content SHA-256 | Produced by | Timestamp |\n"
+            "| --- | --- | --- | --- | --- |"
+        )
+        for record in records:
+            body += (
+                f"\n| {record.kind} | {record.uri} | {record.content_sha256 or 'none'} | "
+                f"{record.produced_by} | {record.timestamp} |"
+            )
+        return body
 
     @classmethod
     def _work_approval_records(cls, work: WorkRecord) -> list[ApprovalRecord]:
@@ -5823,6 +6124,20 @@ class AgoraWorkspace:
         if not path.is_file():
             raise FileNotFoundError(f"Repository artifact does not exist: {uri} ({path})")
 
+    @staticmethod
+    def _artifact_content_sha256(root: Path, uri: str, declared: str | None) -> str | None:
+        if declared is not None and re.fullmatch(r"[0-9a-f]{64}", declared) is None:
+            raise ValueError("Artifact content SHA-256 must be 64 lowercase hexadecimal characters")
+        if uri.startswith("repo://"):
+            relative = uri.removeprefix("repo://")
+            calculated = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+            if declared is not None and declared != calculated:
+                raise ValueError(
+                    "Declared artifact content SHA-256 does not match repository content"
+                )
+            return calculated
+        return declared
+
     def _apply_add_evidence(
         self,
         swarm: SwarmRecord,
@@ -5847,13 +6162,38 @@ class AgoraWorkspace:
         artifact_refs: list[str],
         actor_reference: str,
     ) -> None:
+        with filesystem_transaction():
+            self._record_evidence_writes(work, type_, result, artifact_refs, actor_reference)
+
+    def _record_evidence_writes(
+        self,
+        work: WorkRecord | None,
+        type_: str,
+        result: str,
+        artifact_refs: list[str],
+        actor_reference: str,
+    ) -> None:
         path = Path(work.path) / "evidence.md"
-        document = read_markdown(path)
+        pending = staged_contents(path)
+        document = parse_markdown(pending) if pending is not None else read_markdown(path)
         results = strings_attribute(document.attributes, "results")
         document.attributes["results"] = [*results, result]
         references = ", ".join(artifact_refs) or "none"
+        artifact_digests = {
+            record.uri: record.content_sha256 for record in self._work_artifact_records(work)
+        }
+        digest_values = (
+            ", ".join(artifact_digests.get(reference) or "none" for reference in artifact_refs)
+            or "none"
+        )
+        schema = string_attribute(document.attributes, "schema")
+        if schema == "agora/evidence/v1":
+            document.attributes["schema"] = "agora/evidence/v2"
+            document.body = self._render_evidence_register(self._work_evidence_records(work))
+        elif schema != "agora/evidence/v2":
+            raise ValueError(f"Unsupported evidence schema: {schema}")
         document.body = (
-            f"{document.body.rstrip()}\n| {type_} | {result} | {references} | "
+            f"{document.body.rstrip()}\n| {type_} | {result} | {references} | {digest_values} | "
             f"{actor_reference} | {self._timestamp()} |"
         )
         atomic_write(path, render_markdown(document))
@@ -5862,6 +6202,27 @@ class AgoraWorkspace:
             "evidence.added",
             f"type={type_} result={result} actor={actor_reference}",
         )
+
+    @staticmethod
+    def _render_evidence_register(records: list[EvidenceRecord]) -> str:
+        body = (
+            "# Evidence\n\n| Type | Result | Artifact references | Content SHA-256 | "
+            "Produced by | Timestamp |\n| --- | --- | --- | --- | --- | --- |"
+        )
+        for record in records:
+            references = ", ".join(record.artifact_references) or "none"
+            digests = (
+                ", ".join(
+                    record.artifact_content_sha256.get(reference) or "none"
+                    for reference in record.artifact_references
+                )
+                or "none"
+            )
+            body += (
+                f"\n| {record.type} | {record.result} | {references} | {digests} | "
+                f"{record.produced_by} | {record.timestamp} |"
+            )
+        return body
 
     @_locked_mutation("project")
     def add_usage(self, data: AddUsageInput) -> UsageRecord:
@@ -5938,6 +6299,7 @@ class AgoraWorkspace:
                 raise ValueError(f"Usage exceeds work budget: {detail}")
         return swarm, actor, work, amounts
 
+    @_compound_mutation
     def _apply_add_usage(
         self,
         work: WorkRecord,
@@ -6002,6 +6364,394 @@ class AgoraWorkspace:
             remaining=remaining,
             records=len(records),
         )
+
+    @_locked_mutation("project")
+    def prepare_budget_amendment(self, data: BudgetAmendmentInput) -> PreparedBudgetAmendmentRecord:
+        """Resolve the parent authority and durable budget snapshot to authorize."""
+
+        root = self.project_root()
+        parent_swarm, parent, child, actor, previous, proposed, consumed = (
+            self._validate_budget_amendment(root, data)
+        )
+        if data.precondition_digest is not None or data.authentication_signature is not None:
+            raise ValueError("Budget amendment preparation cannot include confirmation material")
+        if data.prepared_at is not None or data.expires_at is not None:
+            raise ValueError("Budget amendment preparation timestamps are issued only by Core")
+        prepared_at, expires_at = self._gate_preparation_window(root, parent_swarm)
+        digest = self._budget_amendment_precondition_sha256(
+            root,
+            parent,
+            child,
+            actor,
+            data.role_id,
+            previous,
+            proposed,
+            consumed,
+            data.evidence_refs,
+            prepared_at,
+            expires_at,
+        )
+        return PreparedBudgetAmendmentRecord(
+            precondition_digest=digest,
+            prepared_at=prepared_at,
+            expires_at=expires_at,
+            parent_work_ref=f"{parent.swarm_id}/{parent.id}",
+            child_work_ref=f"{child.swarm_id}/{child.id}",
+            previous_limits=previous,
+            proposed_limits=proposed,
+            consumed=consumed,
+            actor=actor,
+            role=data.role_id,
+        )
+
+    @_locked_mutation("project")
+    def amend_budget(self, data: BudgetAmendmentInput) -> BudgetAmendmentResult:
+        """Apply one prepared amendment as an atomic, append-only governed mutation."""
+
+        root = self.project_root()
+        parent_swarm, parent, child, actor, previous, proposed, consumed = (
+            self._validate_budget_amendment(root, data)
+        )
+        self._assert_preparation_window(data.prepared_at, data.expires_at)
+        assert data.prepared_at is not None
+        expected = self._budget_amendment_precondition_sha256(
+            root,
+            parent,
+            child,
+            actor,
+            data.role_id,
+            previous,
+            proposed,
+            consumed,
+            data.evidence_refs,
+            data.prepared_at,
+            data.expires_at,
+        )
+        if data.precondition_digest != expected:
+            raise GovernedMaterialStaleRuleError(
+                "Budget, usage, authority, or evidence changed after preparation",
+                stale_reason="governed-material-changed",
+            )
+        authentication_fingerprint: str | None = None
+        if actor.authentication_required:
+            if any(
+                value is None
+                for value in (
+                    data.authentication_payload,
+                    data.authentication_signature,
+                    data.authentication_fingerprint,
+                )
+            ):
+                raise SignatureRequiredRuleError(
+                    f"Actor {actor.reference} requires a signed budget amendment"
+                )
+            self._assert_current_actor_key(actor)
+            if data.authentication_fingerprint != actor.authentication_fingerprint:
+                raise ActorUnauthorizedRuleError(
+                    f"Budget amendment authentication fingerprint does not match {actor.reference}"
+                )
+            assert data.authentication_payload is not None
+            assert data.authentication_signature is not None
+            try:
+                authentication_fingerprint, _, _, _ = verify_actor_inline_signature(
+                    actor,
+                    data.authentication_payload,
+                    data.authentication_signature,
+                    f"Budget amendment signature is invalid for {actor.reference}",
+                )
+            except ValueError as error:
+                raise SignatureInvalidRuleError(str(error)) from error
+        elif any(
+            value is not None
+            for value in (
+                data.authentication_payload,
+                data.authentication_signature,
+                data.authentication_fingerprint,
+            )
+        ):
+            raise ValueError(f"Actor {actor.reference} does not require authentication")
+
+        current = self._budget_amendment_precondition_sha256(
+            root,
+            parent,
+            child,
+            actor,
+            data.role_id,
+            previous,
+            proposed,
+            consumed,
+            data.evidence_refs,
+            data.prepared_at,
+            data.expires_at,
+        )
+        if current != expected:
+            raise GovernedMaterialStaleRuleError(
+                "Budget amendment material changed immediately before persistence",
+                stale_reason="external-edit",
+            )
+        timestamp = self._timestamp()
+        amendment_path = Path(child.path) / "budget-amendments" / data.amendment_id / "AMENDMENT.md"
+        record = BudgetAmendmentRecord(
+            id=data.amendment_id,
+            project_identity=data.project_identity,
+            parent_work_ref=f"{parent.swarm_id}/{parent.id}",
+            child_work_ref=f"{child.swarm_id}/{child.id}",
+            previous_limits=previous,
+            proposed_limits=proposed,
+            consumed=consumed,
+            actor=actor.reference,
+            role=data.role_id,
+            reason=data.reason.strip(),
+            evidence_refs=list(data.evidence_refs),
+            precondition_digest=expected,
+            authentication_fingerprint=authentication_fingerprint,
+            created_at=timestamp,
+            path=str(amendment_path),
+        )
+        updated_child = replace(child, budget_limits=proposed)
+        detail = (
+            f"amendment={record.id} parent={record.parent_work_ref} child={record.child_work_ref} "
+            f"actor={record.actor} role={record.role} previous="
+            f"{json.dumps(previous, ensure_ascii=True, separators=(',', ':'))} proposed="
+            f"{json.dumps(proposed, ensure_ascii=True, separators=(',', ':'))} consumed="
+            f"{json.dumps(consumed, ensure_ascii=True, separators=(',', ':'))} "
+            f"evidence={','.join(record.evidence_refs) or 'none'} reason={record.reason}"
+        )
+        with filesystem_transaction():
+            write_new(amendment_path, self._render_budget_amendment(record))
+            atomic_write(Path(child.path) / "WORK.md", self._render_work(updated_child))
+            activity = self._append_work_event(updated_child, "budget.amended", detail)
+        remaining = {
+            dimension: limit - consumed.get(dimension, 0)
+            for dimension, limit in sorted(proposed.items())
+        }
+        return BudgetAmendmentResult(record, activity, remaining)
+
+    def _validate_budget_amendment(
+        self, root: Path, data: BudgetAmendmentInput
+    ) -> tuple[
+        SwarmRecord,
+        WorkRecord,
+        WorkRecord,
+        ActorRecord,
+        dict[str, int],
+        dict[str, int],
+        dict[str, int],
+    ]:
+        project = self._load_project_configuration(root)
+        if data.project_identity != project.project:
+            raise ProjectIdentityMismatchRuleError(
+                "Project identity mismatch: "
+                f"expected {project.project}, got {data.project_identity}"
+            )
+        for value, label in (
+            (data.parent_swarm_id, "Parent Swarm id"),
+            (data.parent_work_id, "Parent Work id"),
+            (data.child_swarm_id, "Child Swarm id"),
+            (data.child_work_id, "Child Work id"),
+            (data.amendment_id, "Budget Amendment id"),
+            (data.role_id, "Role id"),
+        ):
+            assert_slug(value, label)
+        amendment_path = (
+            root
+            / ".agora"
+            / "swarms"
+            / data.child_swarm_id
+            / "work"
+            / data.child_work_id
+            / "budget-amendments"
+            / data.amendment_id
+            / "AMENDMENT.md"
+        )
+        if amendment_path.exists():
+            raise FileExistsError(f"Budget amendment already exists: {data.amendment_id}")
+        parent_swarm = self._load_swarm(root, data.parent_swarm_id)
+        child_swarm = self._load_swarm(root, data.child_swarm_id)
+        parent = self._load_work(parent_swarm, data.parent_work_id)
+        child = self._load_work(child_swarm, data.child_work_id)
+        parent_ref = f"{parent.swarm_id}/{parent.id}"
+        if child.parent_work_ref != parent_ref:
+            raise ValueError(f"Work {child.swarm_id}/{child.id} is not a child of {parent_ref}")
+        self._assert_work_mutable(root, child_swarm, child)
+        actor = self._find_actor(root, data.actor_id)
+        if parent_swarm.assignments.get(data.role_id) != actor.reference:
+            raise ActorUnauthorizedRuleError(
+                f"Actor {actor.reference} does not hold parent role {data.role_id}"
+            )
+        if not self._role_allows_action(root, parent_swarm.method, data.role_id, "budget.amend"):
+            raise ActorUnauthorizedRuleError(
+                f"Parent role {data.role_id} is not allowed to amend child budgets"
+            )
+        self._assert_current_actor_key(actor)
+        if not data.reason.strip():
+            raise ValueError("Budget amendment reason is required")
+        proposed = self._normalize_budget_limits(dict(data.proposed_limits))
+        if proposed is None:
+            raise ValueError("Budget amendment requires proposed limits")
+        previous = dict(child.budget_limits or {})
+        summary = self.summarize_usage(child.swarm_id, child.id)
+        consumed = dict(summary.consumed)
+        below = [
+            dimension
+            for dimension, amount in consumed.items()
+            if proposed.get(dimension, -1) < amount
+        ]
+        if below:
+            raise ValueError(
+                "Budget cannot be reduced below consumed usage: " + ", ".join(sorted(below))
+            )
+        if parent.budget_limits is not None:
+            unknown = sorted(set(proposed) - set(parent.budget_limits))
+            if unknown:
+                raise ValueError(
+                    "Budget dimensions are not available from the parent: " + ", ".join(unknown)
+                )
+            allocated = {dimension: 0 for dimension in parent.budget_limits}
+            for reference in parent.child_work_refs:
+                swarm_id, separator, work_id = reference.partition("/")
+                if not separator or reference == f"{child.swarm_id}/{child.id}":
+                    continue
+                sibling = self._load_work(self._load_swarm(root, swarm_id), work_id)
+                for dimension, limit in (sibling.budget_limits or {}).items():
+                    allocated[dimension] = allocated.get(dimension, 0) + limit
+            exceeded = [
+                dimension
+                for dimension, limit in proposed.items()
+                if allocated.get(dimension, 0) + limit > parent.budget_limits[dimension]
+            ]
+            if exceeded:
+                raise ValueError("Budget amendment exceeds parent capacity: " + ", ".join(exceeded))
+        references = list(
+            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+        )
+        if len(references) != len(data.evidence_refs):
+            raise ValueError("Budget amendment evidence references must be unique and non-empty")
+        successful = {
+            reference
+            for work in (parent, child)
+            for evidence in self._work_evidence_records(work)
+            if evidence.result == "success"
+            for reference in evidence.artifact_refs
+        }
+        missing = sorted(set(references) - successful)
+        if missing:
+            raise EvidenceMissingRuleError(
+                "Budget amendment evidence is not registered as successful: " + ", ".join(missing)
+            )
+        return parent_swarm, parent, child, actor, previous, proposed, consumed
+
+    def _budget_amendment_precondition_sha256(
+        self,
+        root: Path,
+        parent: WorkRecord,
+        child: WorkRecord,
+        actor: ActorRecord,
+        role: str,
+        previous: dict[str, int],
+        proposed: dict[str, int],
+        consumed: dict[str, int],
+        evidence_refs: list[str],
+        prepared_at: str,
+        expires_at: str | None,
+    ) -> str:
+        parent_swarm = self._load_swarm(root, parent.swarm_id)
+        paths = [
+            Path(parent.path),
+            Path(child.path),
+            Path(actor.path),
+            root / ".agora" / "project.md",
+            root / ".agora" / "methods" / parent_swarm.method,
+            root / ".agora" / "swarms" / parent.swarm_id / "SWARM.md",
+        ]
+        durable = durable_read_set_sha256(root, paths, include_git_state=False)
+        material = {
+            "schema": "agora/budget-amendment-precondition/v1",
+            "durable-read-set-sha256": durable,
+            "parent": f"{parent.swarm_id}/{parent.id}",
+            "child": f"{child.swarm_id}/{child.id}",
+            "actor": actor.reference,
+            "actor-fingerprint": actor.authentication_fingerprint,
+            "role": role,
+            "previous-limits": previous,
+            "proposed-limits": proposed,
+            "consumed": consumed,
+            "evidence-references": evidence_refs,
+            "prepared-at": prepared_at,
+            "expires-at": expires_at,
+        }
+        return hashlib.sha256(
+            (
+                json.dumps(material, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+                + "\n"
+            ).encode("ascii")
+        ).hexdigest()
+
+    @staticmethod
+    def _render_budget_amendment(record: BudgetAmendmentRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/budget-amendment/v1",
+                    "id": record.id,
+                    "project": record.project_identity,
+                    "parent-work": record.parent_work_ref,
+                    "child-work": record.child_work_ref,
+                    "previous-limits": record.previous_limits,
+                    "proposed-limits": record.proposed_limits,
+                    "consumed": record.consumed,
+                    "actor": record.actor,
+                    "role": record.role,
+                    "reason": record.reason,
+                    "evidence-refs": record.evidence_refs,
+                    "precondition-sha256": record.precondition_digest,
+                    "authentication-fingerprint": record.authentication_fingerprint,
+                    "created-at": record.created_at,
+                },
+                body="# Budget amendment\n\nAppend-only record of a governed child budget change.",
+            )
+        )
+
+    def list_budget_amendments(self, swarm_id: str, work_id: str) -> list[BudgetAmendmentRecord]:
+        work = self.show_work(swarm_id, work_id)
+        return [
+            self._load_budget_amendment(path)
+            for path in sorted((Path(work.path) / "budget-amendments").glob("*/AMENDMENT.md"))
+        ]
+
+    @staticmethod
+    def _load_budget_amendment(path: Path) -> BudgetAmendmentRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/budget-amendment/v1", path)
+        attributes = document.attributes
+        record = BudgetAmendmentRecord(
+            id=string_attribute(attributes, "id"),
+            project_identity=string_attribute(attributes, "project"),
+            parent_work_ref=string_attribute(attributes, "parent-work"),
+            child_work_ref=string_attribute(attributes, "child-work"),
+            previous_limits=optional_integer_record_attribute(attributes, "previous-limits") or {},
+            proposed_limits=optional_integer_record_attribute(attributes, "proposed-limits") or {},
+            consumed=optional_integer_record_attribute(attributes, "consumed") or {},
+            actor=string_attribute(attributes, "actor"),
+            role=string_attribute(attributes, "role"),
+            reason=string_attribute(attributes, "reason"),
+            evidence_refs=strings_attribute(attributes, "evidence-refs"),
+            precondition_digest=string_attribute(attributes, "precondition-sha256"),
+            authentication_fingerprint=optional_string_attribute(
+                attributes, "authentication-fingerprint"
+            ),
+            created_at=string_attribute(attributes, "created-at"),
+            path=str(path),
+        )
+        if record.id != path.parent.name:
+            raise ValueError(f"Budget amendment id does not match its directory: {path}")
+        if re.fullmatch(r"[0-9a-f]{64}", record.precondition_digest) is None:
+            raise ValueError(f"Budget amendment precondition is not SHA-256: {path}")
+        AgoraWorkspace._parse_utc_timestamp(record.created_at, "created-at")
+        AgoraWorkspace._normalize_budget_limits(record.previous_limits)
+        AgoraWorkspace._normalize_budget_limits(record.proposed_limits)
+        AgoraWorkspace._normalize_budget_limits(record.consumed)
+        return record
 
     @staticmethod
     def _normalize_usage_amounts(amounts: dict[str, int]) -> dict[str, int]:
@@ -6109,6 +6859,18 @@ class AgoraWorkspace:
         work: WorkRecord,
         action_id: str | None = None,
     ) -> ApprovalDelegationRecord:
+        with filesystem_transaction():
+            return self._apply_delegate_approval_writes(data, swarm, actor, target, work, action_id)
+
+    def _apply_delegate_approval_writes(
+        self,
+        data: DelegateApprovalInput,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        target: ActorRecord,
+        work: WorkRecord,
+        action_id: str | None = None,
+    ) -> ApprovalDelegationRecord:
         path = Path(work.path) / "approval-delegations" / data.id / "DELEGATION.md"
         record = ApprovalDelegationRecord(
             id=data.id,
@@ -6195,6 +6957,19 @@ class AgoraWorkspace:
         reason: str,
         action_id: str | None = None,
     ) -> ApprovalDelegationRecord:
+        with filesystem_transaction():
+            return self._apply_revoke_approval_delegation_writes(
+                delegation, actor, work, reason, action_id
+            )
+
+    def _apply_revoke_approval_delegation_writes(
+        self,
+        delegation: ApprovalDelegationRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        reason: str,
+        action_id: str | None = None,
+    ) -> ApprovalDelegationRecord:
         revoked = ApprovalDelegationRecord(
             **{
                 **delegation.__dict__,
@@ -6256,8 +7031,10 @@ class AgoraWorkspace:
             raise StalePreconditionRuleError(
                 "Gate decision requires the precondition digest issued by Core"
             )
+        self._assert_preparation_window(data.prepared_at, data.expires_at)
 
         root = self.project_root()
+        read_set_before = self.work_control_read_set_sha256(data.swarm_id, data.work_id)
         swarm = self._load_swarm(root, data.swarm_id)
         work = self._load_work(swarm, data.work_id)
         current_options = [
@@ -6269,24 +7046,52 @@ class AgoraWorkspace:
             and option.decision == data.decision
         ]
         if len(current_options) != 1:
-            raise StalePreconditionRuleError(
-                "Governed gate material changed since the decision was prepared"
+            raise GovernedMaterialStaleRuleError(
+                "Governed gate material changed since the decision was prepared",
+                stale_reason="governed-material-changed",
             )
         evidence_refs = list(
             dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
         )
+        current_evidence_digests = {
+            reference: current_options[0].evidence_content_sha256.get(reference)
+            for reference in evidence_refs
+        }
+        if data.evidence_content_sha256 and (
+            data.evidence_content_sha256 != current_evidence_digests
+        ):
+            raise GovernedMaterialStaleRuleError(
+                "Evidence content identity changed since the decision was prepared",
+                stale_reason="evidence-changed",
+            )
+        current_actor = self._find_actor(root, current_options[0].actor_id or data.actor_id)
+        if data.prepared_actor_fingerprint != current_actor.authentication_fingerprint:
+            raise GovernedMaterialStaleRuleError(
+                "Actor key changed since the decision was prepared",
+                stale_reason="actor-key-changed",
+            )
         current_digest = self._gate_decision_precondition_sha256(
-            root, swarm, work, current_options[0], data.actor_id, reason, evidence_refs
+            root,
+            swarm,
+            work,
+            current_options[0],
+            data.actor_id,
+            reason,
+            evidence_refs,
+            data.prepared_at or "",
+            data.expires_at,
         )
         if current_digest != data.precondition_digest:
-            raise StalePreconditionRuleError(
-                "Governed gate material changed since the decision was prepared"
+            raise GovernedMaterialStaleRuleError(
+                "Governed gate material changed since the decision was prepared",
+                stale_reason="governed-material-changed",
             )
 
         prepared = self.prepare_gate_decision(data)
         if prepared.precondition_digest != current_digest:
-            raise StalePreconditionRuleError(
-                "Governed gate material changed while the decision was revalidated"
+            raise GovernedMaterialStaleRuleError(
+                "Governed gate material changed while the decision was revalidated",
+                stale_reason="governed-material-changed",
             )
 
         project = self._load_project_configuration(root)
@@ -6298,8 +7103,9 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, data.swarm_id)
         work = self._load_work(swarm, data.work_id)
         if work.state != data.expected_state:
-            raise StalePreconditionRuleError(
-                f"Stale work state: expected {data.expected_state}, current {work.state}"
+            raise GovernedMaterialStaleRuleError(
+                f"Stale work state: expected {data.expected_state}, current {work.state}",
+                stale_reason="state-changed",
             )
         self._assert_work_mutable(root, swarm, work)
 
@@ -6373,6 +7179,7 @@ class AgoraWorkspace:
                 *assessment["unsatisfied"],
                 *assessment["missing_artifacts"],
                 *assessment["missing_evidence_types"],
+                *assessment["missing_content_digests"],
                 *assessment["git_issues"],
             ]
             if assessment["evidence_missing"]:
@@ -6412,7 +7219,7 @@ class AgoraWorkspace:
                     f"Gate decision signature is invalid for {actor.reference}",
                 )
             except ValueError as error:
-                raise ActorUnauthorizedRuleError(str(error)) from error
+                raise SignatureInvalidRuleError(str(error)) from error
         elif any(
             value is not None
             for value in (
@@ -6440,6 +7247,12 @@ class AgoraWorkspace:
                 raise GateAlreadyResolvedRuleError(
                     f"Gate {data.gate_id} already has this rejection"
                 )
+
+        if self.work_control_read_set_sha256(data.swarm_id, data.work_id) != read_set_before:
+            raise GovernedMaterialStaleRuleError(
+                "Governed gate material changed immediately before persistence",
+                stale_reason="external-edit",
+            )
 
         decision_activity: ActivityRecord
         with filesystem_transaction():
@@ -6573,11 +7386,44 @@ class AgoraWorkspace:
         precondition_digest: str | None = None,
         decision_reason: str | None = None,
     ) -> WorkRecord:
+        with filesystem_transaction():
+            return self._apply_approval_writes(
+                swarm,
+                actor,
+                work,
+                role_id,
+                note_value,
+                delegation,
+                action_id,
+                authentication_fingerprint,
+                activity_sink,
+                gate_id,
+                evidence_refs,
+                precondition_digest,
+                decision_reason,
+            )
+
+    def _apply_approval_writes(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        role_id: str,
+        note_value: str,
+        delegation: ApprovalDelegationRecord | None = None,
+        action_id: str | None = None,
+        authentication_fingerprint: str | None = None,
+        activity_sink: list[ActivityRecord] | None = None,
+        gate_id: str | None = None,
+        evidence_refs: list[str] | None = None,
+        precondition_digest: str | None = None,
+        decision_reason: str | None = None,
+    ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
-        original = path.read_text(encoding="utf-8")
         approval_roles = strings_attribute(document.attributes, "approval-roles")
         document.attributes["approval-roles"] = list(dict.fromkeys([*approval_roles, role_id]))
+        work.approval_roles = list(document.attributes["approval-roles"])
         note = note_value.replace("|", "\\|") or "Approved"
         authority = (
             f"{actor.reference} via approval-delegation:{delegation.id}"
@@ -6598,11 +7444,7 @@ class AgoraWorkspace:
                     "used_action_id": action_id,
                 }
             )
-            try:
-                atomic_write(Path(delegation.path), self._render_approval_delegation(used))
-            except Exception:
-                atomic_write(path, original)
-                raise
+            atomic_write(Path(delegation.path), self._render_approval_delegation(used))
         detail = (
             f"role={role_id} actor={actor.reference} "
             f"delegation={delegation.id if delegation is not None else 'none'}"
@@ -6619,7 +7461,7 @@ class AgoraWorkspace:
         activity = self._append_work_event(work, "approval.added", detail)
         if activity_sink is not None:
             activity_sink.append(activity)
-        return self._load_work(swarm, work.id)
+        return work
 
     @_locked_mutation("project")
     def transition_work(self, data: TransitionWorkInput) -> WorkRecord:
@@ -6725,6 +7567,7 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("lifecycle-action")
+    @_compound_mutation
     def apply_lifecycle_action(self, data: ApplyLifecycleActionInput) -> LifecycleActionRecord:
         assert_slug(data.action_id, "Lifecycle Action id")
         root = self.project_root()
@@ -6908,6 +7751,22 @@ class AgoraWorkspace:
             ]
             | None
         ) = None
+        work_handlers = WorkLifecycleHandlers(
+            satisfy_criterion=lambda context: self._apply_satisfy_criterion(
+                context.swarm,
+                context.actor,
+                context.work,
+                context.command.criterion_id,
+                context.command.stage,
+                context.method.criterion_stages,
+            ),
+            add_artifact=lambda context: self._apply_add_artifact(
+                context.swarm, context.actor, context.work, context.command
+            ),
+            add_evidence=lambda context: self._apply_add_evidence(
+                context.swarm, context.actor, context.work, context.command
+            ),
+        )
         if record.action == "swarm.assign":
             assignment = AssignActorInput(
                 swarm_id=record.swarm_id,
@@ -7140,6 +7999,7 @@ class AgoraWorkspace:
                 actor_id=record.actor,
                 kind=record.parameters["kind"],
                 uri=record.parameters["uri"],
+                content_sha256=record.parameters.get("content-sha256") or None,
             )
             swarm, actor, work = self._validate_add_artifact(root, artifact)
             artifact_context = (artifact, swarm, actor, work)
@@ -7445,25 +8305,22 @@ class AgoraWorkspace:
             assert gate_waiver_context is not None
             waiver, swarm, actor, work = gate_waiver_context
             self._apply_gate_waiver(waiver, swarm, actor, work, record.id)
-        elif record.action == "criterion.satisfy":
-            assert criterion_context is not None
-            criterion, swarm, actor, work, contract = criterion_context
-            self._apply_satisfy_criterion(
-                swarm,
-                actor,
-                work,
-                criterion.criterion_id,
-                criterion.stage,
-                contract.criterion_stages,
-            )
-        elif record.action == "artifact.add":
-            assert artifact_context is not None
-            artifact, swarm, actor, work = artifact_context
-            self._apply_add_artifact(swarm, actor, work, artifact)
-        elif record.action == "evidence.add":
-            assert evidence_context is not None
-            evidence, swarm, actor, work = evidence_context
-            self._apply_add_evidence(swarm, actor, work, evidence)
+        elif record.action in work_handlers.actions:
+            if record.action == "criterion.satisfy":
+                assert criterion_context is not None
+                criterion, swarm, actor, work, contract = criterion_context
+                handler_context: object = CriterionMutationContext(
+                    criterion, swarm, actor, work, contract
+                )
+            elif record.action == "artifact.add":
+                assert artifact_context is not None
+                artifact, swarm, actor, work = artifact_context
+                handler_context = ArtifactMutationContext(artifact, swarm, actor, work)
+            else:
+                assert evidence_context is not None
+                evidence, swarm, actor, work = evidence_context
+                handler_context = EvidenceMutationContext(evidence, swarm, actor, work)
+            work_handlers.dispatch(record.action, handler_context)
         elif record.action == "usage.add":
             assert usage_context is not None
             usage, _, actor, work, amounts = usage_context
@@ -7793,6 +8650,17 @@ class AgoraWorkspace:
         work: WorkRecord,
         target_state: str,
     ) -> WorkRecord:
+        with filesystem_transaction():
+            return self._apply_work_transition_writes(root, swarm, actor, work, target_state)
+
+    def _apply_work_transition_writes(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        target_state: str,
+    ) -> WorkRecord:
         previous = work.state
         work.state = target_state
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
@@ -7801,7 +8669,7 @@ class AgoraWorkspace:
             "work.transitioned",
             f"from={previous} to={target_state} actor={actor.reference}",
         )
-        self._refresh_swarm_status(root, swarm)
+        self._refresh_swarm_status(root, swarm, changed_work=work)
         return work
 
     def show_work(self, swarm_id: str, work_id: str) -> WorkRecord:
@@ -8122,6 +8990,22 @@ class AgoraWorkspace:
         work: WorkRecord,
         previous: str,
     ) -> StatusChangeRecord:
+        with filesystem_transaction():
+            return self._apply_work_status_change_writes(
+                root, data, target_status, action, swarm, actor, work, previous
+            )
+
+    def _apply_work_status_change_writes(
+        self,
+        root: Path,
+        data: ChangeWorkStatusInput,
+        target_status: str,
+        action: str,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        previous: str,
+    ) -> StatusChangeRecord:
         change_root = Path(work.path) / "status-changes"
         work.operational_status = _work_operational_status(target_status)
         work.status_reason = data.reason.strip()
@@ -8144,7 +9028,7 @@ class AgoraWorkspace:
             action,
             f"from={previous} to={target_status} actor={actor.reference} change={record.id}",
         )
-        self._refresh_swarm_status(root, swarm)
+        self._refresh_swarm_status(root, swarm, changed_work=work)
         return record
 
     @_locked_mutation("project")
@@ -8335,6 +9219,7 @@ class AgoraWorkspace:
             normalized[source] = target
         return normalized
 
+    @_compound_mutation
     def _apply_create_delegation(
         self,
         root: Path,
@@ -8440,6 +9325,7 @@ class AgoraWorkspace:
         )
         return delegation, parent, parent_work, child, actor
 
+    @_compound_mutation
     def _apply_accept_delegation(
         self,
         root: Path,
@@ -8591,6 +9477,7 @@ class AgoraWorkspace:
         )
         return delegation, parent, actor, child, child_work, parent_work, result_uri
 
+    @_compound_mutation
     def _apply_collect_delegation(
         self,
         root: Path,
@@ -8873,6 +9760,33 @@ class AgoraWorkspace:
         return delegation, swarm, actor, parent, parent_work, previous
 
     def _apply_delegation_status_change(
+        self,
+        root: Path,
+        data: ChangeDelegationStatusInput,
+        *,
+        target_status: str,
+        action: str,
+        blocked_from: str | None,
+        context: tuple[
+            DelegationRecord,
+            SwarmRecord,
+            ActorRecord,
+            SwarmRecord,
+            WorkRecord,
+            str,
+        ],
+    ) -> StatusChangeRecord:
+        with filesystem_transaction():
+            return self._apply_delegation_status_change_writes(
+                root,
+                data,
+                target_status=target_status,
+                action=action,
+                blocked_from=blocked_from,
+                context=context,
+            )
+
+    def _apply_delegation_status_change_writes(
         self,
         root: Path,
         data: ChangeDelegationStatusInput,
@@ -10714,6 +11628,7 @@ class AgoraWorkspace:
             "clarifications": 0,
             "checklists": 0,
             "usage": 0,
+            "budget-amendments": 0,
             "approval-delegations": 0,
             "gate-waivers": 0,
             "handoffs": 0,
@@ -11840,6 +12755,65 @@ class AgoraWorkspace:
                             "Evidence references unregistered work artifacts: "
                             + ", ".join(missing_references),
                         )
+                amendments: list[BudgetAmendmentRecord] = []
+                for amendment_path in sorted(
+                    (Path(work.path) / "budget-amendments").glob("*/AMENDMENT.md")
+                ):
+                    amendment = inspect(
+                        "budget-amendments",
+                        "budget-amendment.invalid",
+                        amendment_path,
+                        lambda amendment_path=amendment_path: self._load_budget_amendment(
+                            amendment_path
+                        ),
+                    )
+                    if not isinstance(amendment, BudgetAmendmentRecord):
+                        continue
+                    amendments.append(amendment)
+                    if isinstance(project, ProjectConfiguration) and (
+                        amendment.project_identity != project.project
+                    ):
+                        issue(
+                            "budget-amendment.project-mismatch",
+                            amendment_path,
+                            "Budget amendment project identity does not match the project",
+                        )
+                    if amendment.child_work_ref != f"{swarm.id}/{work.id}" or (
+                        amendment.parent_work_ref != work.parent_work_ref
+                    ):
+                        issue(
+                            "budget-amendment.relationship-mismatch",
+                            amendment_path,
+                            "Budget amendment does not match its parent and child work",
+                        )
+                    resolve_actor(amendment.actor, amendment_path)
+                    missing_amendment_evidence = sorted(
+                        set(amendment.evidence_refs) - artifact_references
+                    )
+                    if missing_amendment_evidence:
+                        issue(
+                            "budget-amendment.evidence-missing",
+                            amendment_path,
+                            "Budget amendment references unregistered work artifacts: "
+                            + ", ".join(missing_amendment_evidence),
+                        )
+                ordered_amendments = sorted(amendments, key=lambda item: (item.created_at, item.id))
+                if ordered_amendments:
+                    expected_limits = dict(ordered_amendments[0].previous_limits)
+                    for amendment in ordered_amendments:
+                        if amendment.previous_limits != expected_limits:
+                            issue(
+                                "budget-amendment.history-mismatch",
+                                Path(amendment.path),
+                                "Budget amendment previous limits do not match history",
+                            )
+                        expected_limits = dict(amendment.proposed_limits)
+                    if work.budget_limits != expected_limits:
+                        issue(
+                            "budget-amendment.current-mismatch",
+                            path,
+                            "Current work budget does not match its amendment history",
+                        )
                 clarifications_path = Path(work.path) / "clarifications.md"
                 if clarifications_path.is_file():
                     clarification_rows = inspect(
@@ -12372,11 +13346,53 @@ class AgoraWorkspace:
                         Path(child_work.path) / "WORK.md",
                         "Child work does not link to its delegation and parent work",
                     )
-                if child_work.budget_limits != delegation.budget_limits:
+                effective_budget = dict(delegation.budget_limits or {})
+                amendment_paths = sorted(
+                    (Path(child_work.path) / "budget-amendments").glob("*/AMENDMENT.md")
+                )
+                for amendment_path in amendment_paths:
+                    amendment = inspect(
+                        "budget-amendments",
+                        "budget-amendment.invalid",
+                        amendment_path,
+                        lambda amendment_path=amendment_path: self._load_budget_amendment(
+                            amendment_path
+                        ),
+                    )
+                    if not isinstance(amendment, BudgetAmendmentRecord):
+                        continue
+                    if amendment.parent_work_ref != "/".join(parent_key) or (
+                        amendment.child_work_ref != "/".join(child_key)
+                    ):
+                        issue(
+                            "budget-amendment.relationship-mismatch",
+                            amendment_path,
+                            "Budget amendment does not match its parent and child work",
+                        )
+                    if amendment.previous_limits != effective_budget:
+                        issue(
+                            "budget-amendment.history-mismatch",
+                            amendment_path,
+                            "Budget amendment previous limits do not match amendment history",
+                        )
+                    below_consumed = [
+                        dimension
+                        for dimension, amount in amendment.consumed.items()
+                        if amendment.proposed_limits.get(dimension, -1) < amount
+                    ]
+                    if below_consumed:
+                        issue(
+                            "budget-amendment.consumed-limit-invalid",
+                            amendment_path,
+                            "Budget amendment is below its recorded consumed usage",
+                        )
+                    effective_budget = dict(amendment.proposed_limits)
+                expected_budget = effective_budget if amendment_paths else delegation.budget_limits
+                if child_work.budget_limits != expected_budget:
                     issue(
                         "delegation.child-budget-mismatch",
                         Path(child_work.path) / "WORK.md",
-                        "Child work budget does not match its delegation",
+                        "Child work budget does not match its delegation and amendment history",
                     )
             represented = resolve_actor(delegation.represented_by, path)
             resolve_actor(delegation.requested_by, path)
@@ -13085,27 +14101,28 @@ class AgoraWorkspace:
                             "Satisfied criterion is missing from its applied Lifecycle Action",
                         )
                 elif action.action == "artifact.add":
-                    artifact_line = (
-                        f"| {action.parameters['kind']} | {action.parameters['uri']} | "
-                        f"{action.actor} |"
-                    )
                     artifact_path = Path(work.path) / "artifacts.md"
-                    if artifact_line not in artifact_path.read_text(encoding="utf-8"):
+                    if not any(
+                        artifact.kind == action.parameters["kind"]
+                        and artifact.uri == action.parameters["uri"]
+                        and artifact.produced_by == action.actor
+                        for artifact in self._work_artifact_records(work)
+                    ):
                         issue(
                             "lifecycle-action.artifact-mismatch",
                             artifact_path,
                             "Artifact row is missing from its applied Lifecycle Action",
                         )
                 else:
-                    references = (
-                        ", ".join(self._string_list_parameter(action, "artifacts")) or "none"
-                    )
-                    evidence_line = (
-                        f"| {action.parameters['type']} | {action.parameters['result']} | "
-                        f"{references} | {action.actor} |"
-                    )
+                    references = self._string_list_parameter(action, "artifacts")
                     evidence_path = Path(work.path) / "evidence.md"
-                    if evidence_line not in evidence_path.read_text(encoding="utf-8"):
+                    if not any(
+                        evidence.type == action.parameters["type"]
+                        and evidence.result == action.parameters["result"]
+                        and evidence.artifact_references == references
+                        and evidence.produced_by == action.actor
+                        for evidence in self._work_evidence_records(work)
+                    ):
                         issue(
                             "lifecycle-action.evidence-mismatch",
                             evidence_path,
@@ -13637,6 +14654,19 @@ class AgoraWorkspace:
         with self._mutation_lock((self.project_root(),), operation, coordinate_external=False):
             yield
 
+    def work_control_read_set_sha256(self, swarm_id: str, work_id: str) -> str:
+        """Fingerprint every durable input consumed by the aggregate control projection."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        paths = [root / ".agora"]
+        for artifact in self._work_artifact_records(work):
+            if artifact.uri.startswith("repo://"):
+                self._assert_artifact_reference(root, artifact.uri)
+                paths.append(root / artifact.uri.removeprefix("repo://"))
+        return durable_read_set_sha256(root, paths, include_git_state=True)
+
     def _mutation_resources(
         self,
         scope: str,
@@ -13807,6 +14837,11 @@ class AgoraWorkspace:
         document = read_markdown(path)
         _assert_schema(document, "agora/project/v1", path)
         attributes = document.attributes
+        raw_ttl = attributes.get("gate-decision-ttl-seconds", DEFAULT_GATE_DECISION_TTL_SECONDS)
+        if isinstance(raw_ttl, bool) or not isinstance(raw_ttl, int) or raw_ttl < 0:
+            raise ValueError(
+                f"Project gate-decision-ttl-seconds must be a non-negative integer: {path}"
+            )
         return ProjectConfiguration(
             project=string_attribute(attributes, "project"),
             version=validate_version(string_attribute(attributes, "version")),
@@ -13816,6 +14851,7 @@ class AgoraWorkspace:
             default_method=self._method(string_attribute(attributes, "default-method")),
             max_delegation_depth=self._delegation_depth(attributes),
             created_at=string_attribute(attributes, "created-at"),
+            gate_decision_ttl_seconds=raw_ttl or None,
         )
 
     def _install_integration(
@@ -14234,12 +15270,16 @@ class AgoraWorkspace:
             return "running"
         return "ready"
 
-    def _refresh_swarm_status(self, root: Path, swarm: SwarmRecord) -> None:
+    def _refresh_swarm_status(
+        self, root: Path, swarm: SwarmRecord, *, changed_work: WorkRecord | None = None
+    ) -> None:
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
         work = [
             self._load_work(swarm, path.parent.name)
             for path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
         ]
+        if changed_work is not None:
+            work = [changed_work if item.id == changed_work.id else item for item in work]
         target = self._derived_swarm_status(swarm, work, contract)
         if target == swarm.status:
             return
@@ -14537,8 +15577,16 @@ class AgoraWorkspace:
         artifacts = read_markdown(path / "artifacts.md")
         evidence = read_markdown(path / "evidence.md")
         _assert_schema(document, "agora/work/v1", path / "WORK.md")
-        _assert_schema(artifacts, "agora/artifacts/v1", path / "artifacts.md")
-        _assert_schema(evidence, "agora/evidence/v1", path / "evidence.md")
+        if string_attribute(artifacts.attributes, "schema") not in {
+            "agora/artifacts/v1",
+            "agora/artifacts/v2",
+        }:
+            raise ValueError(f"Artifacts schema is unsupported: {path / 'artifacts.md'}")
+        if string_attribute(evidence.attributes, "schema") not in {
+            "agora/evidence/v1",
+            "agora/evidence/v2",
+        }:
+            raise ValueError(f"Evidence schema is unsupported: {path / 'evidence.md'}")
         approvals_path = path / "approvals.md"
         if approvals_path.exists():
             approvals = read_markdown(approvals_path)
@@ -15299,7 +16347,7 @@ class AgoraWorkspace:
             "approval.add": {"role", "note", "delegation"},
             "approval.delegate": {"delegation", "role", "target", "reason"},
             "approval.delegation.revoke": {"delegation", "reason"},
-            "artifact.add": {"kind", "uri"},
+            "artifact.add": {"kind", "uri", "content-sha256"},
             "checklist.add": {"title", "items"},
             "checklist.check": {"checklist", "item"},
             "criterion.satisfy": {"criterion", "stage"},
@@ -15371,6 +16419,7 @@ class AgoraWorkspace:
             and parameter_keys.issubset(expected_parameters)
         )
         legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
+        legacy_artifact_parameters = action == "artifact.add" and parameter_keys == {"kind", "uri"}
         legacy_criterion_parameters = action == "criterion.satisfy" and parameter_keys == {
             "criterion"
         }
@@ -15388,6 +16437,7 @@ class AgoraWorkspace:
             parameter_keys != expected_parameters
             and not legacy_delegation_parameters
             and not legacy_approval_parameters
+            and not legacy_artifact_parameters
             and not legacy_criterion_parameters
             and not legacy_session_parameters
             and not legacy_actor_runtime_parameters
@@ -16519,6 +17569,7 @@ class AgoraWorkspace:
                 assessment["evidence_missing"],
                 assessment["missing_approvals"],
                 assessment["missing_evidence_types"],
+                assessment["missing_content_digests"],
                 assessment["git_issues"],
             )
         ):
@@ -16529,6 +17580,7 @@ class AgoraWorkspace:
                 f"missing-artifacts=[{', '.join(assessment['missing_artifacts'])}], "
                 f"successful-evidence={str(assessment['has_success']).lower()}, "
                 f"missing-evidence-types=[{', '.join(assessment['missing_evidence_types'])}], "
+                f"missing-content-digests=[{', '.join(assessment['missing_content_digests'])}], "
                 f"missing-approvals=[{', '.join(assessment['missing_approvals'])}], "
                 f"git=[{', '.join(assessment['git_issues'])}]"
             )
@@ -16583,6 +17635,22 @@ class AgoraWorkspace:
                 if type_ not in successful_evidence_types
             ]
         )
+        relevant_types = set(gate.required_evidence_types)
+        evidence_records = self._work_evidence_records(work)
+        missing_content_digests = (
+            []
+            if waived_evidence or not gate.require_content_addressed_evidence
+            else list(
+                dict.fromkeys(
+                    reference
+                    for record in evidence_records
+                    if record.result == "success"
+                    and (not relevant_types or record.type in relevant_types)
+                    for reference in record.artifact_references
+                    if record.artifact_content_sha256.get(reference) is None
+                )
+            )
+        )
         git_issues: list[str] = []
         if gate.require_clean_git or gate.require_git_commit:
             if not is_git_repository(root):
@@ -16613,6 +17681,7 @@ class AgoraWorkspace:
             "has_success": has_success,
             "evidence_missing": evidence_missing,
             "missing_evidence_types": missing_evidence_types,
+            "missing_content_digests": missing_content_digests,
             "missing_approvals": missing_approvals,
             "git_issues": git_issues,
         }
@@ -16660,6 +17729,12 @@ class AgoraWorkspace:
             list(assessment["missing_evidence_types"]),
         )
         add(
+            "gate.evidence-content-digest-missing",
+            "evidence",
+            "Audit-grade evidence requires immutable content SHA-256 identities",
+            list(assessment["missing_content_digests"]),
+        )
+        add(
             "gate.approvals-missing",
             "approval",
             "Required approval roles are missing",
@@ -16699,7 +17774,7 @@ class AgoraWorkspace:
 
     def _append_work_event(self, work: WorkRecord, type_: str, detail: str) -> ActivityRecord:
         path = Path(work.path) / "events.md"
-        if not path.exists():
+        if not path.exists() and not has_staged_write(path):
             write_new(path, "# Work events\n\n")
         timestamp = self._timestamp()
         append_entry(path, f"- {timestamp} | {type_} | {detail}")
@@ -16757,7 +17832,7 @@ class AgoraWorkspace:
         timestamp: str | None = None,
     ) -> ActivityRecord:
         ledger = root / ".agora" / "activity.md"
-        if not ledger.is_file():
+        if not ledger.is_file() and not has_staged_write(ledger):
             write_new(
                 ledger,
                 render_markdown(
@@ -16894,6 +17969,13 @@ class AgoraWorkspace:
     def _assert_delegation_depth(value: int) -> None:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError("Maximum delegation depth must be a non-negative integer")
+
+    @staticmethod
+    def _assert_gate_decision_ttl(value: int | None) -> None:
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            raise ValueError("Gate decision TTL must be a positive integer or disabled")
 
     @staticmethod
     def _delegation_depth(attributes: dict[str, object]) -> int:

@@ -230,12 +230,25 @@ a verifiable result and its producer. An approval is a separate attributed decis
 assigned role. Gate documents choose whether to require criteria, artifact kinds, successful
 evidence, and approvals from specific roles.
 
+An artifact may carry a durable `content_sha256`. Core calculates it for safe `repo://` content,
+uses the complete commit for `git://`, and accepts a producer-declared lowercase SHA-256 for other
+schemes without downloading the remote object. Evidence records the digest observed for every
+artifact relationship. A Method Pack may allow address-only informational evidence or require
+content-addressed evidence for an audit-grade gate.
+
 A **Gate Decision** applies one attributed role decision to the gate active for the work item's
 current state. An approved decision creates the existing positive approval record. A rejected
 decision does not masquerade as approval: it remains a durable `gate.rejected` work event and
 Activity entry, so the gate stays closed. The decision binds project identity, expected state,
 evidence references, reason, and—when required—the actor's current Ed25519 identity. Repeated
 submissions against the same durable precondition are rejected.
+
+A **Budget Amendment** is an append-only lifecycle record authorized by an accountable role on the
+parent work. It binds the parent and child, previous and proposed limits, consumed usage, actor,
+role, reason, optional evidence, precondition digest, authentication fingerprint, and UTC timestamp.
+The child's current limits change only in the same transaction as that record, its work event, and
+Activity. Child authority alone cannot increase its allocation, sibling allocations cannot exceed
+the parent, and a proposal cannot reduce a dimension below consumed usage.
 
 ## Tool
 

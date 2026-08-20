@@ -15,6 +15,7 @@ from agora.application import (
     ActivityFilters,
     ActorFilters,
     AgoraReadService,
+    ConcurrentDurableEditError,
     InvalidDurableStateError,
     InvalidReadQueryError,
     ProjectNotFoundError,
@@ -164,9 +165,9 @@ def test_serializes_deeply_immutable_versioned_dtos(
     payload = json.loads(detail.to_json())
 
     assert payload == detail.to_dict()
-    assert payload["schema"] == "agora/application/work-item-detail/v2"
+    assert payload["schema"] == "agora/application/work-item-detail/v3"
     assert payload["acceptance_criteria"] == {"contract": "Expose a versioned contract"}
-    assert payload["artifacts"][0]["schema"] == "agora/application/artifact-summary/v2"
+    assert payload["artifacts"][0]["schema"] == "agora/application/artifact-summary/v3"
     assert "path" not in json.dumps(payload)
     with pytest.raises(FrozenInstanceError):
         detail.title = "mutated"  # type: ignore[misc]
@@ -342,6 +343,7 @@ def test_every_read_contract_is_json_serializable_immutable_and_rejects_path_val
         ArtifactSummary(
             kind="spec",
             uri="repo://docs/spec.md",
+            content_sha256=None,
             produced_by=Path("outside"),  # type: ignore[arg-type]
             timestamp="2026-08-20T12:00:00Z",
         )
@@ -355,7 +357,7 @@ def test_projects_complete_method_topology_and_core_calculated_availability(
     method = service.get_method("delivery")
     lifecycle = service.lifecycle("delivery", "read-boundary")
 
-    assert method.schema == "agora/application/method-summary/v1"
+    assert method.schema == "agora/application/method-summary/v2"
     assert [state.id for state in method.states] == [
         "specified",
         "planned",
@@ -374,7 +376,7 @@ def test_projects_complete_method_topology_and_core_calculated_availability(
     ]
     assert current
     assert all(transition.available is not None for transition in lifecycle.transitions)
-    assert lifecycle.schema == "agora/application/lifecycle-projection/v2"
+    assert lifecycle.schema == "agora/application/lifecycle-projection/v3"
     assert lifecycle.gates[0].required_approval_roles == ("product-owner",)
 
 
@@ -385,7 +387,7 @@ def test_reads_traceability_without_inferred_material_activity_links(
 
     traceability = service.work_traceability("delivery", "read-boundary")
 
-    assert traceability.schema == "agora/application/traceability-summary/v1"
+    assert traceability.schema == "agora/application/traceability-summary/v2"
     assert traceability.artifacts[0].activity is None
     assert traceability.evidence[0].activity is None
     assert any(event.type == "artifact.added" for event in traceability.activity)
@@ -572,9 +574,9 @@ def test_work_control_projection_is_consistent_and_reuses_core_contracts(
 
     projection = service.work_control_projection("delivery", "read-boundary")
 
-    assert projection.schema == "agora/application/work-control-projection/v2"
+    assert projection.schema == "agora/application/work-control-projection/v3"
     assert re.fullmatch(r"[0-9a-f]{64}", projection.snapshot_token)
-    assert projection.work.schema == "agora/application/work-item-detail/v2"
+    assert projection.work.schema == "agora/application/work-item-detail/v3"
     assert projection.lifecycle.current_state == projection.work.state
     assert projection.traceability.state == projection.work.state
     assert projection.artifacts == projection.work.artifacts
@@ -707,7 +709,8 @@ def test_rejects_repository_artifact_paths_resolving_outside_project(
     )
     artifacts_path.write_text(
         f"{artifacts_path.read_text(encoding='utf-8').rstrip()}\n"
-        f"| test-report | repo://escape.txt | project:developer | {TIMESTAMP.isoformat()} |\n",
+        "| test-report | repo://escape.txt | none | project:developer | "
+        f"{TIMESTAMP.isoformat()} |\n",
         encoding="utf-8",
     )
 
@@ -728,7 +731,7 @@ def test_specification_revision_rejects_repository_uri_traversal(
     )
     artifacts_path.write_text(
         f"{artifacts_path.read_text(encoding='utf-8').rstrip()}\n"
-        f"| spec | repo://../outside.md | project:developer | {TIMESTAMP.isoformat()} |\n",
+        f"| spec | repo://../outside.md | none | project:developer | {TIMESTAMP.isoformat()} |\n",
         encoding="utf-8",
     )
 
@@ -756,6 +759,79 @@ def test_does_not_infer_absent_durable_relationships(
     )
     assert lifecycle.available_transitions == expected_targets
     assert lifecycle.method == "scrum"
+
+
+def test_work_control_retries_after_one_interleaved_external_markdown_edit(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace, service = read_project
+    work_path = root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "WORK.md"
+    original = workspace.work_control_read_set_sha256
+    calls = 0
+
+    def fingerprint(swarm_id: str, work_id: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            work_path.write_text(
+                work_path.read_text(encoding="utf-8") + "\nExternally added note.\n",
+                encoding="utf-8",
+            )
+        return original(swarm_id, work_id)
+
+    monkeypatch.setattr(workspace, "work_control_read_set_sha256", fingerprint)
+
+    projection = service.work_control_projection("delivery", "read-boundary")
+
+    assert projection.work.id == "read-boundary"
+    assert calls == 4
+
+
+def test_work_control_never_returns_a_mixed_snapshot_during_repeated_external_edits(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace, service = read_project
+    work_path = root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "WORK.md"
+    original = workspace.work_control_read_set_sha256
+    calls = 0
+
+    def fingerprint(swarm_id: str, work_id: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls in {2, 4, 6}:
+            work_path.write_text(
+                work_path.read_text(encoding="utf-8") + f"\nExternal revision {calls}.\n",
+                encoding="utf-8",
+            )
+        return original(swarm_id, work_id)
+
+    monkeypatch.setattr(workspace, "work_control_read_set_sha256", fingerprint)
+
+    with pytest.raises(ConcurrentDurableEditError) as captured:
+        service.work_control_projection("delivery", "read-boundary")
+
+    assert captured.value.retryable is True
+    assert captured.value.to_dict()["details"] == {"stale_reason": "external-edit"}
+
+
+def test_rejects_invalid_durable_external_content_digest(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, _, service = read_project
+    artifacts = root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "artifacts.md"
+    contents = artifacts.read_text(encoding="utf-8")
+    contents = re.sub(
+        r"(\| test-report \| repo://reports/read-service\.txt \|) [0-9a-f]{64} (\|)",
+        r"\1 NOT-A-SHA256 \2",
+        contents,
+    )
+    assert "NOT-A-SHA256" in contents
+    artifacts.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(InvalidDurableStateError, match="64 lowercase hexadecimal"):
+        service.artifacts("delivery", "read-boundary")
 
 
 def _run_json(root: Path, arguments: list[str]) -> object:
@@ -930,3 +1006,30 @@ def test_core_0_7_governance_fixture_versions_the_incompatible_contracts() -> No
     serialized = json.dumps(fixture, sort_keys=True)
     assert "/tmp/" not in serialized
     assert "private_key" not in serialized
+
+
+def test_core_0_8_fixture_versions_freshness_digests_errors_and_budgets() -> None:
+    path = Path(__file__).parent / "contracts" / "core-0.8-application-contracts.json"
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+
+    assert fixture["core_version"] == "0.8.0"
+    assert fixture["artifact"]["schema"].endswith("artifact-summary/v3")
+    assert fixture["evidence"]["schema"].endswith("evidence-summary/v3")
+    assert fixture["gate_command"]["schema"].endswith("approve-gate-command/v4")
+    assert fixture["prepared_gate"]["schema"].endswith("prepared-gate-decision/v3")
+    assert fixture["prepared_gate"]["authorization_schema"].endswith(
+        "approve-gate-authorization/v4"
+    )
+    assert (
+        fixture["prepared_gate"]["authorization_digest"]
+        == hashlib.sha256(
+            fixture["prepared_gate"]["authorization_payload"].encode("ascii")
+        ).hexdigest()
+    )
+    assert fixture["gate_option"]["content_addressed_evidence_required"] is True
+    assert fixture["work_control_projection_schema"].endswith("work-control-projection/v3")
+    assert fixture["operational_error"]["schema"].endswith("error/v2")
+    assert fixture["budget"]["projection_schema"].endswith("budget-amendment-projection/v1")
+    serialized = json.dumps(fixture, sort_keys=True)
+    assert "/tmp/" not in serialized
+    assert all(secret not in serialized for secret in ("private_key", "signature", "token"))

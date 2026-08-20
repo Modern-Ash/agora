@@ -1,0 +1,58 @@
+{
+  "core_version": "0.8.0",
+  "artifact": {
+    "schema": "agora/application/artifact-summary/v3",
+    "uri": "https://evidence.example.invalid/report",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "evidence": {
+    "schema": "agora/application/evidence-summary/v3",
+    "artifact_content_sha256": {
+      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "gate_command": {
+    "schema": "agora/application/approve-gate-command/v4",
+    "evidence_content_sha256": {
+      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "actor_fingerprint": null,
+    "prepared_at": "2026-08-20T15:00:00Z",
+    "expires_at": "2026-08-20T15:15:00Z"
+  },
+  "prepared_gate": {
+    "schema": "agora/application/prepared-gate-decision/v3",
+    "authorization_schema": "agora/application/approve-gate-authorization/v4",
+    "authorization_payload": "{}\n",
+    "authorization_digest": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "freshness": "governed-material/v2",
+    "prepared_at": "2026-08-20T15:00:00Z",
+    "expires_at": "2026-08-20T15:15:00Z"
+  },
+  "gate_option": {
+    "schema": "agora/application/gate-decision-option-summary/v3",
+    "evidence_content_sha256": {
+      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "content_addressed_evidence_required": true
+  },
+  "gate_options_projection_schema": "agora/application/gate-decision-options-projection/v3",
+  "gate_decision_projection_schema": "agora/application/gate-decision-projection/v3",
+  "work_control_projection_schema": "agora/application/work-control-projection/v3",
+  "operational_error": {
+    "schema": "agora/application/error/v2",
+    "code": "command.preparation-expired",
+    "category": "concurrency",
+    "retryable": true,
+    "durable_path": null,
+    "recovery_hint": "Prepare the command again before retrying.",
+    "details": {}
+  },
+  "budget": {
+    "command_schema": "agora/application/amend-budget-command/v1",
+    "prepared_schema": "agora/application/prepared-budget-amendment/v1",
+    "authorization_schema": "agora/application/amend-budget-authorization/v1",
+    "projection_schema": "agora/application/budget-amendment-projection/v1",
+    "durable_record_schema": "agora/budget-amendment/v1"
+  }
+}

@@ -25,18 +25,32 @@ authoritative.
   references tied to required evidence types, and lock-consistent work control snapshots.
 - An executable Jira adapter scenario that shows reads, writes, provider output, and denied
   authority without requiring live credentials.
+- Core 0.8 content-addressed external evidence, optimistic read-set checks, expiring preparations,
+  compound lifecycle transactions, stable operational errors, and explicit budget amendments.
+- An opt-in Jira live create smoke that requires an authenticated native CLI and an explicitly
+  confirmed non-production project, and reports manual cleanup without persisting credentials.
 
 The detailed implementation record is [Core hardening and observable Jira
 integration](changes/2026-08-core-hardening-and-jira.md).
 
-## Priority 1: expand compound mutation transactions
+## Priority 1: expand compound mutation transactions — delivered baseline in 0.8
 
 Adopt the shared filesystem transaction in lifecycle mutations that update multiple durable files,
 starting with transitions and evidence-bearing completion paths. Keep specialized pack, registry,
 trust, and upgrade transactions separate until their staging semantics can be unified without losing
 provenance or rollback guarantees.
 
-Acceptance conditions:
+Core 0.8 adopts the shared reentrant transaction for work transitions, criterion satisfaction,
+artifact and evidence registration, approvals, gate decisions, status changes, and the domain/event/
+Activity write-set of usage, decomposition, delegation create/accept/collect, signed lifecycle-action
+application, and budget amendments. Fault injection covers first, intermediate, final, Activity,
+commit, rollback, new-file removal, and permission restoration. An incomplete rollback surfaces
+`transaction.indeterminate` with a recovery hint instead of hiding the failure.
+
+Remaining work: audit less common checklist, handoff, session, Tool Run, actor identity, pack,
+registry, trust, and upgrade families before unifying their specialized staging semantics.
+
+Acceptance conditions retained for future families:
 
 - every adopted mutation identifies its complete write set;
 - injected failure tests cover early, middle, and final writes;
@@ -45,7 +59,7 @@ Acceptance conditions:
 - validation succeeds after a rolled-back failure;
 - documentation states which operations have the guarantee.
 
-## Priority 2: continue extracting mutation handlers
+## Priority 2: continue extracting mutation handlers — first family delivered in 0.8
 
 The read boundary and first governed gate command are extracted. `AgoraWorkspace` still centralizes
 many mutation families, validation, rendering, and persistence. Continue extracting explicit
@@ -66,6 +80,12 @@ AgoraWorkspace
     └── PackAndRegistryHandlers
 ```
 
+`WorkLifecycleHandlers` now provides the declarative registry for `criterion.satisfy`,
+`artifact.add`, and `evidence.add`. It receives resolved immutable context and explicit callbacks,
+and its unit tests run without a Workspace or unrelated subsystem. `AgoraWorkspace` remains the
+compatibility facade. Delegation, actor identity, Tool Run, session, pack, and registry handlers
+remain future incremental extractions.
+
 Handlers should receive explicit resolved context and filesystem services. They must not introduce a
 service container, runtime plugin loading, vendor SDK, or alternate persistence store.
 
@@ -80,11 +100,11 @@ Acceptance conditions:
 - Method Pack rules are reapplied immediately before every mutation;
 - unit tests can exercise a handler without initializing unrelated subsystems.
 
-## Priority 3: stable operational error model
+## Priority 3: stable operational error model — delivered in 0.8
 
-Introduce provider-neutral exceptions carrying a stable code, human message, optional durable path,
-and recovery hint. CLI rendering may remain friendly for terminals and structured for captured
-output.
+Application error schema v2 now carries the stable code, human message, category, retryability,
+optional durable path, recovery hint, and redacted structured details. Compatibility subclasses keep
+earlier public errors viable while new consumers can use provider-neutral families.
 
 Initial error families should cover:
 
@@ -103,7 +123,7 @@ Acceptance conditions:
 - external provider errors remain distinguishable from Agora policy denial;
 - no provider-specific exception enters the core contract.
 
-## Priority 4: explicit budget amendments
+## Priority 4: explicit budget amendments — delivered in 0.8
 
 Delegation usage is append-only and bounded by inherited work budgets, but legitimate capacity
 changes need an explicit lifecycle operation rather than manual Markdown editing.
@@ -117,10 +137,12 @@ An amendment should bind:
 - signed action preconditions when authentication is required;
 - an append-only amendment history.
 
-Limits must never be silently reduced below already recorded usage or increased by a child actor
-without parent authority.
+Limits are never silently reduced below already recorded usage or increased by a child actor without
+parent authority. Prepare/apply binds the current child and parent budgets, sibling allocations,
+usage, actor key, evidence, reason, and timestamps. The applied record is append-only and the current
+limit, event, and Activity update share one transaction.
 
-## Priority 5: optional live integration smoke tests
+## Priority 5: optional live integration smoke tests — Jira baseline delivered in 0.8
 
 Keep deterministic local samples as the default verification contract. Add opt-in smoke tests for
 reviewed provider environments only when their native CLI, authentication, disposable target, and
@@ -135,6 +157,13 @@ For Jira, a live smoke test should:
 - avoid deletion unless the neutral contract and Jira workflow both support it safely;
 - retain bounded Tool Runs and report cleanup requirements;
 - skip cleanly when ACLI or authentication is unavailable.
+
+`tests/test_jira_live.py` implements the safe create-only baseline. It is skipped unless
+`AGORA_RUN_JIRA_LIVE=1`, `AGORA_JIRA_LIVE_PROJECT`,
+`AGORA_JIRA_LIVE_CONFIRMED_NONPRODUCTION=1`, and `acli` are present. The write is first materialized
+as a prepared bounded Tool Run and launched separately. Deletion is intentionally absent because the
+reviewed neutral contract does not expose it; the test reports the created key for manual archival.
+Read, comment, transition, and post-transition verification remain the next live-only expansion.
 
 Live provider tests must never run in the ordinary unit-test or sample matrix and must never make
 credentials durable.
