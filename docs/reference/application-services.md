@@ -1,6 +1,6 @@
 # Application Services contracts
 
-Agora Core 0.6.0 exposes an in-process, provider-neutral boundary in `agora.application`. Agora CLI
+Agora Core 0.7.0 exposes an in-process, provider-neutral boundary in `agora.application`. Agora CLI
 and Studio API are adapters over this boundary. Studio must not invoke CLI commands or parse
 `.agora/` records.
 
@@ -28,11 +28,11 @@ is incompatible.
 | `work_traceability()` | `agora/application/traceability-summary/v1` |
 | `specification_history()` | `agora/application/specification-summary/v1` |
 | `specification_revision()` | `agora/application/specification-revision-detail/v1` |
-| `gate_decision_options()` | `agora/application/gate-decision-options-projection/v1` |
-| `work_control_projection()` | `agora/application/work-control-projection/v1` |
+| `gate_decision_options()` | `agora/application/gate-decision-options-projection/v2` |
+| `work_control_projection()` | `agora/application/work-control-projection/v2` |
 
 `WorkItemDetail v2` explicitly nests `ArtifactSummary v2`, `EvidenceSummary v2`, and
-`ApprovalSummary v2`. Core 0.6 removes `WorkItemDetail v1` from its public surface rather than
+`ApprovalSummary v2`. Core 0.6 removed `WorkItemDetail v1` from its public surface rather than
 publishing two incompatible shapes under the same schema. This is an intentional 0.x minor
 contract break; consumers that require v1 must remain on Core 0.5.x.
 
@@ -60,30 +60,48 @@ paths are validated, and content is limited to 128 KiB and 2,000 lines per field
 
 `gate_decision_options()` returns every gate decision for the current state, not a preferred or
 first option. Each option binds the transition target, gate, role, actor, decision, usable evidence,
-typed blockers, and public authentication metadata. Rejection does not inherit evidence and
-acceptance blockers that exist to authorize approval, while both decisions remain subject to
-state, operational-status, authority, duplicate-decision, and final command revalidation.
+typed blockers, and public authentication metadata. Option v2 preserves
+`evidence_references_by_type`; when a gate requires named evidence types, approval references are
+eligible only for those types and must cite at least one successful durable reference for every
+required type. A successful reference from an unrelated type cannot satisfy the gate. Rejection
+does not inherit evidence and acceptance blockers that exist to authorize approval, while both
+decisions remain subject to state, operational-status, authority, duplicate-decision, and final
+command revalidation.
 
 `work_control_projection()` aggregates the work detail, lifecycle, materials, traceability,
-specification history, and gate options behind one logical read. Core checks that the state-bearing
-projections agree before returning it; Markdown and Git remain the source of truth.
+specification history, and gate options while holding the project snapshot lock used to serialize
+Core-managed mutations. Projection v2 includes a deterministic `snapshot_token` over every nested
+contract. A concurrent Core mutation either waits, times out with the stable workspace lock error,
+or occurs after the complete projection has been assembled; it cannot produce a mixed response.
+Manual writers that bypass Core do not participate in that lock. Markdown and Git remain the source
+of truth.
 
 ## Governed command
 
 `AgoraCommandService.approve_gate()` accepts
-`agora/application/approve-gate-command/v2` and returns
-`agora/application/gate-decision-projection/v1`. Core selects exactly one authorized role,
+`agora/application/approve-gate-command/v3` and returns
+`agora/application/gate-decision-projection/v2`. Core selects exactly one authorized role,
 revalidates state, Method Pack, evidence, gate preconditions and optional authentication, then
 persists the decision and Activity event in one transaction. The result contains the exact Activity
 record emitted by that transaction; it never searches for a later matching event.
 
-Command v2 binds `transition_target` and `role_id` in addition to the gate, actor, decision,
-reason, expected state, and evidence. `prepare_gate_decision()` returns
-`agora/application/prepared-gate-decision/v1`, including the canonical authorization payload,
-SHA-256 digest, expected Ed25519 public identity, and state-bound freshness metadata. Core never
-reads or returns a private key and never signs for an actor. A detached signature is verified over
-the exact prepared payload; changing any command field invalidates it. Actors that do not require
-authentication may continue to submit command v2 without authentication material.
+Command v3 adds the mandatory apply-time `precondition_digest`. Clients first submit the command
+without a digest to `prepare_gate_decision()`, which returns
+`agora/application/prepared-gate-decision/v2`. Only Core calculates the digest. It covers project,
+work and swarm identity; expected state; exact transition, gate, decision, role and current actor;
+the current actor fingerprint; the active Method Pack; assignments; approvals; acceptance and
+blockers; typed evidence and selected references; registered artifact content digests where
+available; the specification digest; and the exact calculated option. The prepared authorization
+payload uses `agora/application/approve-gate-authorization/v3` and includes that digest.
+
+Core canonicalizes the reason by collapsing whitespace and canonicalizes evidence references by
+trimming, dropping empty values, and retaining the first occurrence. Those exact values flow
+through preparation, signing, validation, approval or rejection persistence, Activity, and the
+returned projection. The apply path recalculates the precondition under the project mutation lock
+immediately before the transaction. Any governed change, even when the work state is unchanged,
+returns `command.stale-precondition` without decision writes. Core never reads or returns a private
+key and never signs for an actor. Authenticated actors sign the exact prepared payload; unsigned
+actors still use the same prepare/apply freshness protocol but omit authentication material.
 
 Application errors serialize as `agora/application/error/v1`. Stable command codes are:
 
@@ -107,6 +125,7 @@ classification.
 | 0.4.x | Initial read and gate-decision services | Existing CLI-backed or transitional Studio integrations only |
 | 0.5.x | Complete local read boundary with WorkItemDetail v1 | Agora Studio 0.2 pins `>=0.5,<0.6` |
 | 0.6.x | WorkItemDetail v2, exact gate options, signing preparation, revision detail, aggregate control projection | Agora Studio 0.2 is not compatible; a later Studio release must adopt and assert these schemas |
+| 0.7.x | Governed-material freshness, typed gate evidence, canonical gate commands, atomic control snapshots | Consumers must prepare every gate decision and assert the v2/v3 schemas before applying it |
 
 This table describes the intended consumer boundary, not a claim that a released Studio version
 already consumes every contract. During 0.x, consumers should pin a compatible Core minor version

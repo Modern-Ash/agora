@@ -14,6 +14,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
+from threading import local
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
@@ -204,6 +205,7 @@ from agora.model import (
     PrepareCriterionInput,
     PrepareDecomposeWorkInput,
     PrepareDelegationActionInput,
+    PreparedGateDecisionRecord,
     PrepareEvidenceInput,
     PrepareGateWaiverInput,
     PrepareLifecycleAuthorizationInput,
@@ -392,8 +394,7 @@ class AgoraWorkspace:
             raise ValueError("AGORA_LOCK_TIMEOUT must be a non-negative number") from error
         if not math.isfinite(self.lock_timeout) or self.lock_timeout < 0:
             raise ValueError("Lock timeout must be a finite non-negative number")
-        self._lock_depth = 0
-        self._lock_resources: tuple[Path, ...] = ()
+        self._lock_state = local()
 
     @_locked_mutation("home")
     def configure(self, data: ConfigureInput) -> UserConfiguration:
@@ -2998,14 +2999,12 @@ class AgoraWorkspace:
             (item["role"], item["actor"]): item
             for item in self.action_candidates(swarm.id, "approval.add")
         }
-        successful_references = list(
-            dict.fromkeys(
-                reference
-                for _, result, references in self._work_evidence_rows(work)
-                if result == "success"
-                for reference in references
-            )
-        )
+        successful_by_type: dict[str, list[str]] = {}
+        for evidence_type, result, references in self._work_evidence_rows(work):
+            if result != "success":
+                continue
+            bucket = successful_by_type.setdefault(evidence_type, [])
+            bucket.extend(reference for reference in references if reference not in bucket)
         options: list[GateDecisionOptionRecord] = []
         for transition in assessment.transitions:
             if transition.source != work.state or transition.gate_id is None:
@@ -3059,6 +3058,22 @@ class AgoraWorkspace:
                         )
                     )
                 for decision in ("approved", "rejected"):
+                    eligible_types = (
+                        list(gate.required_evidence_types)
+                        if decision == "approved" and gate.required_evidence_types
+                        else list(successful_by_type)
+                    )
+                    eligible_by_type = {
+                        evidence_type: list(successful_by_type.get(evidence_type, []))
+                        for evidence_type in eligible_types
+                    }
+                    eligible_references = list(
+                        dict.fromkeys(
+                            reference
+                            for references in eligible_by_type.values()
+                            for reference in references
+                        )
+                    )
                     transition_blockers = [
                         blocker
                         for blocker in transition.blockers
@@ -3116,7 +3131,8 @@ class AgoraWorkspace:
                             required_evidence_types=(
                                 list(gate.required_evidence_types) if decision == "approved" else []
                             ),
-                            evidence_references=successful_references,
+                            evidence_references=eligible_references,
+                            evidence_references_by_type=eligible_by_type,
                             authentication_required=(
                                 actor.authentication_required if actor is not None else False
                             ),
@@ -3134,7 +3150,8 @@ class AgoraWorkspace:
                     )
         return options
 
-    def prepare_gate_decision(self, data: GateDecisionInput) -> GateDecisionOptionRecord:
+    @_locked_mutation("project")
+    def prepare_gate_decision(self, data: GateDecisionInput) -> PreparedGateDecisionRecord:
         """Revalidate and resolve one exact option before canonical signing."""
 
         root = self.project_root()
@@ -3157,20 +3174,28 @@ class AgoraWorkspace:
             and option.transition_target == data.transition_target
             and option.role_id == data.role_id
             and option.decision == data.decision
-            and option.actor_id
-            in {data.actor_id, f"project:{data.actor_id}", f"user:{data.actor_id}"}
         ]
         if not matches:
-            raise ActorUnauthorizedRuleError(
-                "No gate decision option matches the requested transition, role, and actor"
+            raise GateDecisionRoleRuleError(
+                "No gate decision option matches the requested transition and role"
             )
         if len(matches) != 1:
             raise GateDecisionRoleRuleError("Gate decision option is ambiguous")
         option = matches[0]
+        evidence_refs = list(
+            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+        )
+        digest = self._gate_decision_precondition_sha256(
+            root, swarm, work, option, data.actor_id, " ".join(data.reason.split()), evidence_refs
+        )
+        prepared = PreparedGateDecisionRecord(option=option, precondition_digest=digest)
+        if option.actor_id not in {
+            data.actor_id,
+            f"project:{data.actor_id}",
+            f"user:{data.actor_id}",
+        }:
+            raise ActorUnauthorizedRuleError("No gate decision option matches the requested actor")
         if option.allowed:
-            evidence_refs = list(
-                dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
-            )
             missing = [
                 reference
                 for reference in evidence_refs
@@ -3184,7 +3209,19 @@ class AgoraWorkspace:
                 raise EvidenceMissingRuleError(
                     f"Gate {data.gate_id} requires durable evidence references"
                 )
-            return option
+            if data.decision == "approved":
+                missing_types = [
+                    evidence_type
+                    for evidence_type in option.required_evidence_types
+                    if not set(evidence_refs)
+                    & set(option.evidence_references_by_type.get(evidence_type, []))
+                ]
+                if missing_types:
+                    raise EvidenceMissingRuleError(
+                        "Gate evidence references do not cover required evidence types: "
+                        + ", ".join(missing_types)
+                    )
+            return prepared
         codes = {blocker.code for blocker in option.blockers}
         if codes & {"gate.role-already-resolved", "gate.rejection-already-recorded"}:
             raise GateAlreadyResolvedRuleError(option.unavailable_reason or "Gate is resolved")
@@ -3201,6 +3238,98 @@ class AgoraWorkspace:
             )
         raise GateDecisionRoleRuleError(
             option.unavailable_reason or "Gate decision is not currently available"
+        )
+
+    def _gate_decision_precondition_sha256(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        work: WorkRecord,
+        option: GateDecisionOptionRecord,
+        requested_actor_id: str,
+        reason: str,
+        evidence_refs: list[str],
+    ) -> str:
+        """Hash the durable, governed material behind one exact gate option."""
+
+        artifacts = []
+        artifact_digests: dict[str, str | None] = {}
+        for record in self._work_artifact_records(work):
+            digest: str | None = None
+            if record.uri.startswith("repo://"):
+                self._assert_artifact_reference(root, record.uri)
+                digest = hashlib.sha256(
+                    (root / record.uri.removeprefix("repo://")).read_bytes()
+                ).hexdigest()
+            elif record.uri.startswith("git://"):
+                self._assert_artifact_reference(root, record.uri)
+                digest = record.uri.removeprefix("git://")
+            artifacts.append({"kind": record.kind, "uri": record.uri, "sha256": digest})
+            artifact_digests[record.uri] = digest
+        evidence = [
+            {
+                "type": record.type,
+                "result": record.result,
+                "references": record.artifact_references,
+                "reference-digests": {
+                    reference: artifact_digests.get(reference)
+                    for reference in record.artifact_references
+                },
+            }
+            for record in self._work_evidence_records(work)
+        ]
+        approvals = [
+            {"role": record.role, "actor": record.actor, "note": record.note}
+            for record in self._work_approval_records(work)
+        ]
+        blocker_values = [
+            {
+                "code": blocker.code,
+                "category": blocker.category,
+                "references": blocker.references,
+            }
+            for blocker in option.blockers
+        ]
+        return self._canonical_sha256(
+            {
+                "schema": "agora/application/gate-decision-precondition/v1",
+                "project": self._load_project_configuration(root).project,
+                "swarm": swarm.id,
+                "work": work.id,
+                "work-precondition-sha256": self._work_precondition_sha256(work),
+                "method-pack": swarm.method,
+                "method-pack-sha256": pack_tree_sha256(root / ".agora" / "methods" / swarm.method),
+                "assignments": swarm.assignments,
+                "requested-actor": requested_actor_id,
+                "reason": reason,
+                "current-actor": option.actor_id,
+                "current-actor-fingerprint": option.authentication_fingerprint,
+                "acceptance": {
+                    "criteria": work.acceptance_criteria,
+                    "satisfied": work.satisfied_criteria,
+                    "stages": work.criterion_statuses,
+                },
+                "approvals": approvals,
+                "artifacts": artifacts,
+                "evidence": evidence,
+                "specifications": [
+                    artifact for artifact in artifacts if artifact["kind"] == "spec"
+                ],
+                "selected-evidence-references": evidence_refs,
+                "option": {
+                    "expected-state": option.expected_state,
+                    "transition-source": option.transition_source,
+                    "transition-target": option.transition_target,
+                    "gate": option.gate_id,
+                    "decision": option.decision,
+                    "role": option.role_id,
+                    "allowed": option.allowed,
+                    "blockers": blocker_values,
+                    "required-evidence-types": option.required_evidence_types,
+                    "evidence-references-by-type": option.evidence_references_by_type,
+                    "authentication-required": option.authentication_required,
+                },
+            }
         )
 
     def list_tools(self) -> list[ToolPackRecord]:
@@ -6120,9 +6249,46 @@ class AgoraWorkspace:
         if not reason:
             raise ValueError("Gate decision reason cannot be empty")
 
-        self.prepare_gate_decision(data)
+        if (
+            data.precondition_digest is None
+            or re.fullmatch(r"[0-9a-f]{64}", data.precondition_digest) is None
+        ):
+            raise StalePreconditionRuleError(
+                "Gate decision requires the precondition digest issued by Core"
+            )
 
         root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        work = self._load_work(swarm, data.work_id)
+        current_options = [
+            option
+            for option in self.inspect_gate_decision_options(data.swarm_id, data.work_id)
+            if option.gate_id == data.gate_id
+            and option.transition_target == data.transition_target
+            and option.role_id == data.role_id
+            and option.decision == data.decision
+        ]
+        if len(current_options) != 1:
+            raise StalePreconditionRuleError(
+                "Governed gate material changed since the decision was prepared"
+            )
+        evidence_refs = list(
+            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+        )
+        current_digest = self._gate_decision_precondition_sha256(
+            root, swarm, work, current_options[0], data.actor_id, reason, evidence_refs
+        )
+        if current_digest != data.precondition_digest:
+            raise StalePreconditionRuleError(
+                "Governed gate material changed since the decision was prepared"
+            )
+
+        prepared = self.prepare_gate_decision(data)
+        if prepared.precondition_digest != current_digest:
+            raise StalePreconditionRuleError(
+                "Governed gate material changed while the decision was revalidated"
+            )
+
         project = self._load_project_configuration(root)
         if data.project_identity != project.project:
             raise ProjectIdentityMismatchRuleError(
@@ -6178,9 +6344,6 @@ class AgoraWorkspace:
             raise GateDecisionRoleRuleError("Gate decision role does not resolve uniquely")
         role_id = data.role_id
 
-        evidence_refs = list(
-            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
-        )
         evidence_rows = self._work_evidence_rows(work)
         successful_refs = {
             reference
@@ -6301,6 +6464,10 @@ class AgoraWorkspace:
                     delegation=delegation,
                     authentication_fingerprint=authentication_fingerprint,
                     activity_sink=captured_activity,
+                    gate_id=data.gate_id,
+                    evidence_refs=evidence_refs,
+                    precondition_digest=current_digest,
+                    decision_reason=reason,
                 )
                 if len(captured_activity) != 1:
                     raise RuntimeError("Gate approval did not produce exactly one Activity event")
@@ -6319,6 +6486,7 @@ class AgoraWorkspace:
             work=updated_work,
             activity=decision_activity,
             role_id=role_id,
+            precondition_digest=current_digest,
         )
 
     @_locked_mutation("project")
@@ -6400,6 +6568,10 @@ class AgoraWorkspace:
         action_id: str | None = None,
         authentication_fingerprint: str | None = None,
         activity_sink: list[ActivityRecord] | None = None,
+        gate_id: str | None = None,
+        evidence_refs: list[str] | None = None,
+        precondition_digest: str | None = None,
+        decision_reason: str | None = None,
     ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
@@ -6437,6 +6609,13 @@ class AgoraWorkspace:
         )
         if authentication_fingerprint is not None:
             detail += f" authentication={authentication_fingerprint}"
+        if gate_id is not None:
+            references = ",".join(evidence_refs or []) or "none"
+            detail += (
+                f" gate={gate_id} evidence={references}"
+                f" precondition={precondition_digest or 'none'}"
+                f" reason={decision_reason or note_value}"
+            )
         activity = self._append_work_event(work, "approval.added", detail)
         if activity_sink is not None:
             activity_sink.append(activity)
@@ -13451,6 +13630,13 @@ class AgoraWorkspace:
             return inspect_workspace_lock(self.project_root())
         raise ValueError(f"Unsupported lock scope: {scope}")
 
+    @contextmanager
+    def consistent_read(self, operation: str = "consistent-read") -> Iterator[None]:
+        """Serialize a multi-record read against Core-managed project mutations."""
+
+        with self._mutation_lock((self.project_root(),), operation, coordinate_external=False):
+            yield
+
     def _mutation_resources(
         self,
         scope: str,
@@ -13500,19 +13686,27 @@ class AgoraWorkspace:
         raise ValueError(f"Unsupported mutation lock scope: {scope}")
 
     @contextmanager
-    def _mutation_lock(self, resources: tuple[Path, ...], operation: str) -> Iterator[None]:
+    def _mutation_lock(
+        self,
+        resources: tuple[Path, ...],
+        operation: str,
+        *,
+        coordinate_external: bool = True,
+    ) -> Iterator[None]:
         resolved = tuple(sorted({item.resolve() for item in resources}, key=str))
-        if self._lock_depth:
-            if self._lock_resources != resolved:
+        depth = getattr(self._lock_state, "depth", 0)
+        held_resources = getattr(self._lock_state, "resources", ())
+        if depth:
+            if held_resources != resolved:
                 raise RuntimeError(
                     f"Nested mutation attempted to lock {', '.join(map(str, resolved))} while "
-                    f"holding {', '.join(map(str, self._lock_resources))}"
+                    f"holding {', '.join(map(str, held_resources))}"
                 )
-            self._lock_depth += 1
+            self._lock_state.depth = depth + 1
             try:
                 yield
             finally:
-                self._lock_depth -= 1
+                self._lock_state.depth -= 1
             return
 
         with ExitStack() as stack:
@@ -13527,7 +13721,7 @@ class AgoraWorkspace:
                 )
             for resource in resolved:
                 coordination_path = resource / ".agora" / "coordination.md"
-                if not coordination_path.is_file():
+                if not coordinate_external or not coordination_path.is_file():
                     continue
                 policy = load_coordination_policy(coordination_path)
                 if policy.mode == "external-lease":
@@ -13539,13 +13733,13 @@ class AgoraWorkspace:
                             runner=self._lease_runner,
                         )
                     )
-            self._lock_resources = resolved
-            self._lock_depth = 1
+            self._lock_state.resources = resolved
+            self._lock_state.depth = 1
             try:
                 yield
             finally:
-                self._lock_depth = 0
-                self._lock_resources = ()
+                self._lock_state.depth = 0
+                self._lock_state.resources = ()
 
     def project_root(self) -> Path:
         return find_project_root(self.cwd)

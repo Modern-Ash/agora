@@ -210,11 +210,18 @@ class GateDecisionOptionRecord:
     evidence_required: bool
     required_evidence_types: list[str]
     evidence_references: list[str]
+    evidence_references_by_type: dict[str, list[str]]
     authentication_required: bool
     authentication_algorithm: str | None
     authentication_fingerprint: str | None
     authentication_public_key: str | None
     unavailable_reason: str | None
+
+
+@dataclass(frozen=True)
+class PreparedGateDecisionRecord:
+    option: GateDecisionOptionRecord
+    precondition_digest: str
 
 
 @dataclass(frozen=True)
@@ -1074,6 +1081,7 @@ class GateDecisionResult:
     work: WorkRecord
     activity: ActivityRecord
     role_id: str
+    precondition_digest: str
 
 
 @dataclass(frozen=True)
@@ -1837,6 +1845,7 @@ class GateDecisionInput(WorkActorInput):
     transition_target: str = ""
     role_id: str = ""
     evidence_refs: list[str] = field(default_factory=list)
+    precondition_digest: str | None = None
     authentication_payload: bytes | None = None
     authentication_signature: str | None = None
     authentication_fingerprint: str | None = None

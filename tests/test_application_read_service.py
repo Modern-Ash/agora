@@ -1,7 +1,10 @@
 import hashlib
 import io
 import json
+import re
 import subprocess
+import threading
+import time
 from dataclasses import FrozenInstanceError, asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -189,7 +192,6 @@ def test_reads_a_valid_project_with_values_equivalent_to_workspace_reads(
     read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
 ) -> None:
     _, workspace, service = read_project
-
     current_status = workspace.status()
     overview = service.project_overview()
     assert overview.project == current_status.project
@@ -570,7 +572,8 @@ def test_work_control_projection_is_consistent_and_reuses_core_contracts(
 
     projection = service.work_control_projection("delivery", "read-boundary")
 
-    assert projection.schema == "agora/application/work-control-projection/v1"
+    assert projection.schema == "agora/application/work-control-projection/v2"
+    assert re.fullmatch(r"[0-9a-f]{64}", projection.snapshot_token)
     assert projection.work.schema == "agora/application/work-item-detail/v2"
     assert projection.lifecycle.current_state == projection.work.state
     assert projection.traceability.state == projection.work.state
@@ -578,6 +581,59 @@ def test_work_control_projection_is_consistent_and_reuses_core_contracts(
     assert projection.evidence == projection.work.evidence
     assert projection.approvals == projection.work.approvals
     assert projection.gate_decision_options.current_state == projection.work.state
+
+
+def test_work_control_projection_serializes_an_interleaved_core_mutation(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, workspace, service = read_project
+    workspace.lock_timeout = 1
+    started = threading.Event()
+    errors: list[BaseException] = []
+
+    def mutate() -> None:
+        started.set()
+        try:
+            workspace.add_evidence(
+                AddEvidenceInput(
+                    swarm_id="delivery",
+                    work_id="read-boundary",
+                    actor_id="developer",
+                    type="late-review",
+                    result="success",
+                    artifact_refs=["repo://reports/read-service.txt"],
+                )
+            )
+        except BaseException as error:  # pragma: no cover - surfaced below
+            errors.append(error)
+
+    original = service.get_work_item
+    thread: threading.Thread | None = None
+
+    def start_mutation(swarm_id: str, work_id: str):
+        nonlocal thread
+        work = original(swarm_id, work_id)
+        thread = threading.Thread(target=mutate)
+        thread.start()
+        assert started.wait(timeout=1)
+        time.sleep(0.05)
+        assert thread.is_alive(), "Core mutation must wait for the projection snapshot lock"
+        return work
+
+    monkeypatch.setattr(service, "get_work_item", start_mutation)
+
+    projection = service.work_control_projection("delivery", "read-boundary")
+    assert thread is not None
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert {item.type for item in projection.evidence} == {"test-run"}
+    assert {item.type for item in service.evidence("delivery", "read-boundary")} == {
+        "test-run",
+        "late-review",
+    }
 
 
 def test_rejects_missing_or_invalid_projects(tmp_path: Path) -> None:
@@ -851,3 +907,26 @@ def test_core_0_6_consumer_fixtures_are_complete_versioned_and_portable() -> Non
             item["authorization_digest"]
             == hashlib.sha256(item["authorization_payload"].encode("ascii")).hexdigest()
         )
+
+
+def test_core_0_7_governance_fixture_versions_the_incompatible_contracts() -> None:
+    path = Path(__file__).parent / "contracts" / "core-0.7-governance-contracts.json"
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+
+    assert fixture["core_version"] == "0.7.0"
+    assert fixture["command"]["schema"].endswith("approve-gate-command/v3")
+    assert fixture["prepared"]["schema"].endswith("prepared-gate-decision/v2")
+    assert fixture["prepared"]["authorization_schema"].endswith("approve-gate-authorization/v3")
+    assert (
+        fixture["prepared"]["authorization_digest"]
+        == hashlib.sha256(fixture["prepared"]["authorization_payload"].encode("ascii")).hexdigest()
+    )
+    assert fixture["prepared"]["precondition_digest"] == fixture["command"]["precondition_digest"]
+    assert fixture["gate_option"]["evidence_references_by_type"] == {
+        "review-report": ["repo://reports/review.txt"]
+    }
+    assert fixture["work_control"]["schema"].endswith("work-control-projection/v2")
+    assert re.fullmatch(r"[0-9a-f]{64}", fixture["work_control"]["snapshot_token"])
+    serialized = json.dumps(fixture, sort_keys=True)
+    assert "/tmp/" not in serialized
+    assert "private_key" not in serialized

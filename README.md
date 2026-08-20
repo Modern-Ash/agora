@@ -97,7 +97,7 @@ flowchart LR
 Programmatic interfaces import the versioned contracts in `agora.application`. Agora CLI and the
 local-first Agora Studio API are peer adapters over those services; neither interface owns
 lifecycle policy or edits durable records outside Core. See the [application-service contract
-reference](docs/reference/application-services.md) for the Core 0.6 compatibility boundary.
+reference](docs/reference/application-services.md) for the Core 0.7 compatibility boundary.
 
 Configuration is resolved predictably:
 

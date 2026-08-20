@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from agora.application.commands import (
@@ -12,6 +13,7 @@ from agora.application.commands import (
     GateDecisionProjection,
     PreparedGateDecision,
     approve_gate_authorization_payload,
+    canonicalize_approve_gate_command,
 )
 from agora.application.errors import (
     ActorUnauthorizedError,
@@ -50,7 +52,12 @@ class AgoraCommandService:
         return cls(AgoraWorkspace(cwd=cwd))
 
     def approve_gate(self, command: ApproveGateCommand) -> GateDecisionProjection:
+        command = self._canonicalize(command)
         self._validate(command)
+        if command.precondition_digest is None:
+            raise StalePreconditionError(
+                "Gate decision requires the precondition digest issued by Core"
+            )
         authentication = command.authentication or {}
         try:
             result = self._workspace.decide_gate(
@@ -66,6 +73,7 @@ class AgoraCommandService:
                     transition_target=command.transition_target,
                     role_id=command.role_id,
                     evidence_refs=list(command.evidence_references),
+                    precondition_digest=command.precondition_digest,
                     authentication_payload=(
                         approve_gate_authorization_payload(command) if authentication else None
                     ),
@@ -111,6 +119,8 @@ class AgoraCommandService:
             role_id=result.role_id,
             decision=command.decision,
             reason=command.reason,
+            evidence_references=command.evidence_references,
+            precondition_digest=result.precondition_digest,
             lifecycle=self._reads.lifecycle(command.swarm_id, command.work_id),
             activity=self._reads.activity_entry(result.activity),
         )
@@ -118,11 +128,14 @@ class AgoraCommandService:
     def prepare_gate_decision(self, command: ApproveGateCommand) -> PreparedGateDecision:
         """Resolve an exact decision and return the canonical bytes an external signer uses."""
 
+        command = self._canonicalize(command)
         self._validate(command)
+        if command.precondition_digest is not None:
+            raise InvalidCommandError("Preparation commands must not include a precondition digest")
         if command.authentication is not None:
             raise InvalidCommandError("Prepared gate decisions must not include a signature")
         try:
-            option = self._workspace.prepare_gate_decision(
+            prepared_record = self._workspace.prepare_gate_decision(
                 GateDecisionInput(
                     project_identity=command.project_identity,
                     swarm_id=command.swarm_id,
@@ -152,13 +165,16 @@ class AgoraCommandService:
         except (FileNotFoundError, ValueError) as error:
             raise InvalidCommandError(str(error)) from error
 
+        command = replace(command, precondition_digest=prepared_record.precondition_digest)
         payload = approve_gate_authorization_payload(command)
+        option = prepared_record.option
         assert option.actor_id is not None
         return PreparedGateDecision(
             command_schema=command.schema,
-            authorization_schema="agora/application/approve-gate-authorization/v2",
+            authorization_schema="agora/application/approve-gate-authorization/v3",
             authorization_payload=payload.decode("ascii"),
             authorization_digest=hashlib.sha256(payload).hexdigest(),
+            precondition_digest=prepared_record.precondition_digest,
             project_identity=command.project_identity,
             swarm_id=command.swarm_id,
             work_id=command.work_id,
@@ -168,15 +184,25 @@ class AgoraCommandService:
             decision=command.decision,
             actor_id=option.actor_id,
             role_id=option.role_id,
-            reason=" ".join(command.reason.split()),
+            reason=command.reason,
             evidence_references=command.evidence_references,
             authentication_required=option.authentication_required,
             authentication_algorithm=option.authentication_algorithm,
             authentication_fingerprint=option.authentication_fingerprint,
             authentication_public_key=option.authentication_public_key,
-            freshness="expected-state",
+            freshness="governed-material/v1",
             expires_at=None,
         )
+
+    @staticmethod
+    def _canonicalize(command: ApproveGateCommand) -> ApproveGateCommand:
+        if not isinstance(command.reason, str):
+            raise InvalidCommandError("Gate decision reason must be a string")
+        if not isinstance(command.evidence_references, tuple):
+            raise InvalidCommandError("Evidence references must be an array")
+        if any(not isinstance(reference, str) for reference in command.evidence_references):
+            raise InvalidCommandError("Evidence references must be strings")
+        return canonicalize_approve_gate_command(command)
 
     @staticmethod
     def _validate(command: ApproveGateCommand) -> None:
@@ -225,11 +251,11 @@ class AgoraCommandService:
             raise InvalidCommandError("Gate decision reason is longer than 4000 characters")
         if not isinstance(command.evidence_references, tuple):
             raise InvalidCommandError("Evidence references must be an array")
-        if any(
-            not isinstance(reference, str) or not reference.strip()
-            for reference in command.evidence_references
+        if (
+            command.precondition_digest is not None
+            and re.fullmatch(r"[0-9a-f]{64}", command.precondition_digest) is None
         ):
-            raise InvalidCommandError("Evidence references must be non-empty strings")
+            raise InvalidCommandError("Precondition digest must be SHA-256")
         if command.authentication is not None:
             if not isinstance(command.authentication, Mapping):
                 raise InvalidCommandError("Authentication must be an object")

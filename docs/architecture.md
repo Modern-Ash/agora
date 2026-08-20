@@ -104,7 +104,7 @@ private keys.
 As Core is modularized, application services remain the shared compatibility surface for Agora CLI
 and Studio API. Moving a handler must not move its invariant into either interface.
 
-Core 0.6 extends the local read boundary for project overview, actors, swarms, work, sessions,
+Core 0.7 extends the local read boundary for project overview, actors, swarms, work, sessions,
 Method Pack topology, calculated transition availability, gates and blockers, materials, Activity,
 traceability, bounded specification history and revision detail, exact gate decision options, and a
 consistent aggregate work control projection. Workspace exposes stable typed reads for durable
@@ -112,13 +112,22 @@ materials and lifecycle assessment; `AgoraReadService` no longer reaches into pr
 parsers. See [Application Services contracts](reference/application-services.md).
 
 `AgoraCommandService` exposes the first governed mutation contract as
-`agora/application/approve-gate-command/v2`. The command and its preparation contract bind the
+`agora/application/approve-gate-command/v3`. The command and its preparation contract bind the
 exact transition, gate, role, actor, decision, reason, expected state, and evidence. Core revalidates
-those facts, Method Pack policy, durable evidence, and optional detached Ed25519 authentication
-before persistence. Approval, work events, and the Activity ledger commit through one filesystem
-transaction; callers receive a versioned updated lifecycle projection or a stable `command.*`
-error. Domain failures are translated by exception type, and the transaction returns its exact
-Activity record so concurrent events cannot be mistaken for the decision result.
+those facts, Method Pack policy, typed durable evidence, registered artifact and specification
+digests, assignments, approvals, actor identity, and optional detached Ed25519 authentication
+before persistence. Preparation is the sole issuer of a versioned governed-material digest; apply
+recalculates it under the project mutation lock and rejects stale material before writes. Approval,
+work events, and the Activity ledger commit through one filesystem transaction; callers receive a
+versioned updated lifecycle projection or a stable `command.*` error. Domain failures are
+translated by exception type, and the transaction returns its exact Activity record so concurrent
+events cannot be mistaken for the decision result.
+
+Multi-record control projections acquire that same local project lock without acquiring an external
+writer lease. This gives each Core reader one internally consistent Markdown/Git snapshot and a
+deterministic snapshot token while keeping an external coordination provider out of read paths.
+Manual edits that bypass Core remain outside the concurrency guarantee and are caught by normal
+validation or later freshness checks.
 
 ### CLI
 

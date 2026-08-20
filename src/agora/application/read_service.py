@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
@@ -416,6 +418,7 @@ class AgoraReadService:
                     evidence_required=record.evidence_required,
                     required_evidence_types=record.required_evidence_types,
                     evidence_references=record.evidence_references,
+                    evidence_references_by_type=record.evidence_references_by_type,
                     authentication_required=record.authentication_required,
                     authentication_algorithm=record.authentication_algorithm,
                     authentication_fingerprint=record.authentication_fingerprint,
@@ -445,26 +448,54 @@ class AgoraReadService:
 
     def work_control_projection(self, swarm_id: str, work_id: str) -> WorkControlProjection:
         self._require_work_slugs(swarm_id, work_id)
-        work = self.get_work_item(swarm_id, work_id)
-        lifecycle = self.lifecycle(swarm_id, work_id)
-        traceability = self.work_traceability(swarm_id, work_id)
-        options = self.gate_decision_options(swarm_id, work_id)
-        if not (
-            work.state == lifecycle.current_state == traceability.state == options.current_state
-        ):
-            raise InvalidDurableStateError(
-                "Work changed while its control projection was being read"
-            )
-        return WorkControlProjection(
-            work=work,
-            lifecycle=lifecycle,
-            artifacts=work.artifacts,
-            evidence=work.evidence,
-            approvals=work.approvals,
-            traceability=traceability,
-            specification_history=self.specification_history(swarm_id, work_id),
-            gate_decision_options=options,
-        )
+
+        def read() -> WorkControlProjection:
+            with self._workspace.consistent_read("work-control-projection"):
+                work = self.get_work_item(swarm_id, work_id)
+                lifecycle = self.lifecycle(swarm_id, work_id)
+                traceability = self.work_traceability(swarm_id, work_id)
+                specification = self.specification_history(swarm_id, work_id)
+                options = self.gate_decision_options(swarm_id, work_id)
+                if not (
+                    work.state
+                    == lifecycle.current_state
+                    == traceability.state
+                    == options.current_state
+                ):
+                    raise InvalidDurableStateError(
+                        "Work changed while its control projection was being read"
+                    )
+                material = {
+                    "work": work.to_dict(),
+                    "lifecycle": lifecycle.to_dict(),
+                    "artifacts": [item.to_dict() for item in work.artifacts],
+                    "evidence": [item.to_dict() for item in work.evidence],
+                    "approvals": [item.to_dict() for item in work.approvals],
+                    "traceability": traceability.to_dict(),
+                    "specification_history": specification.to_dict(),
+                    "gate_decision_options": options.to_dict(),
+                }
+                snapshot_token = hashlib.sha256(
+                    json.dumps(
+                        material,
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("ascii")
+                ).hexdigest()
+                return WorkControlProjection(
+                    snapshot_token=snapshot_token,
+                    work=work,
+                    lifecycle=lifecycle,
+                    artifacts=work.artifacts,
+                    evidence=work.evidence,
+                    approvals=work.approvals,
+                    traceability=traceability,
+                    specification_history=specification,
+                    gate_decision_options=options,
+                )
+
+        return self._read(f"work control projection {swarm_id}/{work_id}", read)
 
     def _work_materials(
         self, swarm_id: str, work_id: str
