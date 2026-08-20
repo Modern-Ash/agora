@@ -70,6 +70,7 @@ from agora.identity import (
     validate_persisted_lifecycle_authorization,
     validate_persisted_session_authorization,
     validate_persisted_tool_authorization,
+    verify_actor_inline_signature,
     verify_lifecycle_authorization,
     verify_session_authorization,
     verify_tool_authorization,
@@ -130,6 +131,7 @@ from agora.model import (
     DoctorCheck,
     EnvironmentPolicyRecord,
     EventRecord,
+    GateDecisionInput,
     GatePolicy,
     GateWaiverRecord,
     HandoffActorInput,
@@ -2847,6 +2849,11 @@ class AgoraWorkspace:
             records.append(self._method_pack_record(contract, "project", path.parent))
         return records
 
+    def method_contract(self, swarm_id: str) -> MethodContract:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        return load_method_contract(root / ".agora" / "methods" / swarm.method)
+
     def list_tools(self) -> list[ToolPackRecord]:
         tool_root = self.project_root() / ".agora" / "tools"
         return [
@@ -4887,6 +4894,192 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def decide_gate(self, data: GateDecisionInput) -> WorkRecord:
+        """Apply one governed gate decision using the existing approval rules."""
+
+        assert_slug(data.swarm_id, "Swarm id")
+        assert_slug(data.work_id, "Work id")
+        assert_slug(data.gate_id, "Gate id")
+        if data.decision not in {"approved", "rejected"}:
+            raise ValueError("Gate decision must be approved or rejected")
+        reason = " ".join(data.reason.split())
+        if not reason:
+            raise ValueError("Gate decision reason cannot be empty")
+
+        root = self.project_root()
+        project = self._load_project_configuration(root)
+        if data.project_identity != project.project:
+            raise ValueError(
+                "Project identity mismatch: "
+                f"expected {project.project}, got {data.project_identity}"
+            )
+        swarm = self._load_swarm(root, data.swarm_id)
+        work = self._load_work(swarm, data.work_id)
+        if work.state != data.expected_state:
+            raise ValueError(
+                f"Stale work state: expected {data.expected_state}, current {work.state}"
+            )
+        self._assert_work_mutable(root, swarm, work)
+
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        transition = next(
+            (
+                item
+                for item in contract.transitions
+                if item.source == work.state and item.gate == data.gate_id
+            ),
+            None,
+        )
+        if transition is None or data.gate_id not in contract.gates:
+            raise ValueError(f"Gate {data.gate_id} is not active for work state {work.state}")
+        gate = contract.gates[data.gate_id]
+        if not gate.required_approval_roles:
+            raise ValueError(f"Gate {data.gate_id} has no approval decision")
+
+        actor_candidates = [
+            item
+            for item in self.action_candidates(swarm.id, "approval.add")
+            if item["actor"] in {data.actor_id, f"project:{data.actor_id}", f"user:{data.actor_id}"}
+            and item["role"] in gate.required_approval_roles
+        ]
+        if not actor_candidates:
+            raise PermissionError(
+                f"Actor {data.actor_id} is not authorized for gate {data.gate_id}"
+            )
+        pending_candidates = [
+            item for item in actor_candidates if item["role"] not in work.approval_roles
+        ]
+        if not pending_candidates:
+            raise ValueError(f"Gate {data.gate_id} is already resolved for this actor")
+        if len(pending_candidates) != 1:
+            roles = ", ".join(item["role"] for item in pending_candidates)
+            raise ValueError(f"Gate decision role is ambiguous for actor {data.actor_id}: {roles}")
+        role_id = pending_candidates[0]["role"]
+
+        evidence_refs = list(
+            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+        )
+        evidence_rows = self._work_evidence_rows(work)
+        successful_refs = {
+            reference
+            for _, result, references in evidence_rows
+            if result == "success"
+            for reference in references
+        }
+        missing_refs = [
+            reference for reference in evidence_refs if reference not in successful_refs
+        ]
+        if missing_refs:
+            raise ValueError(
+                "Gate evidence references are missing or not successful: " + ", ".join(missing_refs)
+            )
+        if (gate.require_successful_evidence or gate.required_evidence_types) and not evidence_refs:
+            raise ValueError(f"Gate {data.gate_id} requires durable evidence references")
+
+        assessment = self._work_gate_assessment(root, work, gate, data.gate_id)
+        blockers = [
+            *assessment["unsatisfied"],
+            *assessment["missing_artifacts"],
+            *assessment["missing_evidence_types"],
+            *assessment["git_issues"],
+        ]
+        if assessment["evidence_missing"]:
+            blockers.append("successful-evidence")
+        if blockers:
+            raise ValueError(
+                f"Gate {data.gate_id} evidence or preconditions are not satisfied: "
+                + ", ".join(blockers)
+            )
+
+        actor = self._find_actor(root, pending_candidates[0]["actor"])
+        authentication_fingerprint: str | None = None
+        if actor.authentication_required:
+            if any(
+                value is None
+                for value in (
+                    data.authentication_payload,
+                    data.authentication_signature,
+                    data.authentication_fingerprint,
+                )
+            ):
+                raise PermissionError(
+                    f"Actor {actor.reference} requires a signed lifecycle action for gate decisions"
+                )
+            self._assert_current_actor_key(actor)
+            if data.authentication_fingerprint != actor.authentication_fingerprint:
+                raise PermissionError(
+                    f"Gate decision authentication fingerprint does not match {actor.reference}"
+                )
+            assert data.authentication_payload is not None
+            assert data.authentication_signature is not None
+            try:
+                authentication_fingerprint, _, _, _ = verify_actor_inline_signature(
+                    actor,
+                    data.authentication_payload,
+                    data.authentication_signature,
+                    f"Gate decision signature is invalid for {actor.reference}",
+                )
+            except ValueError as error:
+                raise PermissionError(str(error)) from error
+        elif any(
+            value is not None
+            for value in (
+                data.authentication_payload,
+                data.authentication_signature,
+                data.authentication_fingerprint,
+            )
+        ):
+            raise ValueError(f"Actor {actor.reference} does not require authentication")
+
+        if data.decision == "rejected":
+            precondition = self._work_precondition_sha256(work)
+            prior = self.list_events(
+                swarm_id=swarm.id,
+                work_id=work.id,
+                type_="gate.rejected",
+                limit=100,
+            )
+            if any(
+                self._event_detail_value(item.detail, "gate") == data.gate_id
+                and self._event_detail_value(item.detail, "actor") == actor.reference
+                and self._event_detail_value(item.detail, "precondition") == precondition
+                for item in prior
+            ):
+                raise ValueError(f"Gate {data.gate_id} already has this rejection")
+
+        with filesystem_transaction():
+            if data.decision == "approved":
+                approval = AddApprovalInput(
+                    swarm_id=swarm.id,
+                    work_id=work.id,
+                    actor_id=actor.reference,
+                    role_id=role_id,
+                    note=reason,
+                )
+                _, validated_actor, validated_work, delegation = self._validate_approval(
+                    root, approval
+                )
+                self._apply_approval(
+                    swarm,
+                    validated_actor,
+                    validated_work,
+                    role_id,
+                    reason,
+                    delegation=delegation,
+                    authentication_fingerprint=authentication_fingerprint,
+                )
+            else:
+                references = ",".join(evidence_refs) or "none"
+                self._append_work_event(
+                    work,
+                    "gate.rejected",
+                    f"gate={data.gate_id} role={role_id} actor={actor.reference} "
+                    f"evidence={references} precondition={precondition} "
+                    f"authentication={authentication_fingerprint or 'none'} reason={reason}",
+                )
+        return self._load_work(swarm, work.id)
+
+    @_locked_mutation("project")
     def prepare_approval(self, data: PrepareApprovalInput) -> LifecycleActionRecord:
         assert_slug(data.id, "Lifecycle Action id")
         root = self.project_root()
@@ -4963,6 +5156,7 @@ class AgoraWorkspace:
         note_value: str,
         delegation: ApprovalDelegationRecord | None = None,
         action_id: str | None = None,
+        authentication_fingerprint: str | None = None,
     ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
@@ -4994,12 +5188,13 @@ class AgoraWorkspace:
             except Exception:
                 atomic_write(path, original)
                 raise
-        self._append_work_event(
-            work,
-            "approval.added",
+        detail = (
             f"role={role_id} actor={actor.reference} "
-            f"delegation={delegation.id if delegation is not None else 'none'}",
+            f"delegation={delegation.id if delegation is not None else 'none'}"
         )
+        if authentication_fingerprint is not None:
+            detail += f" authentication={authentication_fingerprint}"
+        self._append_work_event(work, "approval.added", detail)
         return self._load_work(swarm, work.id)
 
     @_locked_mutation("project")

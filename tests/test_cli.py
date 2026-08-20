@@ -6,6 +6,7 @@ from agora.cli import main
 from agora.model import (
     AddActorInput,
     AssignActorInput,
+    ChangeWorkStatusInput,
     CreateSwarmInput,
     CreateWorkInput,
     InitInput,
@@ -1007,3 +1008,293 @@ def test_creates_and_lists_a_granular_gate_waiver_from_the_cli(tmp_path: Path, m
     assert '"id": "accepted-risk"' in output.getvalue()
     assert '"id": "alternate-release-approval"' in output.getvalue()
     assert '"status": "used"' in output.getvalue()
+
+
+def _install_kanban_swarm(workspace: AgoraWorkspace) -> None:
+    workspace.add_actor(
+        AddActorInput(
+            id="requester",
+            name="Requester",
+            kind="human",
+            capabilities=["demand-management", "acceptance"],
+            scope="project",
+        )
+    )
+    workspace.add_actor(
+        AddActorInput(
+            id="flow",
+            name="Flow Manager",
+            kind="ai-agent",
+            capabilities=["flow-management", "governance"],
+            scope="project",
+        )
+    )
+    workspace.add_actor(
+        AddActorInput(
+            id="doer",
+            name="Delivery",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    workspace.create_swarm(
+        CreateSwarmInput(id="support", objective="Handle inbound requests", method="kanban")
+    )
+    workspace.assign_actor(
+        AssignActorInput(
+            swarm_id="support", role_id="service-request-manager", actor_id="requester"
+        )
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="support", role_id="flow-manager", actor_id="flow")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="support", role_id="delivery", actor_id="doer")
+    )
+
+
+def test_cli_status_output_is_unchanged_without_the_board_flag(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.add_actor(
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["specification", "acceptance"],
+            scope="project",
+        )
+    )
+    workspace.add_actor(
+        AddActorInput(
+            id="dev",
+            name="Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship the increment"))
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="spec-owner", actor_id="owner")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="dev")
+    )
+    workspace.create_work(
+        CreateWorkInput(swarm_id="delivery", id="feature", title="Ship a feature", actor_id="owner")
+    )
+
+    plain_before = io.StringIO()
+    errors = io.StringIO()
+    assert main(["status"], cwd=tmp_path, stdout=plain_before, stderr=errors) == 0
+    assert errors.getvalue() == ""
+
+    plain_after = io.StringIO()
+    assert main(["status"], cwd=tmp_path, stdout=plain_after, stderr=errors) == 0
+    assert plain_before.getvalue() == plain_after.getvalue()
+
+
+def test_cli_status_board_with_zero_swarms_shows_a_sensible_message(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    assert main(["status", "--board"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+    assert errors.getvalue() == ""
+    assert "No swarms in this project yet" in output.getvalue()
+    assert "Traceback" not in output.getvalue()
+
+
+def test_cli_status_board_renders_one_swarms_work_states_and_columns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.add_actor(
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["specification", "acceptance"],
+            scope="project",
+        )
+    )
+    workspace.add_actor(
+        AddActorInput(
+            id="dev",
+            name="Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship the increment"))
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="spec-owner", actor_id="owner")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="dev")
+    )
+    workspace.create_work(
+        CreateWorkInput(swarm_id="delivery", id="feature", title="Ship a feature", actor_id="owner")
+    )
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery", id="blocked-work", title="Blocked item", actor_id="owner"
+        )
+    )
+    workspace.block_work(
+        ChangeWorkStatusInput(
+            swarm_id="delivery",
+            work_id="blocked-work",
+            actor_id="dev",
+            reason="Waiting on input",
+        )
+    )
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    assert main(["status", "--board"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+    assert errors.getvalue() == ""
+    rendered = output.getvalue()
+    assert "Swarm: delivery" in rendered
+    assert "method=spec-driven" in rendered
+    assert "drafting" in rendered and "completed" in rendered
+    assert "feature: Ship a feature" in rendered
+    assert "[!] blocked-work: Blocked item" in rendered
+
+
+def test_cli_status_board_handles_multiple_swarms_on_different_method_packs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.add_actor(
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["specification", "acceptance"],
+            scope="project",
+        )
+    )
+    workspace.add_actor(
+        AddActorInput(
+            id="dev",
+            name="Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship the increment"))
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="spec-owner", actor_id="owner")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="dev")
+    )
+    workspace.create_work(
+        CreateWorkInput(swarm_id="delivery", id="feature", title="Ship a feature", actor_id="owner")
+    )
+
+    _install_kanban_swarm(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="support",
+            id="ticket",
+            title="Handle inbound ticket",
+            actor_id="requester",
+        )
+    )
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    assert main(["status", "--board"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+    assert errors.getvalue() == ""
+    rendered = output.getvalue()
+    assert "Swarm: delivery" in rendered
+    assert "method=spec-driven" in rendered
+    assert "Swarm: support" in rendered
+    assert "method=kanban" in rendered
+    assert "requested" in rendered
+    assert "ticket: Handle inbound ticket" in rendered
+
+
+def test_cli_status_board_truncates_long_ids_and_titles_without_breaking_alignment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.add_actor(
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["specification", "acceptance"],
+            scope="project",
+        )
+    )
+    workspace.add_actor(
+        AddActorInput(
+            id="dev",
+            name="Developer",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    long_swarm_id = "delivery-with-an-extremely-long-swarm-identifier-for-testing"
+    workspace.create_swarm(CreateSwarmInput(id=long_swarm_id, objective="Ship the increment"))
+    workspace.assign_actor(
+        AssignActorInput(swarm_id=long_swarm_id, role_id="spec-owner", actor_id="owner")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id=long_swarm_id, role_id="developer", actor_id="dev")
+    )
+    long_title = "This is a deliberately very long work item title that should be truncated cleanly"
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id=long_swarm_id,
+            id="very-long-work-item-identifier-for-truncation-testing",
+            title=long_title,
+            actor_id="owner",
+        )
+    )
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    assert main(["status", "--board"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+    assert errors.getvalue() == ""
+    rendered = output.getvalue()
+    assert f"Swarm: {long_swarm_id}" in rendered
+    assert long_title not in rendered
+    assert "…" in rendered
+    lines = [line for line in rendered.splitlines() if line.startswith("  ") and "|" in line]
+    widths = {len(line) for line in lines}
+    assert len(widths) == 1
+
+
+def test_cli_status_board_argument_is_a_boolean_flag(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    assert main(["status"], cwd=tmp_path, stdout=output, stderr=errors) == 0
+    assert "Agora status board" not in output.getvalue()
+
+    output2 = io.StringIO()
+    assert main(["status", "--board"], cwd=tmp_path, stdout=output2, stderr=errors) == 0
+    assert "Agora status board" in output2.getvalue()

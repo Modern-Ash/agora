@@ -153,12 +153,13 @@ def test_live_detail_provider_reports_only_new_durable_activity() -> None:
         source="repo://.agora/swarms/delivery/work/item/artifacts.md",
     )
     responses = iter(([previous], [current]))
-    workspace = SimpleNamespace(list_activity=lambda **kwargs: next(responses))
+    read_service = SimpleNamespace(activity=lambda filters: next(responses))
 
     detail = cli._governed_activity_provider(
-        workspace,
+        SimpleNamespace(),
         swarm_id="delivery",
         work_id="item",
+        read_service=read_service,
     )()
 
     assert detail == (

@@ -331,6 +331,37 @@ def verify_lifecycle_authorization(
     )
 
 
+def verify_actor_inline_signature(
+    actor: ActorRecord,
+    payload: bytes,
+    signature_value: str,
+    invalid_message: str,
+) -> tuple[str, str, str, str]:
+    """Verify a base64 Ed25519 signature supplied by a non-filesystem adapter."""
+
+    assert_actor_identity_available(actor)
+    public_key = validate_actor_identity(actor)
+    if public_key is None or actor.authentication_fingerprint is None:
+        raise ValueError(f"Actor {actor.reference} has no authentication key")
+    try:
+        signature = base64.b64decode(signature_value, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("Actor authorization signature must be valid base64") from error
+    if len(signature) != 64:
+        raise ValueError("Actor authorization signature must contain 64 Ed25519 bytes")
+    try:
+        public_key.verify(signature, payload)
+    except InvalidSignature as error:
+        raise ValueError(invalid_message) from error
+    assert actor.authentication_public_key is not None
+    return (
+        actor.authentication_fingerprint,
+        hashlib.sha256(payload).hexdigest(),
+        actor.authentication_public_key,
+        signature_value,
+    )
+
+
 def verify_session_authorization(
     actor: ActorRecord,
     record: SessionRecord,

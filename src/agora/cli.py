@@ -9,6 +9,21 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
+from agora.application import (
+    ActivityFilters,
+    ActorFilters,
+    AgoraReadService,
+    SwarmFilters,
+    WorkItemFilters,
+)
+from agora.application.dto import (
+    ActivityEntry,
+    ActorSummary,
+    ProjectOverview,
+    SwarmSummary,
+    WorkItemDetail,
+    WorkItemSummary,
+)
 from agora.console import ActivityContext, ConsoleActivity, ConsoleResult, is_human_terminal
 from agora.filesystem import agora_home
 from agora.git import is_git_repository
@@ -18,6 +33,7 @@ from agora.model import (
     DEFAULT_SESSION_MAX_OUTPUT_BYTES,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
     INTEGRATIONS,
+    ActorRecord,
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
@@ -162,7 +178,7 @@ def main(
             else:
                 result = _dispatch(workspace, namespace)
         if result is not None:
-            _present_result(output, namespace, result)
+            _present_result(output, namespace, result, workspace=workspace)
         if isinstance(result, (AdoptionReport, ValidationReport)) and not result.ok:
             return 1
         if isinstance(result, dict) and result.get("ok") is False:
@@ -173,7 +189,17 @@ def main(
         return 1
 
 
-def _present_result(output: TextIO, args: argparse.Namespace, result: Any) -> None:
+def _present_result(
+    output: TextIO,
+    args: argparse.Namespace,
+    result: Any,
+    *,
+    workspace: AgoraWorkspace,
+) -> None:
+    if args.command == "status" and args.board:
+        print(result, file=output)
+        return
+    result = _cli_read_payload(result, workspace)
     setup_guided = args.command == "setup" or (args.command == "adopt" and not args.check)
     continue_guided = args.command == "continue"
     work_start_guided = args.command == "work" and args.work_command == "start"
@@ -197,6 +223,110 @@ def _command_name(args: argparse.Namespace) -> str:
         value for key, value in vars(args).items() if key.endswith("_command") and value is not None
     )
     return " ".join(parts)
+
+
+def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
+    """Project application DTOs onto the CLI's pre-service JSON contract."""
+    if isinstance(value, tuple) and all(
+        isinstance(item, (ActorSummary, SwarmSummary, WorkItemSummary, ActivityEntry))
+        for item in value
+    ):
+        return [_cli_read_payload(item, workspace) for item in value]
+    if isinstance(value, ProjectOverview):
+        payload = value.to_dict()
+        return {
+            "project": value.project,
+            "integration": value.integration,
+            "default_method": value.default_method,
+            "branch": value.branch,
+            "counts": payload["counts"],
+            "swarm_statuses": payload["swarm_statuses"],
+            "work_states": payload["work_states"],
+            "work_operational_statuses": payload["work_operational_statuses"],
+            "delegation_statuses": payload["delegation_statuses"],
+            "session_statuses": payload["session_statuses"],
+            "tool_run_statuses": payload["tool_run_statuses"],
+            "attention": payload["attention"],
+        }
+    if isinstance(value, ActorSummary):
+        root = workspace.project_root()
+        scope, _ = value.reference.split(":", 1)
+        actor_root = agora_home() if scope == "user" else root / ".agora"
+        payload = {
+            "id": value.id,
+            "name": value.name,
+            "kind": value.kind,
+            "capabilities": list(value.capabilities),
+            "path": str(actor_root / "actors" / f"{value.id}.md"),
+            "reference": value.reference,
+            "integration": value.integration,
+            "provider": value.provider,
+            "model": value.model,
+            "represented_swarm": value.represented_swarm,
+            "authentication_required": value.authentication_required,
+            "authentication_algorithm": value.authentication_algorithm,
+            "authentication_public_key": value.authentication_public_key,
+            "authentication_fingerprint": value.authentication_fingerprint,
+            "authentication_revoked_at": value.authentication_revoked_at,
+            "authentication_revoked_reason": value.authentication_revoked_reason,
+        }
+        if "runtime_fallbacks" in ActorRecord.__dataclass_fields__:
+            payload["runtime_fallbacks"] = [dict(item) for item in value.runtime_fallbacks]
+        return payload
+    if isinstance(value, SwarmSummary):
+        root = workspace.project_root()
+        return {
+            "id": value.id,
+            "method": value.method,
+            "status": value.status,
+            "branch": value.branch,
+            "required_roles": list(value.required_roles),
+            "assignments": dict(value.assignments),
+            "objective": value.objective,
+            "path": str(root / ".agora" / "swarms" / value.id),
+        }
+    if isinstance(value, (WorkItemSummary, WorkItemDetail)):
+        root = workspace.project_root()
+        return {
+            "id": value.id,
+            "swarm_id": value.swarm_id,
+            "title": value.title,
+            "description": value.description,
+            "state": value.state,
+            "acceptance_criteria": dict(value.acceptance_criteria),
+            "satisfied_criteria": list(value.satisfied_criteria),
+            "required_artifacts": list(value.required_artifacts),
+            "artifact_kinds": list(value.artifact_kinds),
+            "evidence_results": list(value.evidence_results),
+            "approval_roles": list(value.approval_roles),
+            "path": str(root / ".agora" / "swarms" / value.swarm_id / "work" / value.id),
+            "child_work_refs": list(value.child_work_refs),
+            "budget_limits": dict(value.budget_limits) if value.budget_limits is not None else None,
+            "operational_status": value.operational_status,
+            "status_reason": value.status_reason,
+            "status_by": value.status_by,
+            "status_at": value.status_at,
+            "delegation_id": value.delegation_id,
+            "parent_work_ref": value.parent_work_ref,
+            "criterion_statuses": {
+                key: list(items) for key, items in value.criterion_statuses.items()
+            },
+        }
+    if isinstance(value, ActivityEntry):
+        root = workspace.project_root()
+        return {
+            "timestamp": value.timestamp,
+            "type": value.type,
+            "summary": value.summary,
+            "actor": value.actor,
+            "swarm_id": value.swarm_id,
+            "work_id": value.work_id,
+            "session_id": value.session_id,
+            "tool_run_id": value.tool_run_id,
+            "source": value.source,
+            "path": str(root / ".agora" / "activity.md"),
+        }
+    return value
 
 
 def _run_input(args: argparse.Namespace) -> RunNextInput:
@@ -318,9 +448,12 @@ def _governed_activity_provider(
     *,
     swarm_id: str,
     work_id: str,
+    read_service: AgoraReadService | None = None,
 ) -> Callable[[], str | None]:
+    reads = read_service or AgoraReadService(workspace)
+    filters = ActivityFilters(swarm_id=swarm_id, work_id=work_id, limit=1)
     try:
-        baseline = workspace.list_activity(swarm_id=swarm_id, work_id=work_id, limit=1)
+        baseline = reads.activity(filters)
     except (OSError, RuntimeError, ValueError):
         baseline = []
     last_seen = _activity_identity(baseline[-1]) if baseline else None
@@ -333,7 +466,7 @@ def _governed_activity_provider(
         now = time.monotonic()
         if now >= next_poll:
             next_poll = now + 0.75
-            records = workspace.list_activity(swarm_id=swarm_id, work_id=work_id, limit=1)
+            records = reads.activity(filters)
             if records:
                 latest = records[-1]
                 identity = _activity_identity(latest)
@@ -374,6 +507,51 @@ def _format_bytes(value: int) -> str:
     if value >= 1024:
         return f"{value / 1024:g} KiB"
     return f"{value} B"
+
+
+def _truncate_cell(value: str, width: int) -> str:
+    if len(value) <= width:
+        return value
+    return f"{value[: width - 1]}…"
+
+
+def _render_status_board(reads: AgoraReadService) -> str:
+    swarms = reads.list_swarms()
+    if not swarms:
+        return "Agora status board\n\nNo swarms in this project yet."
+    lines = ["Agora status board"]
+    cell_width = 36
+    all_work = reads.list_work_items()
+    for swarm in swarms:
+        states = swarm.work_states
+        grouped = {
+            state: [item for item in all_work if item.swarm_id == swarm.id and item.state == state]
+            for state in states
+        }
+        lines.extend(["", f"Swarm: {swarm.id}  method={swarm.method}"])
+        border = "  +" + "+".join("-" * (cell_width + 2) for _ in states) + "+"
+        lines.append(border)
+        lines.append(
+            "  |"
+            + "|".join(f" {_truncate_cell(state, cell_width):<{cell_width}} " for state in states)
+            + "|"
+        )
+        lines.append(border)
+        row_count = max((len(items) for items in grouped.values()), default=0)
+        for index in range(max(1, row_count)):
+            cells: list[str] = []
+            for state in states:
+                items = grouped[state]
+                if index >= len(items):
+                    value = ""
+                else:
+                    item = items[index]
+                    marker = "[!] " if item.operational_status == "blocked" else ""
+                    value = f"{marker}{item.id}: {item.title}"
+                cells.append(f" {_truncate_cell(value, cell_width):<{cell_width}} ")
+            lines.append("  |" + "|".join(cells) + "|")
+        lines.append(border)
+    return "\n".join(lines)
 
 
 def _run_continue_wizard(
@@ -1639,7 +1817,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "self-test",
         help="Exercise bundled methods with human, AI, and swarm role holders",
     )
-    commands.add_parser("status", help="Summarize operational project state")
+    status = commands.add_parser("status", help="Summarize operational project state")
+    status.add_argument(
+        "--board", action="store_true", help="Render a terminal-native board across swarms"
+    )
     commands.add_parser("validate", help="Validate every Agora record and reference")
     next_action = commands.add_parser("next", help="Show the next governed operational actions")
     next_action.add_argument("--actor")
@@ -2620,6 +2801,7 @@ def _dispatch(
     *,
     run_observer: Callable[[RunLoopEvent], None] | None = None,
 ) -> Any:
+    reads = AgoraReadService(workspace)
     if args.command == "coordination" and args.coordination_command == "configure":
         return workspace.configure_coordination(
             ConfigureCoordinationInput(
@@ -2706,7 +2888,7 @@ def _dispatch(
 
         return run_role_self_test()
     if args.command == "status":
-        return workspace.status()
+        return _render_status_board(reads) if args.board else reads.project_overview()
     if args.command == "validate":
         return workspace.validate()
     if args.command == "next":
@@ -3224,7 +3406,7 @@ def _dispatch(
         if args.actor_key_command == "list":
             return workspace.list_actor_keys(args.actor)
     if args.command == "actor" and args.actor_command == "list":
-        return workspace.list_actors(args.scope)
+        return reads.list_actors(ActorFilters(scope=args.scope))
     if args.command == "swarm" and args.swarm_command == "create":
         return workspace.create_swarm(
             CreateSwarmInput(
@@ -3278,9 +3460,9 @@ def _dispatch(
             )
         )
     if args.command == "swarm" and args.swarm_command == "show":
-        return workspace.show_swarm(args.swarm)
+        return reads.get_swarm(args.swarm)
     if args.command == "swarm" and args.swarm_command == "list":
-        return workspace.list_swarms(args.status)
+        return reads.list_swarms(SwarmFilters(status=args.status))
     if args.command == "swarm" and args.swarm_command == "handoffs":
         return workspace.list_handoffs(args.swarm)
     if args.command == "work" and args.work_command == "create":
@@ -3408,9 +3590,15 @@ def _dispatch(
     if args.command == "work" and args.work_command == "status-changes":
         return workspace.list_work_status_changes(args.swarm, args.work)
     if args.command == "work" and args.work_command == "show":
-        return workspace.show_work(args.swarm, args.work)
+        return reads.get_work_item(args.swarm, args.work)
     if args.command == "work" and args.work_command == "list":
-        return workspace.list_work(args.swarm, args.state, args.operational_status)
+        return reads.list_work_items(
+            WorkItemFilters(
+                swarm_id=args.swarm,
+                state=args.state,
+                operational_status=args.operational_status,
+            )
+        )
     if args.command == "gate" and args.gate_command in {"waive", "waive-prepare"}:
         waiver = WaiveGateInput(
             id=args.id,
@@ -3484,14 +3672,16 @@ def _dispatch(
             limit=args.limit,
         )
     if args.command == "activity" and args.activity_command == "list":
-        return workspace.list_activity(
-            actor_id=args.actor,
-            swarm_id=args.swarm,
-            work_id=args.work,
-            session_id=args.session,
-            tool_run_id=args.tool_run,
-            type_=args.type,
-            limit=args.limit,
+        return reads.activity(
+            ActivityFilters(
+                actor_id=args.actor,
+                swarm_id=args.swarm,
+                work_id=args.work,
+                session_id=args.session,
+                tool_run_id=args.tool_run,
+                type=args.type,
+                limit=args.limit,
+            )
         )
     if args.command == "activity" and args.activity_command == "rebuild":
         return workspace.rebuild_activity()

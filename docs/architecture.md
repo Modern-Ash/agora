@@ -104,6 +104,13 @@ private keys.
 As Core is modularized, application services remain the shared compatibility surface for Agora CLI
 and Studio API. Moving a handler must not move its invariant into either interface.
 
+`AgoraCommandService` exposes the first governed mutation contract as
+`agora/application/approve-gate-command/v1`. It revalidates project identity, expected work state,
+the active Method Pack gate, role authority, durable evidence, and optional inline Ed25519 actor
+authentication before delegating persistence to the workspace domain. Approval, work events, and
+the Activity ledger commit through one filesystem transaction; callers receive a versioned updated
+lifecycle projection or a stable `command.*` error.
+
 ### CLI
 
 Agora CLI maps arguments, standard input and output, terminal-oriented errors, and process exit

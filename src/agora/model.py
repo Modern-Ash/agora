@@ -1664,6 +1664,19 @@ class AddApprovalInput(WorkActorInput):
 
 
 @dataclass(frozen=True)
+class GateDecisionInput(WorkActorInput):
+    project_identity: str = ""
+    gate_id: str = ""
+    decision: Literal["approved", "rejected"] = "rejected"
+    reason: str = ""
+    expected_state: str = ""
+    evidence_refs: list[str] = field(default_factory=list)
+    authentication_payload: bytes | None = None
+    authentication_signature: str | None = None
+    authentication_fingerprint: str | None = None
+
+
+@dataclass(frozen=True)
 class PrepareApprovalInput(AddApprovalInput):
     id: str = ""
 
