@@ -3,6 +3,10 @@
 Agora is a local, Markdown-first, Git-native framework for customizing and governing work
 lifecycles. Start with the user journey, then use the conceptual and reference material as needed.
 
+Agora Core owns the domain, application services, protocol, and persistence. Agora CLI is an
+optional terminal and automation interface. Agora Studio is a local-first web control plane whose
+Studio API calls the same application services as the CLI; neither interface owns lifecycle rules.
+
 ## Documentation boundaries
 
 This directory contains explanatory product documentation. Operational Markdown is sourced from
@@ -138,13 +142,16 @@ do not exist as one static agent file in this repository.
 - [Documentation and artifact locations](reference/artifact-locations.md): distinguish manuals,
   plugin output, distribution templates, agent adapters, project records, and work products.
 - [Domain model](domain-model.md): packs, actors, roles, swarms, handoffs, work, and evidence.
-- [Architecture](architecture.md): scopes, adapters, filesystem persistence, and Git behavior.
+- [Architecture](architecture.md): Core, CLI, Studio, application-service, persistence, and adapter
+  boundaries.
 - [Core improvement roadmap](roadmap.md): prioritized transaction, modularity, error, budget, and
   live-integration work without release-date promises.
 - [Method Pack reference](reference/method-packs.md): author and install custom lifecycles.
 - [Tool Pack reference](reference/tool-packs.md): govern external CLIs and persist results.
 - [ADR 0001](decisions/0001-initial-architecture.md): why Agora is local, Markdown-first, and
   Git-native.
+- [ADR 0003](decisions/0003-core-studio-cli-boundaries.md): why Core owns lifecycle behavior while
+  CLI and local-first Studio share versioned application-service contracts.
 
 ## Executable samples
 

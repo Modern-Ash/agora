@@ -15,6 +15,18 @@ packs. A **Pack Dependency** names a `method` or `tool`, its id, and a compatibi
 Catalog resolution selects dependencies before their consumer; project validation treats all
 installed packs as one composition and rejects missing, incompatible, or cyclic relationships.
 
+## Domain and application services
+
+Agora Core owns every domain invariant, including role authority, capabilities, lifecycle
+transitions, gates, WIP, preconditions, approvals, validation, and persistence semantics. An
+**Application Service** exposes one Core use case, coordinates domain objects and persistence ports,
+and returns a provider-neutral result. It is the shared entry point for Agora CLI and Studio API.
+
+CLI commands, HTTP routes, and Studio components are interface adapters rather than domain concepts.
+They may validate transport shape and render results, but a lifecycle rule cannot exist only in one
+interface. Requests, responses, events, and errors that cross an interface boundary must be
+serializable and explicitly versioned.
+
 ## Actor, role, and assignment
 
 An **Actor** has an identity, kind, and capabilities. Kinds include human, AI agent, swarm, service,
@@ -349,8 +361,11 @@ Method Pack or Tool Pack already copied into another scope.
 
 ## Environment
 
-IDE, CLI, runner, and cloud agent are execution environments. They do not own Agora state. Every
-environment reads and writes the same workspace protocol and synchronizes through Git.
+IDE, CLI, Studio, runner, and cloud agent are execution environments or interfaces. They do not own
+Agora state. Governed reads and mutations enter Agora Application Services and reach the workspace
+protocol through Core persistence ports. Studio Web never edits `.agora/` directly, and Studio API
+does not depend on terminal commands. Environments share and synchronize the Markdown protocol
+through Git without acquiring independent lifecycle rules.
 
 ## Model configuration
 
@@ -377,6 +392,10 @@ external unless a material outcome is persisted in Agora files.
 
 An operational view is a computed projection of current Markdown records. Status counts, filtered
 lists, and event queries are never persisted as parallel state and can always be reconstructed.
+
+A future Studio SQLite database may cache these views, but it is not a domain repository or source
+of truth. It must be disposable and completely regenerable from Markdown and Git; no lifecycle fact
+or audit evidence may exist only in that projection.
 
 A validation issue identifies a severity, stable code, source path, and diagnostic message. A
 validation report counts successfully inspected domain records and aggregates every issue found in
