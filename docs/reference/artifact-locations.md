@@ -96,6 +96,10 @@ Agora creates current collaboration state under `.agora/`. Common records includ
 .agora/actors/<actor>/ACTOR.md
 .agora/swarms/<swarm>/SWARM.md
 .agora/swarms/<swarm>/work/<work>/WORK.md
+.agora/swarms/<swarm>/work/<work>/clarifications.md
+.agora/swarms/<swarm>/work/<work>/checklists/<checklist>.md
+.agora/swarms/<swarm>/work/<work>/consistency/<report>.md
+.agora/swarms/<swarm>/work/<work>/gherkin/<criterion>.feature
 .agora/swarms/<swarm>/work/<work>/artifacts.md
 .agora/swarms/<swarm>/work/<work>/evidence.md
 .agora/swarms/<swarm>/work/<work>/approvals.md
@@ -113,6 +117,12 @@ Agora creates current collaboration state under `.agora/`. Common records includ
 These are neither manuals nor disposable prompts. They are durable governed records shared through
 the filesystem and Git. Chat history is not a substitute for them.
 
+`clarifications.md` is append-only, while each checklist is an attributed Markdown task list.
+Consistency and Gherkin files are generated advisory work products. Their artifact rows and source
+files retain canonical input hashes when provenance is available, allowing `agora work traceability`
+and `agora validate` to detect stale output. Missing hashes on legacy records are warnings rather
+than parse failures.
+
 `RUN.md` exists after preparation. `RESULT.md` exists only after launch reaches a terminal outcome.
 Use `agora tool result --run <run>` to read their validated typed view; do not treat ad hoc terminal
 logs as a replacement for the durable record.
@@ -123,6 +133,11 @@ Agora normally references produced work rather than copying opaque content. A sp
 tree, test report, ticket, build, deployment, or external page remains in its owning repository or
 provider. The work item's `artifacts.md` records its kind, URI, producer, and timestamp. Its
 `evidence.md` records verification outcomes and artifact references used by lifecycle gates.
+
+Generated `consistency-report` and `gherkin-feature` artifacts follow the same rule. Generation does
+not make them lifecycle requirements; a work item's `required-artifacts` or a Method Pack gate must
+name the kind to make it binding. Clarifications and checklists are not artifact kinds and do not
+satisfy a gate.
 
 The catalog at `.agora/artifacts/ARTIFACTS.md`, sourced from
 `packs/scaffold/artifacts/ARTIFACTS.md`, defines common artifact kinds. It is a project policy

@@ -76,6 +76,14 @@ Use the configured Codex or Claude CLI:
 agora run --actor implementation-agent
 ```
 
+If the actor declares ordered runtime fallbacks, every fresh session resolves the first candidate
+whose executable is available and whose latest matching session was not rejected by a recognized
+quota or rate-limit response. Timeouts, output-limit failures, ordinary nonzero exits, and task
+errors remain on the selected runtime instead of causing a silent switch. The chosen integration,
+provider, and model are persisted on the session and Activity Ledger. Configure the order with
+`agora actor runtime --fallback integration:provider:model`; see
+[LLM environments](llm-environments.md).
+
 Agora launches Codex with `codex exec` and Claude with `claude --print`. Both receive an instruction
 to read the path exported as `AGORA_CONTEXT`, follow the installed operational Markdown, persist the
 outcome, and stop at unavailable authority. Concrete model selection is forwarded only when Agora's

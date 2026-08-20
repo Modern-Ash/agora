@@ -3,6 +3,7 @@
 Agora can require an authenticated actor to authorize a lifecycle mutation before it changes the
 current work projection. The supported mutations are `actor.key.rotate`, `actor.runtime.update`,
 `work.transition`, `work.block`, `work.resume`, `work.cancel`, `work.create`, `work.decompose`,
+`work.clarify`, `work.verify-consistency`, `work.gherkin`, `checklist.add`, `checklist.check`,
 `criterion.satisfy`, `artifact.add`, `evidence.add`, `approval.add`, `approval.delegate`,
 `approval.delegation.revoke`, `gate.waive`, `swarm.assign`, `handoff.create`, session preparation,
 and the complete delegation lifecycle. Their durable intents
@@ -56,6 +57,33 @@ These actions bind the criterion id, artifact kind and URI, or evidence type, re
 references. Their precondition covers `WORK.md`, `approvals.md`, `artifacts.md`, and `evidence.md`.
 Apply rechecks Method Pack authority and work mutability before updating the same Markdown records
 used by unauthenticated actors.
+
+## Prepare advisory specification records
+
+Authenticated actors use the same prepare, export, sign, and apply lifecycle for clarifications,
+checklists, consistency reports, and Gherkin generation:
+
+```bash
+agora work clarify-prepare --id clarify-payment-retry \
+  --swarm payments --work payment-retry --by authenticated-owner
+
+agora work checklist add-prepare --id add-spec-checklist \
+  --swarm payments --work payment-retry --title "Specification quality" \
+  --item "Failure behavior is explicit" --by authenticated-owner
+
+agora work verify-consistency-prepare --id verify-payment-consistency \
+  --swarm payments --work payment-retry --by authenticated-developer
+
+agora work gherkin-prepare --id generate-payment-features \
+  --swarm payments --work payment-retry --by authenticated-developer
+```
+
+For a generic integration, the three model-assisted prepare commands also bind the exact
+`--runner` value. Their work precondition covers the current projection and companion policy files,
+including clarifications and checklists. Apply rejects drift before invoking the runner or writing
+generated records. These actions authorize advisory output only: they do not satisfy criteria,
+approve work, or transition state. See
+[Spec tooling and runtime resilience](spec-tooling-and-runtime-resilience.md).
 
 Authenticated exception authorities use `gate waive-prepare`. The action binds the waiver id, gate,
 exact criteria, artifact kinds, successful-evidence flag, approval roles, reason, and risk evidence
@@ -351,8 +379,9 @@ The stale intent remains on disk for audit and cannot be applied.
 parameter map. The current kernel accepts planned actor key rotation, independent revocation and
 recovery, actor runtime updates, governed vacant-role assignment, work transitions and
 interruptions, direct and delegated approvals, Gate Waivers, handoffs, work creation, decomposition
-and material records, session preparation, and every work-delegation lifecycle mutation. Future
-administrative action kinds must keep their domain validation as the source of authority when added.
+and material or advisory specification records, session preparation, and every work-delegation
+lifecycle mutation. Future administrative action kinds must keep their domain validation as the
+source of authority when added.
 
 Signed `delegation.create` parameters include the complete provider-neutral `budget-limits` map.
 Apply rechecks inherited dimensions and current sibling reservations before persisting the proposal.

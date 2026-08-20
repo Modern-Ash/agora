@@ -103,6 +103,35 @@ agora work create \
   --required-artifact verification-report
 ```
 
+Before accepting the draft, the Spec Owner can generate focused questions and maintain a quality
+checklist without changing the gate:
+
+```bash
+agora work clarify --swarm webhook-retries --work retry-contract --by spec-owner
+agora work checklist add --swarm webhook-retries --work retry-contract \
+  --title "Specification quality" \
+  --item "Retry termination is explicit" \
+  --item "Delivery identity is unambiguous" --by spec-owner
+```
+
+The Developer can later generate one Gherkin feature per criterion and a consistency review of
+registered `repo://` artifacts:
+
+```bash
+agora work gherkin --swarm webhook-retries --work retry-contract \
+  --by implementation-agent
+agora work verify-consistency --swarm webhook-retries --work retry-contract \
+  --by implementation-agent
+agora work traceability --swarm webhook-retries --work retry-contract
+```
+
+This tooling is cross-method and advisory. In this example Gherkin is optional because the work does
+not declare `gherkin-feature` as a required artifact. Add `--required-artifact gherkin-feature` when
+creating the work, or name that kind in a Method Pack gate, to make its presence mandatory. Generated
+content still does not satisfy a criterion, approve work, or run an executable test suite. If the
+description, criteria, or relevant artifacts change, `traceability` and `agora validate` identify
+stale generated output for explicit regeneration.
+
 Write the actual specification in the product repository, then register it. Agora stores its URI
 and governance state; it does not hide the specification inside chat history.
 

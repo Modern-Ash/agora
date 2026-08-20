@@ -92,9 +92,10 @@ openssl pkeyutl -sign -inkey developer-private.pem -rawin \
 agora action apply --action begin-work --signature /tmp/begin-work.sig
 ```
 
-The signature binds the transition to a digest of the current work, artifacts, evidence, and
-approvals. Agora also rechecks Method Pack permissions, WIP, gates, and current key state immediately
-before mutation. See [Signed lifecycle actions](signed-lifecycle-actions.md) for the complete model.
+The signature binds the transition to a digest of the current work and its companion policy files,
+including artifacts, evidence, approvals, clarifications, and checklists. Agora also rechecks Method
+Pack permissions, WIP, gates, and current key state immediately before mutation. See
+[Signed lifecycle actions](signed-lifecycle-actions.md) for the complete model.
 
 ## Sign an agent session
 

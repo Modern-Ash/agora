@@ -29,9 +29,11 @@ serializable and explicitly versioned.
 
 ## Actor, role, and assignment
 
-An **Actor** has an identity, kind, and capabilities. Kinds include human, AI agent, swarm, service,
-and automation. A **Role** declares required capabilities, allowed actor kinds, and allowed actions.
-An **Assignment** temporarily links an actor to a role within a swarm.
+An **Actor** has an identity, kind, capabilities, a primary runtime, and an optional ordered runtime
+fallback list. Kinds include human, AI agent, swarm, service, and automation. A **Role** declares
+required capabilities, allowed actor kinds, and allowed actions. An **Assignment** temporarily links
+an actor to a role within a swarm. Runtime fallback selection changes where a session executes, not
+the actor identity, assignment, or authority.
 
 Direct assignment bootstraps a forming swarm and can only fill a vacant role. Once a governance
 actor is present, `swarm.assign` offers a signed path for remaining vacancies and binds authorizer,
@@ -96,8 +98,10 @@ is blocked and `cancelled` when every item is cancelled.
 
 ## Work
 
-A work item is a Markdown directory containing description, state, criteria, artifacts, and evidence.
-Its workflow comes from `METHOD.md`; it is not hard-coded into an LLM integration.
+A work item is a Markdown directory containing description, state, criteria, artifacts, evidence,
+and optional advisory specification records. Advisory records include append-only clarifications,
+non-binding checklists, consistency reports, and generated Gherkin features. Its workflow comes from
+`METHOD.md`; it is not hard-coded into an LLM integration.
 
 Local decomposition creates child work under the same swarm and Method Pack. The child stores a
 `parent-work` reference and the parent stores the inverse `child-work-refs` list. Parent completion
@@ -121,6 +125,17 @@ Work content and artifact references are opaque to the core. Agora can govern a 
 Java application, infrastructure definitions, documentation, or a polyglot system without changing
 the lifecycle engine.
 
+Advisory tooling never changes criterion stages, approvals, gates, or work state by itself.
+Generated consistency reports and Gherkin features are ordinary artifact references and therefore
+become mandatory only when the work contract or a Method Pack gate explicitly requires their
+artifact kind. Clarifications and checklists remain non-gating records.
+
+Clarification rows, consistency reports, and Gherkin features may carry a canonical SHA-256 input
+digest. Agora compares that provenance with current work content to report stale output without
+deleting or regenerating it. Legacy records without a digest remain readable and receive a
+provenance warning. `work traceability` is a derived read model across criteria, stages, generated
+features, evidence, and artifacts; it does not create a second source of truth.
+
 To act, an actor must:
 
 1. Be registered in the user or project scope.
@@ -134,11 +149,12 @@ A **Lifecycle Action** is a prepared mutation intent stored independently from c
 Its common envelope binds an id, action kind, actor, swarm, work, structured parameters, and a
 SHA-256 precondition. Supported kinds cover planned actor key rotations, independently authorized
 revocation and recovery, actor runtime updates, work transitions, work interruptions, approvals,
-handoffs, work creation, same-swarm decomposition and material records, session preparation, the
-complete delegation lifecycle, Approval Delegation, and granular Gate Waivers. Existing-work
-mutations cover the work projection, artifacts, evidence, usage, approvals, and scoped approval
-authority on which the mutation
-depends. Work creation instead covers the swarm projection and binds the complete initial work
+handoffs, work creation, same-swarm decomposition, material and advisory specification records,
+session preparation, the complete delegation lifecycle, Approval Delegation, and granular Gate
+Waivers. Existing-work
+mutations cover the work projection, clarifications, checklists, artifacts, evidence, usage,
+approvals, and scoped approval authority on which the mutation depends. Work creation instead
+covers the swarm projection and binds the complete initial work
 definition. Criterion, artifact, evidence, and usage parameters bind their exact durable values.
 Interruption reasons are signed and successful actions link exactly to their `STATUS.md`. Approval
 parameters bind both the asserted role and durable note. A handoff instead covers the swarm
@@ -184,7 +200,8 @@ resolved runtime, exact command, timeout, and captured-output limit.
 
 A signed actor runtime update is self-authorized through an assigned swarm role. Its precondition
 covers the actor and swarm projections, while apply rechecks current `actor.runtime.update` Method
-Pack authority before updating the actor's optional integration, provider, and model overrides.
+Pack authority before updating the actor's optional integration, provider, model, and ordered
+fallback overrides.
 
 A signed actor key rotation binds the old and replacement fingerprints, canonical replacement
 public key, and reason. Its precondition includes the actor, swarm, and complete public key history.
@@ -200,10 +217,18 @@ evidence; prepared actions whose work changes remain durable but stale and canno
 
 ## Artifact, evidence, and approval
 
-An artifact is a durable output or external reference, such as code, a specification, ticket, build,
-review, approval, or deployment. Evidence records a verifiable result and its producer. An approval
-is a separate attributed decision made under an assigned role. Gate documents choose whether to
-require criteria, artifacts, successful evidence, and approvals from specific roles.
+An artifact is a durable output or external reference, such as code, a specification, generated
+Gherkin feature, consistency report, ticket, build, review, approval, or deployment. Evidence records
+a verifiable result and its producer. An approval is a separate attributed decision made under an
+assigned role. Gate documents choose whether to require criteria, artifact kinds, successful
+evidence, and approvals from specific roles.
+
+A **Gate Decision** applies one attributed role decision to the gate active for the work item's
+current state. An approved decision creates the existing positive approval record. A rejected
+decision does not masquerade as approval: it remains a durable `gate.rejected` work event and
+Activity entry, so the gate stays closed. The decision binds project identity, expected state,
+evidence references, reason, and—when required—the actor's current Ed25519 identity. Repeated
+submissions against the same durable precondition are rejected.
 
 ## Tool
 

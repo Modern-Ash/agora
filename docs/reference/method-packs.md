@@ -143,6 +143,11 @@ Actions currently issued by the CLI are:
 | `work.block` | Suspend mutations without changing method state |
 | `work.resume` | Resume blocked work in its preserved method state |
 | `work.cancel` | Close work without claiming method completion |
+| `work.clarify` | Append model-assisted questions to the work clarification record |
+| `work.verify-consistency` | Generate and register an advisory consistency report and evidence |
+| `work.gherkin` | Generate and register one advisory Gherkin feature per criterion |
+| `checklist.add` | Add an attributed non-binding work checklist |
+| `checklist.check` | Toggle an attributed checklist item |
 | `criterion.satisfy` | Mark an acceptance criterion satisfied |
 | `artifact.add` | Register a durable output or reference |
 | `evidence.add` | Register a successful or failed result |
@@ -162,6 +167,10 @@ Actions currently issued by the CLI are:
 | `delegation.cancel` | Close a delegation under parent authority |
 
 A role may combine actions, but projects should grant only the authority required by that role.
+The specification-tooling actions remain advisory: permission to run one does not satisfy a
+criterion, grant approval, or move work. A generated artifact such as `gherkin-feature` becomes a
+gate obligation only when the work or gate explicitly requires that artifact kind. Checklist and
+clarification state is never evaluated by gates.
 `gate.waive` does not bypass transition edges, role restrictions, WIP limits, child closure, or
 operational status; see the [Gate Waivers guide](../guides/gate-waivers.md).
 Delegation actions require a linked swarm graph in addition to role authority. See the

@@ -21,6 +21,7 @@ Run a compact project-wide summary from the project or with the global project s
 
 ```bash
 agora status
+agora status --board
 agora --project /path/to/project status
 ```
 
@@ -30,6 +31,9 @@ identifies forming swarms, active and blocked work, open delegations, unfinished
 and failed tool runs.
 
 `status` is a read operation. It does not repair records, advance work, or infer completion.
+`--board` replaces the summary rendering with one fixed-width frame per swarm and columns derived
+from each swarm's Method Pack states. The machine-readable contract of plain `agora status` remains
+unchanged.
 
 ## Domain queries
 
@@ -49,6 +53,7 @@ agora work list
 agora work list --swarm delivery --state reviewing
 agora work list --swarm delivery --operational-status blocked
 agora work status-changes --swarm delivery --work payment-api
+agora work traceability --swarm delivery --work payment-api
 agora delegation list --status accepted
 agora delegation list --status cancelled
 agora delegation status-changes --delegation specialist-task
@@ -57,6 +62,10 @@ agora session list --status prepared
 
 Filters match persisted values exactly. An empty machine result is an empty JSON array, not an
 error; the terminal view instead reports that no items were found.
+
+`work traceability` is a non-mutating derived view. It maps criteria and stages to generated Gherkin,
+directly linked evidence, and shared artifacts, then compares recorded provenance hashes with the
+current work inputs.
 
 ## Inspect a Tool Run result
 
@@ -125,7 +134,7 @@ It checks:
 - Actor documents, ids, kinds, capabilities, and referenced user actors.
 - Swarm identity, status, assignments, role compatibility, recursive cycles, and depth.
 - Work identity, owning swarm, lifecycle and operational states, criteria, companion registers, WIP,
-  interruption history, and derived swarm state.
+  interruption history, advisory records, generated-output provenance, and derived swarm state.
 - Handoff identities, roles, actors, and optional work references.
 - Delegation parent and child records, attribution, lifecycle links, interruption sequence, and
   collected results.
@@ -143,6 +152,12 @@ fail validation. A valid workspace exits with status `0`, making the command sui
 ```bash
 agora validate > agora-validation.json
 ```
+
+Advisory provenance uses warnings so normal content evolution does not block delivery. Stable codes
+include `clarifications.stale` and `artifact.stale`; legacy generated records without an input hash
+receive `clarifications.provenance-missing` or `artifact.provenance-missing`. Review and regenerate
+the affected output,
+then rerun validation. Agora never regenerates or deletes it implicitly.
 
 The validator never rewrites files. Repair remains an explicit, reviewable change to the Markdown
 source of truth.

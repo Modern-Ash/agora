@@ -70,6 +70,7 @@ from agora.identity import (
     validate_persisted_lifecycle_authorization,
     validate_persisted_session_authorization,
     validate_persisted_tool_authorization,
+    verify_actor_inline_signature,
     verify_lifecycle_authorization,
     verify_session_authorization,
     verify_tool_authorization,
@@ -100,6 +101,8 @@ from agora.model import (
     AddActorInput,
     AddApprovalInput,
     AddArtifactInput,
+    AddChecklistInput,
+    AddClarificationInput,
     AddEnvironmentInput,
     AddEvidenceInput,
     AddOrganizationTrustRootInput,
@@ -117,6 +120,8 @@ from agora.model import (
     CatalogPackRecord,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
+    CheckChecklistItemInput,
+    ChecklistRecord,
     ConfigureCoordinationInput,
     ConfigureInput,
     CoordinationPolicyRecord,
@@ -130,6 +135,7 @@ from agora.model import (
     DoctorCheck,
     EnvironmentPolicyRecord,
     EventRecord,
+    GateDecisionInput,
     GatePolicy,
     GateWaiverRecord,
     HandoffActorInput,
@@ -2847,6 +2853,11 @@ class AgoraWorkspace:
             records.append(self._method_pack_record(contract, "project", path.parent))
         return records
 
+    def method_contract(self, swarm_id: str) -> MethodContract:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        return load_method_contract(root / ".agora" / "methods" / swarm.method)
+
     def list_tools(self) -> list[ToolPackRecord]:
         tool_root = self.project_root() / ".agora" / "tools"
         return [
@@ -2938,6 +2949,7 @@ class AgoraWorkspace:
             integration=data.integration,
             provider=data.provider,
             model=data.model,
+            runtime_fallbacks=[],
             represented_swarm=data.represented_swarm,
             authentication_required=data.require_authentication,
             authentication_algorithm="ed25519" if authentication_public_key else None,
@@ -3257,10 +3269,21 @@ class AgoraWorkspace:
 
     def _validate_actor_runtime(self, root: Path, data: SetActorRuntimeInput) -> ActorRecord:
         actor = self._find_actor(root, data.actor_id)
-        if not data.clear and not any((data.integration, data.provider, data.model)):
-            raise ValueError("Provide an integration, provider, model, or --clear")
+        if (
+            not data.clear
+            and not data.clear_fallbacks
+            and not any((data.integration, data.provider, data.model, data.fallbacks))
+        ):
+            raise ValueError(
+                "Provide an integration, provider, model, --fallback, --clear, or --clear-fallbacks"
+            )
+        if data.clear and any((data.integration, data.provider, data.model)):
+            raise ValueError("--clear cannot be combined with runtime values")
+        if data.clear_fallbacks and data.fallbacks:
+            raise ValueError("--clear-fallbacks cannot be combined with --fallback")
         if data.integration is not None:
             self._assert_integration(data.integration)
+        self._parse_runtime_fallbacks(data.fallbacks or [])
         return actor
 
     def _apply_actor_runtime(
@@ -3278,6 +3301,10 @@ class AgoraWorkspace:
                 document.attributes["provider"] = data.provider
             if data.model is not None:
                 document.attributes["model"] = data.model
+        if data.clear_fallbacks:
+            document.attributes.pop("runtime-fallbacks", None)
+        elif data.fallbacks is not None:
+            document.attributes["runtime-fallbacks"] = self._parse_runtime_fallbacks(data.fallbacks)
         document.attributes["runtime-updated-at"] = self._timestamp()
         atomic_write(path, render_markdown(document))
         event_path = (
@@ -3295,12 +3322,36 @@ class AgoraWorkspace:
 
     @staticmethod
     def _actor_runtime_parameters(data: SetActorRuntimeInput) -> dict[str, str]:
-        return {
+        parameters = {
             "integration": data.integration or "",
             "provider": data.provider or "",
             "model": data.model or "",
             "clear": "true" if data.clear else "false",
         }
+        if data.fallbacks is not None or data.clear_fallbacks:
+            parameters["fallbacks"] = ",".join(data.fallbacks or [])
+            parameters["clear-fallbacks"] = "true" if data.clear_fallbacks else "false"
+        return parameters
+
+    @staticmethod
+    def _parse_runtime_fallbacks(values: list[str]) -> list[dict[str, str]]:
+        fallbacks: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for value in values:
+            parts = value.split(":")
+            if len(parts) != 3 or any(not part.strip() for part in parts):
+                raise ValueError(
+                    "Runtime fallback must use integration:provider:model with non-empty values"
+                )
+            integration, provider, model = (part.strip() for part in parts)
+            if integration not in INTEGRATIONS:
+                raise ValueError(f"Unsupported integration: {integration}")
+            key = (integration, provider, model)
+            if key in seen:
+                raise ValueError(f"Duplicate runtime fallback: {value}")
+            seen.add(key)
+            fallbacks.append({"integration": integration, "provider": provider, "model": model})
+        return fallbacks
 
     def list_actors(self, scope: str = "all") -> list[ActorRecord]:
         if scope not in {"all", "user", "project"}:
@@ -4328,6 +4379,682 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def add_checklist(self, data: AddChecklistInput) -> ChecklistRecord:
+        context = self._validate_add_checklist(self.project_root(), data)
+        _, actor, _, _, _, _ = context
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; use "
+                "work checklist add-prepare"
+            )
+        return self._apply_add_checklist(*context)
+
+    def _validate_add_checklist(
+        self, root: Path, data: AddChecklistInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, str, list[str], Path]:
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, "checklist.add")
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        title = " ".join(data.title.split())
+        if not title:
+            raise ValueError("Checklist title cannot be empty")
+        items = [" ".join(item.split()) for item in data.items]
+        if not items or any(not item for item in items):
+            raise ValueError("A checklist requires at least one non-empty item")
+        checklist_id = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+        if not checklist_id or not checklist_id[0].isalpha():
+            checklist_id = f"checklist-{checklist_id}".rstrip("-")
+        assert_slug(checklist_id, "Checklist id")
+        path = Path(work.path) / "checklists" / f"{checklist_id}.md"
+        if path.exists():
+            raise FileExistsError(f"Checklist already exists: {checklist_id}")
+        return swarm, actor, work, title, items, path
+
+    def _apply_add_checklist(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        title: str,
+        items: list[str],
+        path: Path,
+    ) -> ChecklistRecord:
+        checklist_id = path.stem
+        created_at = self._timestamp()
+        record = ChecklistRecord(
+            id=checklist_id,
+            swarm_id=swarm.id,
+            work_id=work.id,
+            title=title,
+            items=items,
+            checked_items=[],
+            created_by=actor.reference,
+            created_at=created_at,
+            updated_by=None,
+            updated_at=None,
+            path=str(path),
+        )
+        write_new(path, self._render_checklist(record))
+        self._append_work_event(
+            work,
+            "checklist.added",
+            f"checklist={checklist_id} actor={actor.reference}",
+        )
+        return record
+
+    @_locked_mutation("project")
+    def check_checklist_item(self, data: CheckChecklistItemInput) -> ChecklistRecord:
+        context = self._validate_checklist_item(self.project_root(), data)
+        _, actor, _, _, _ = context
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; use "
+                "work checklist check-prepare"
+            )
+        return self._apply_checklist_item(*context)
+
+    def _validate_checklist_item(
+        self, root: Path, data: CheckChecklistItemInput
+    ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, ChecklistRecord, int]:
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, "checklist.check")
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        record = self._load_checklist(work, data.checklist_id)
+        if not 1 <= data.item_index <= len(record.items):
+            raise ValueError(
+                f"Checklist item must be between 1 and {len(record.items)}: {data.item_index}"
+            )
+        return swarm, actor, work, record, data.item_index
+
+    def _apply_checklist_item(
+        self,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        record: ChecklistRecord,
+        item_index: int,
+    ) -> ChecklistRecord:
+        checked = set(record.checked_items)
+        if item_index in checked:
+            checked.remove(item_index)
+        else:
+            checked.add(item_index)
+        updated = ChecklistRecord(
+            **{
+                **record.__dict__,
+                "checked_items": sorted(checked),
+                "updated_by": actor.reference,
+                "updated_at": self._timestamp(),
+            }
+        )
+        atomic_write(Path(record.path), self._render_checklist(updated))
+        self._append_work_event(
+            work,
+            "checklist.item-toggled",
+            f"checklist={record.id} item={item_index} actor={actor.reference}",
+        )
+        return updated
+
+    @_locked_mutation("project")
+    def prepare_checklist_action(
+        self,
+        action_id: str,
+        data: AddChecklistInput | CheckChecklistItemInput,
+    ) -> LifecycleActionRecord:
+        assert_slug(action_id, "Lifecycle Action id")
+        root = self.project_root()
+        if isinstance(data, AddChecklistInput):
+            swarm, actor, work, title, items, _ = self._validate_add_checklist(root, data)
+            action = "checklist.add"
+            parameters = {
+                "title": title,
+                "items": json.dumps(items, ensure_ascii=True, separators=(",", ":")),
+            }
+        else:
+            swarm, actor, work, record, item_index = self._validate_checklist_item(root, data)
+            action = "checklist.check"
+            parameters = {"checklist": record.id, "item": str(item_index)}
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=action_id,
+            action=action,
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters=parameters,
+        )
+
+    def show_checklist(self, swarm_id: str, work_id: str, checklist_id: str) -> ChecklistRecord:
+        swarm = self._load_swarm(self.project_root(), swarm_id)
+        work = self._load_work(swarm, work_id)
+        return self._load_checklist(work, checklist_id)
+
+    def list_checklists(self, swarm_id: str, work_id: str) -> list[ChecklistRecord]:
+        swarm = self._load_swarm(self.project_root(), swarm_id)
+        work = self._load_work(swarm, work_id)
+        return [
+            self._load_checklist(work, path.stem)
+            for path in sorted((Path(work.path) / "checklists").glob("*.md"))
+        ]
+
+    @_locked_mutation("project")
+    def clarify_work(self, data: WorkActorInput, *, runner: str | None = None) -> dict[str, object]:
+        root, swarm, actor, work = self._validate_advisory_work_action(data, "work.clarify")
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; use "
+                "work clarify-prepare"
+            )
+        return self._apply_work_clarification(root, swarm, actor, work, runner)
+
+    def _apply_work_clarification(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        runner: str | None,
+    ) -> dict[str, object]:
+        input_sha256 = self._clarification_input_sha256(work)
+        prompt = (
+            "You are reviewing a governed work specification before drafting. Return only JSON "
+            "with a 'questions' array containing at most five objects. Each object must have a "
+            "non-empty 'question' string and an 'answer' that is either a string or null. Ask only "
+            "targeted questions that expose material ambiguity; propose an answer only when the "
+            "provided context is sufficient.\n\n"
+            f"Title: {work.title}\nDescription: {work.description}\n"
+            f"Acceptance criteria: {json.dumps(work.acceptance_criteria, ensure_ascii=False)}"
+        )
+        payload = self._run_advisory_prompt(root, actor, swarm, work, prompt, runner)
+        raw_questions = payload.get("questions")
+        if not isinstance(raw_questions, list) or len(raw_questions) > 5:
+            raise ValueError("Clarification runtime output must contain at most five questions")
+        questions: list[AddClarificationInput] = []
+        for item in raw_questions:
+            if not isinstance(item, dict):
+                raise ValueError("Each clarification question must be an object")
+            question = item.get("question")
+            answer = item.get("answer")
+            if not isinstance(question, str) or not question.strip():
+                raise ValueError("Each clarification question must be non-empty")
+            if answer is not None and not isinstance(answer, str):
+                raise ValueError("Clarification answers must be strings or null")
+            questions.append(
+                AddClarificationInput(
+                    swarm_id=swarm.id,
+                    work_id=work.id,
+                    actor_id=actor.reference,
+                    question=" ".join(question.split()),
+                    answer=" ".join(answer.split()) if answer else None,
+                )
+            )
+        path = Path(work.path) / "clarifications.md"
+        if path.exists():
+            document = read_markdown(path)
+            _assert_schema(document, "agora/clarifications/v1", path)
+            document = self._upgrade_clarifications_table(document)
+        else:
+            document = MarkdownDocument(
+                attributes={
+                    "schema": "agora/clarifications/v1",
+                    "swarm": swarm.id,
+                    "work": work.id,
+                    "created-at": self._timestamp(),
+                },
+                body=(
+                    f"# Clarifications for {work.id}\n\n"
+                    "| Question | Answer | Actor | Timestamp | Input SHA-256 |\n"
+                    "| --- | --- | --- | --- | --- |"
+                ),
+            )
+        for item in questions:
+            question = self._markdown_table_cell(item.question)
+            answer = self._markdown_table_cell(item.answer or "")
+            document.body = (
+                f"{document.body.rstrip()}\n| {question} | {answer} | {actor.reference} | "
+                f"{self._timestamp()} | {input_sha256} |"
+            )
+        atomic_write(path, render_markdown(document)) if path.exists() else write_new(
+            path, render_markdown(document)
+        )
+        self._append_work_event(
+            work,
+            "work.clarified-advisory",
+            f"questions={len(questions)} actor={actor.reference}",
+        )
+        return {"path": str(path), "questions": questions}
+
+    @_locked_mutation("project")
+    def prepare_work_clarification(
+        self, action_id: str, data: WorkActorInput, *, runner: str | None = None
+    ) -> LifecycleActionRecord:
+        assert_slug(action_id, "Lifecycle Action id")
+        root, swarm, actor, work = self._validate_advisory_work_action(data, "work.clarify")
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=action_id,
+            action="work.clarify",
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"runner": runner or ""},
+        )
+
+    @_locked_mutation("project")
+    def verify_work_consistency(
+        self, data: WorkActorInput, *, runner: str | None = None
+    ) -> dict[str, object]:
+        root, swarm, actor, work = self._validate_advisory_work_action(
+            data, "work.verify-consistency"
+        )
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; use "
+                "work verify-consistency-prepare"
+            )
+        return self._apply_verify_work_consistency(root, swarm, actor, work, runner)
+
+    def _apply_verify_work_consistency(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        runner: str | None,
+    ) -> dict[str, object]:
+        artifacts, input_sha256 = self._consistency_inputs(root, work)
+        prompt = (
+            "Perform a non-destructive consistency review. Compare every artifact with the work "
+            "description and acceptance criteria. Return only JSON with result equal to 'success' "
+            "or 'failure', and a non-empty Markdown report. Use failure for contradictions or "
+            "coverage gaps.\n\n"
+            + json.dumps(
+                {
+                    "title": work.title,
+                    "description": work.description,
+                    "acceptance_criteria": work.acceptance_criteria,
+                    "artifacts": artifacts,
+                },
+                ensure_ascii=False,
+            )
+        )
+        payload = self._run_advisory_prompt(root, actor, swarm, work, prompt, runner)
+        result = payload.get("result")
+        report = payload.get("report")
+        if (
+            result not in {"success", "failure"}
+            or not isinstance(report, str)
+            or not report.strip()
+        ):
+            raise ValueError(
+                "Consistency runtime output requires result success/failure and a report"
+            )
+        report_id = self._now().astimezone(UTC).strftime("consistency-%Y%m%dt%H%M%sz")
+        relative = (
+            Path(".agora")
+            / "swarms"
+            / swarm.id
+            / "work"
+            / work.id
+            / "consistency"
+            / (report_id + ".md")
+        )
+        path = root / relative
+        write_new(
+            path,
+            render_markdown(
+                MarkdownDocument(
+                    attributes={
+                        "schema": "agora/consistency-report/v1",
+                        "swarm": swarm.id,
+                        "work": work.id,
+                        "result": result,
+                        "input-sha256": input_sha256,
+                        "actor": actor.reference,
+                        "created-at": self._timestamp(),
+                    },
+                    body=f"# Consistency report\n\n{report.strip()}",
+                )
+            ),
+        )
+        uri = f"repo://{relative.as_posix()}"
+        self._record_artifact(work, "consistency-report", uri, actor.reference)
+        refreshed = self._load_work(swarm, work.id)
+        evidence = AddEvidenceInput(
+            swarm_id=swarm.id,
+            work_id=work.id,
+            actor_id=actor.reference,
+            type="consistency-check",
+            result=result,
+            artifact_refs=[uri],
+        )
+        self._validate_add_evidence(root, evidence)
+        self._apply_add_evidence(swarm, actor, refreshed, evidence)
+        return {"result": result, "report": uri}
+
+    @_locked_mutation("project")
+    def generate_work_gherkin(
+        self, data: WorkActorInput, *, runner: str | None = None
+    ) -> dict[str, object]:
+        root, swarm, actor, work = self._validate_advisory_work_action(data, "work.gherkin")
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; use "
+                "work gherkin-prepare"
+            )
+        return self._apply_generate_work_gherkin(root, swarm, actor, work, runner)
+
+    def _apply_generate_work_gherkin(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        actor: ActorRecord,
+        work: WorkRecord,
+        runner: str | None,
+    ) -> dict[str, object]:
+        if not work.acceptance_criteria:
+            raise ValueError("Gherkin generation requires at least one acceptance criterion")
+        input_sha256 = self._gherkin_input_sha256(work)
+        prompt = (
+            "Generate one valid Gherkin feature for each acceptance criterion. Return only a JSON "
+            "object named 'features' mapping each exact criterion id to the complete .feature file "
+            "text. Each feature must contain Feature, Scenario, Given, When, and Then.\n\n"
+            + json.dumps(work.acceptance_criteria, ensure_ascii=False)
+        )
+        payload = self._run_advisory_prompt(root, actor, swarm, work, prompt, runner)
+        features = payload.get("features")
+        if not isinstance(features, dict) or set(features) != set(work.acceptance_criteria):
+            raise ValueError("Gherkin runtime output must contain one feature per criterion id")
+        uris: list[str] = []
+        for criterion_id in work.acceptance_criteria:
+            contents = features[criterion_id]
+            if not isinstance(contents, str) or not all(
+                marker in contents
+                for marker in ("Feature:", "Scenario:", "Given ", "When ", "Then ")
+            ):
+                raise ValueError(f"Generated Gherkin is invalid for criterion: {criterion_id}")
+            relative = (
+                Path(".agora")
+                / "swarms"
+                / swarm.id
+                / "work"
+                / work.id
+                / "gherkin"
+                / f"{criterion_id}.feature"
+            )
+            path = root / relative
+            generated = f"# agora-input-sha256: {input_sha256}\n{contents.rstrip()}\n"
+            if path.exists():
+                atomic_write(path, generated)
+            else:
+                write_new(path, generated)
+            uri = f"repo://{relative.as_posix()}"
+            if uri not in self._work_artifact_references(work):
+                self._record_artifact(work, "gherkin-feature", uri, actor.reference)
+            uris.append(uri)
+        return {"features": uris}
+
+    @_locked_mutation("project")
+    def prepare_advisory_work_action(
+        self,
+        action_id: str,
+        data: WorkActorInput,
+        action: str,
+        *,
+        runner: str | None = None,
+    ) -> LifecycleActionRecord:
+        if action not in {"work.verify-consistency", "work.gherkin"}:
+            raise ValueError(f"Unsupported advisory lifecycle action: {action}")
+        assert_slug(action_id, "Lifecycle Action id")
+        root, swarm, actor, work = self._validate_advisory_work_action(data, action)
+        assert_actor_identity_available(actor)
+        self._assert_current_actor_key(actor)
+        return self._prepare_lifecycle_action(
+            root,
+            id_=action_id,
+            action=action,
+            actor=actor,
+            swarm=swarm,
+            work=work,
+            parameters={"runner": runner or ""},
+        )
+
+    def _validate_advisory_work_action(
+        self, data: WorkActorInput, action: str
+    ) -> tuple[Path, SwarmRecord, ActorRecord, WorkRecord]:
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
+        work = self._load_work(swarm, data.work_id)
+        self._assert_work_mutable(root, swarm, work)
+        return root, swarm, actor, work
+
+    def _run_advisory_prompt(
+        self,
+        root: Path,
+        actor: ActorRecord,
+        swarm: SwarmRecord,
+        work: WorkRecord,
+        prompt: str,
+        runner: str | None,
+    ) -> dict[str, object]:
+        project = self._load_project_configuration(root)
+        integration, _, model = self._resolve_actor_runtime(root, actor, project, runner)
+        command = self._runtime_command(integration, runner, model, prompt=prompt)
+        if not command:
+            raise ValueError("A generic integration cannot run advisory generation")
+        if shutil.which(command[0]) is None:
+            raise FileNotFoundError(f"Runtime executable not found: {command[0]}")
+        with tempfile.TemporaryDirectory(prefix="agora-advisory-") as temp_dir:
+            prompt_path = Path(temp_dir) / "PROMPT.md"
+            prompt_path.write_text(prompt, encoding="utf-8")
+            environment = {
+                **os.environ,
+                "AGORA_PROJECT": str(root),
+                "AGORA_ACTOR": actor.reference,
+                "AGORA_SWARM": swarm.id,
+                "AGORA_WORK": work.id,
+                "AGORA_ADVISORY_PROMPT": str(prompt_path),
+            }
+            if self._tool_runner is not None:
+                completed = self._tool_runner(command, root, environment)
+            else:
+                completed = _run_tool_process(
+                    command,
+                    root,
+                    environment,
+                    timeout_seconds=300,
+                    max_output_bytes=1024 * 1024,
+                    boundary_subject="advisory runtime",
+                )
+        if completed.returncode != 0:
+            raise RuntimeError(f"Advisory runtime exited with code {completed.returncode}")
+        output = completed.stdout.strip()
+        if output.startswith("```"):
+            output = re.sub(r"^```(?:json)?\s*|\s*```$", "", output, flags=re.IGNORECASE)
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise ValueError("Advisory runtime output must be valid JSON") from error
+        if not isinstance(payload, dict):
+            raise ValueError("Advisory runtime output must be a JSON object")
+        return payload
+
+    @staticmethod
+    def _canonical_sha256(value: object) -> str:
+        serialized = json.dumps(
+            value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(serialized).hexdigest()
+
+    @classmethod
+    def _clarification_input_sha256(cls, work: WorkRecord) -> str:
+        return cls._canonical_sha256(
+            {
+                "kind": "clarification",
+                "title": work.title,
+                "description": work.description,
+                "acceptance-criteria": work.acceptance_criteria,
+            }
+        )
+
+    @classmethod
+    def _gherkin_input_sha256(cls, work: WorkRecord) -> str:
+        return cls._canonical_sha256(
+            {"kind": "gherkin", "acceptance-criteria": work.acceptance_criteria}
+        )
+
+    def _consistency_inputs(self, root: Path, work: WorkRecord) -> tuple[list[dict[str, str]], str]:
+        artifacts: list[dict[str, str]] = []
+        remaining_content = 256 * 1024
+        for kind, uri in self._work_artifact_rows(work):
+            if kind == "consistency-report" or not uri.startswith("repo://"):
+                continue
+            self._assert_artifact_reference(root, uri)
+            contents = (root / uri.removeprefix("repo://")).read_text(
+                encoding="utf-8", errors="replace"
+            )
+            bounded = contents[:remaining_content]
+            artifacts.append({"kind": kind, "uri": uri, "content": bounded})
+            remaining_content -= len(bounded)
+            if remaining_content == 0:
+                break
+        digest = self._canonical_sha256(
+            {
+                "kind": "consistency",
+                "title": work.title,
+                "description": work.description,
+                "acceptance-criteria": work.acceptance_criteria,
+                "artifacts": artifacts,
+            }
+        )
+        return artifacts, digest
+
+    @staticmethod
+    def _upgrade_clarifications_table(document: MarkdownDocument) -> MarkdownDocument:
+        try:
+            AgoraWorkspace._markdown_table_rows(
+                document.body,
+                ("Question", "Answer", "Actor", "Timestamp", "Input SHA-256"),
+            )
+            return document
+        except ValueError:
+            rows = AgoraWorkspace._markdown_table_rows(
+                document.body, ("Question", "Answer", "Actor", "Timestamp")
+            )
+        heading = document.body.split("| Question |", 1)[0].rstrip()
+        table = [
+            "| Question | Answer | Actor | Timestamp | Input SHA-256 |",
+            "| --- | --- | --- | --- | --- |",
+            *[f"| {' | '.join([*row, ''])} |" for row in rows],
+        ]
+        document.body = f"{heading}\n\n" + "\n".join(table)
+        return document
+
+    @staticmethod
+    def _markdown_table_cell(value: str) -> str:
+        return " ".join(value.split()).replace("|", "\\|")
+
+    @staticmethod
+    def _render_checklist(record: ChecklistRecord) -> str:
+        body = "\n".join(
+            f"- [{'x' if index in record.checked_items else ' '}] {item}"
+            for index, item in enumerate(record.items, start=1)
+        )
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/checklist/v1",
+                    "id": record.id,
+                    "swarm": record.swarm_id,
+                    "work": record.work_id,
+                    "title": record.title,
+                    "created-by": record.created_by,
+                    "created-at": record.created_at,
+                    "updated-by": record.updated_by,
+                    "updated-at": record.updated_at,
+                },
+                body=f"# {record.title}\n\n{body}",
+            )
+        )
+
+    @staticmethod
+    def _load_checklist(work: WorkRecord, checklist_id: str) -> ChecklistRecord:
+        assert_slug(checklist_id, "Checklist id")
+        path = Path(work.path) / "checklists" / f"{checklist_id}.md"
+        if not path.is_file():
+            raise FileNotFoundError(f"Checklist not found: {checklist_id}")
+        document = read_markdown(path)
+        _assert_schema(document, "agora/checklist/v1", path)
+        rows = re.findall(r"^- \[([ xX])\] (.+)$", document.body, flags=re.MULTILINE)
+        if not rows:
+            raise ValueError(f"Checklist has no items: {path}")
+        updated_by = optional_string_attribute(document.attributes, "updated-by")
+        updated_at = optional_string_attribute(document.attributes, "updated-at")
+        if (updated_by is None) != (updated_at is None):
+            raise ValueError(f"Checklist update attribution is incomplete: {path}")
+        return ChecklistRecord(
+            id=string_attribute(document.attributes, "id"),
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            title=string_attribute(document.attributes, "title"),
+            items=[item for _, item in rows],
+            checked_items=[
+                index for index, (mark, _) in enumerate(rows, start=1) if mark.lower() == "x"
+            ],
+            created_by=string_attribute(document.attributes, "created-by"),
+            created_at=string_attribute(document.attributes, "created-at"),
+            updated_by=updated_by,
+            updated_at=updated_at,
+            path=str(path),
+        )
+
+    @staticmethod
+    def _load_clarification_rows(work: WorkRecord) -> list[dict[str, str]]:
+        path = Path(work.path) / "clarifications.md"
+        document = read_markdown(path)
+        _assert_schema(document, "agora/clarifications/v1", path)
+        if (
+            string_attribute(document.attributes, "swarm") != work.swarm_id
+            or string_attribute(document.attributes, "work") != work.id
+        ):
+            raise ValueError(f"Clarifications do not belong to their work item: {path}")
+        try:
+            rows = AgoraWorkspace._markdown_table_rows(
+                document.body,
+                ("Question", "Answer", "Actor", "Timestamp", "Input SHA-256"),
+            )
+        except ValueError:
+            legacy_rows = AgoraWorkspace._markdown_table_rows(
+                document.body, ("Question", "Answer", "Actor", "Timestamp")
+            )
+            rows = [[*row, ""] for row in legacy_rows]
+        if any(not row[0] or not row[2] or not row[3] for row in rows):
+            raise ValueError(f"Clarification rows require question, actor, and timestamp: {path}")
+        if any(row[4] and re.fullmatch(r"[0-9a-f]{64}", row[4]) is None for row in rows):
+            raise ValueError(f"Clarification input digests must be SHA-256 values: {path}")
+        return [
+            {
+                "question": row[0],
+                "answer": row[1],
+                "actor": row[2],
+                "timestamp": row[3],
+                "input-sha256": row[4],
+            }
+            for row in rows
+        ]
+
+    @classmethod
+    def _load_clarification_actors(cls, work: WorkRecord) -> list[str]:
+        return [row["actor"] for row in cls._load_clarification_rows(work)]
+
+    @_locked_mutation("project")
     def add_evidence(self, data: AddEvidenceInput) -> WorkRecord:
         root = self.project_root()
         swarm, actor, work = self._validate_add_evidence(root, data)
@@ -4887,6 +5614,192 @@ class AgoraWorkspace:
         )
 
     @_locked_mutation("project")
+    def decide_gate(self, data: GateDecisionInput) -> WorkRecord:
+        """Apply one governed gate decision using the existing approval rules."""
+
+        assert_slug(data.swarm_id, "Swarm id")
+        assert_slug(data.work_id, "Work id")
+        assert_slug(data.gate_id, "Gate id")
+        if data.decision not in {"approved", "rejected"}:
+            raise ValueError("Gate decision must be approved or rejected")
+        reason = " ".join(data.reason.split())
+        if not reason:
+            raise ValueError("Gate decision reason cannot be empty")
+
+        root = self.project_root()
+        project = self._load_project_configuration(root)
+        if data.project_identity != project.project:
+            raise ValueError(
+                "Project identity mismatch: "
+                f"expected {project.project}, got {data.project_identity}"
+            )
+        swarm = self._load_swarm(root, data.swarm_id)
+        work = self._load_work(swarm, data.work_id)
+        if work.state != data.expected_state:
+            raise ValueError(
+                f"Stale work state: expected {data.expected_state}, current {work.state}"
+            )
+        self._assert_work_mutable(root, swarm, work)
+
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        transition = next(
+            (
+                item
+                for item in contract.transitions
+                if item.source == work.state and item.gate == data.gate_id
+            ),
+            None,
+        )
+        if transition is None or data.gate_id not in contract.gates:
+            raise ValueError(f"Gate {data.gate_id} is not active for work state {work.state}")
+        gate = contract.gates[data.gate_id]
+        if not gate.required_approval_roles:
+            raise ValueError(f"Gate {data.gate_id} has no approval decision")
+
+        actor_candidates = [
+            item
+            for item in self.action_candidates(swarm.id, "approval.add")
+            if item["actor"] in {data.actor_id, f"project:{data.actor_id}", f"user:{data.actor_id}"}
+            and item["role"] in gate.required_approval_roles
+        ]
+        if not actor_candidates:
+            raise PermissionError(
+                f"Actor {data.actor_id} is not authorized for gate {data.gate_id}"
+            )
+        pending_candidates = [
+            item for item in actor_candidates if item["role"] not in work.approval_roles
+        ]
+        if not pending_candidates:
+            raise ValueError(f"Gate {data.gate_id} is already resolved for this actor")
+        if len(pending_candidates) != 1:
+            roles = ", ".join(item["role"] for item in pending_candidates)
+            raise ValueError(f"Gate decision role is ambiguous for actor {data.actor_id}: {roles}")
+        role_id = pending_candidates[0]["role"]
+
+        evidence_refs = list(
+            dict.fromkeys(item.strip() for item in data.evidence_refs if item.strip())
+        )
+        evidence_rows = self._work_evidence_rows(work)
+        successful_refs = {
+            reference
+            for _, result, references in evidence_rows
+            if result == "success"
+            for reference in references
+        }
+        missing_refs = [
+            reference for reference in evidence_refs if reference not in successful_refs
+        ]
+        if missing_refs:
+            raise ValueError(
+                "Gate evidence references are missing or not successful: " + ", ".join(missing_refs)
+            )
+        if (gate.require_successful_evidence or gate.required_evidence_types) and not evidence_refs:
+            raise ValueError(f"Gate {data.gate_id} requires durable evidence references")
+
+        assessment = self._work_gate_assessment(root, work, gate, data.gate_id)
+        blockers = [
+            *assessment["unsatisfied"],
+            *assessment["missing_artifacts"],
+            *assessment["missing_evidence_types"],
+            *assessment["git_issues"],
+        ]
+        if assessment["evidence_missing"]:
+            blockers.append("successful-evidence")
+        if blockers:
+            raise ValueError(
+                f"Gate {data.gate_id} evidence or preconditions are not satisfied: "
+                + ", ".join(blockers)
+            )
+
+        actor = self._find_actor(root, pending_candidates[0]["actor"])
+        authentication_fingerprint: str | None = None
+        if actor.authentication_required:
+            if any(
+                value is None
+                for value in (
+                    data.authentication_payload,
+                    data.authentication_signature,
+                    data.authentication_fingerprint,
+                )
+            ):
+                raise PermissionError(
+                    f"Actor {actor.reference} requires a signed lifecycle action for gate decisions"
+                )
+            self._assert_current_actor_key(actor)
+            if data.authentication_fingerprint != actor.authentication_fingerprint:
+                raise PermissionError(
+                    f"Gate decision authentication fingerprint does not match {actor.reference}"
+                )
+            assert data.authentication_payload is not None
+            assert data.authentication_signature is not None
+            try:
+                authentication_fingerprint, _, _, _ = verify_actor_inline_signature(
+                    actor,
+                    data.authentication_payload,
+                    data.authentication_signature,
+                    f"Gate decision signature is invalid for {actor.reference}",
+                )
+            except ValueError as error:
+                raise PermissionError(str(error)) from error
+        elif any(
+            value is not None
+            for value in (
+                data.authentication_payload,
+                data.authentication_signature,
+                data.authentication_fingerprint,
+            )
+        ):
+            raise ValueError(f"Actor {actor.reference} does not require authentication")
+
+        if data.decision == "rejected":
+            precondition = self._work_precondition_sha256(work)
+            prior = self.list_events(
+                swarm_id=swarm.id,
+                work_id=work.id,
+                type_="gate.rejected",
+                limit=100,
+            )
+            if any(
+                self._event_detail_value(item.detail, "gate") == data.gate_id
+                and self._event_detail_value(item.detail, "actor") == actor.reference
+                and self._event_detail_value(item.detail, "precondition") == precondition
+                for item in prior
+            ):
+                raise ValueError(f"Gate {data.gate_id} already has this rejection")
+
+        with filesystem_transaction():
+            if data.decision == "approved":
+                approval = AddApprovalInput(
+                    swarm_id=swarm.id,
+                    work_id=work.id,
+                    actor_id=actor.reference,
+                    role_id=role_id,
+                    note=reason,
+                )
+                _, validated_actor, validated_work, delegation = self._validate_approval(
+                    root, approval
+                )
+                self._apply_approval(
+                    swarm,
+                    validated_actor,
+                    validated_work,
+                    role_id,
+                    reason,
+                    delegation=delegation,
+                    authentication_fingerprint=authentication_fingerprint,
+                )
+            else:
+                references = ",".join(evidence_refs) or "none"
+                self._append_work_event(
+                    work,
+                    "gate.rejected",
+                    f"gate={data.gate_id} role={role_id} actor={actor.reference} "
+                    f"evidence={references} precondition={precondition} "
+                    f"authentication={authentication_fingerprint or 'none'} reason={reason}",
+                )
+        return self._load_work(swarm, work.id)
+
+    @_locked_mutation("project")
     def prepare_approval(self, data: PrepareApprovalInput) -> LifecycleActionRecord:
         assert_slug(data.id, "Lifecycle Action id")
         root = self.project_root()
@@ -4963,6 +5876,7 @@ class AgoraWorkspace:
         note_value: str,
         delegation: ApprovalDelegationRecord | None = None,
         action_id: str | None = None,
+        authentication_fingerprint: str | None = None,
     ) -> WorkRecord:
         path = Path(work.path) / "approvals.md"
         document = read_markdown(path)
@@ -4994,12 +5908,13 @@ class AgoraWorkspace:
             except Exception:
                 atomic_write(path, original)
                 raise
-        self._append_work_event(
-            work,
-            "approval.added",
+        detail = (
             f"role={role_id} actor={actor.reference} "
-            f"delegation={delegation.id if delegation is not None else 'none'}",
+            f"delegation={delegation.id if delegation is not None else 'none'}"
         )
+        if authentication_fingerprint is not None:
+            detail += f" authentication={authentication_fingerprint}"
+        self._append_work_event(work, "approval.added", detail)
         return self._load_work(swarm, work.id)
 
     @_locked_mutation("project")
@@ -5254,6 +6169,18 @@ class AgoraWorkspace:
             tuple[ActorRecord, ActorKeyRecord, ActorKeyRecord, str] | None
         ) = None
         actor_runtime_context: tuple[SetActorRuntimeInput, ActorRecord] | None = None
+        clarification_context: (
+            tuple[Path, SwarmRecord, ActorRecord, WorkRecord, str | None] | None
+        ) = None
+        advisory_context: (
+            tuple[str, Path, SwarmRecord, ActorRecord, WorkRecord, str | None] | None
+        ) = None
+        checklist_add_context: (
+            tuple[SwarmRecord, ActorRecord, WorkRecord, str, list[str], Path] | None
+        ) = None
+        checklist_check_context: (
+            tuple[SwarmRecord, ActorRecord, WorkRecord, ChecklistRecord, int] | None
+        ) = None
         actor_assignment_context: tuple[SwarmRecord, ActorRecord, str] | None = None
         session_preparation_context: (
             tuple[
@@ -5365,6 +6292,12 @@ class AgoraWorkspace:
                 provider=record.parameters["provider"] or None,
                 model=record.parameters["model"] or None,
                 clear=record.parameters["clear"] == "true",
+                fallbacks=(
+                    record.parameters["fallbacks"].split(",")
+                    if record.parameters.get("fallbacks")
+                    else None
+                ),
+                clear_fallbacks=record.parameters.get("clear-fallbacks") == "true",
             )
             swarm = self._load_swarm(root, record.swarm_id)
             actor = self._validate_actor_runtime(root, runtime)
@@ -5401,6 +6334,36 @@ class AgoraWorkspace:
             if record.swarm_id != swarm.id or record.work_id != creation.id:
                 raise ValueError(f"Lifecycle Action work context is not canonical: {record.id}")
             work_create_context = (creation, context)
+        elif record.action == "checklist.add":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no checklist work: {record.id}")
+            checklist = AddChecklistInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                title=record.parameters["title"],
+                items=self._string_list_parameter(record, "items"),
+            )
+            checklist_add_context = self._validate_add_checklist(root, checklist)
+            swarm, actor, work, _, _, _ = checklist_add_context
+        elif record.action == "checklist.check":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action has no checklist work: {record.id}")
+            try:
+                item_index = int(record.parameters["item"])
+            except ValueError as error:
+                raise ValueError(
+                    f"Lifecycle Action checklist item is invalid: {record.id}"
+                ) from error
+            checklist = CheckChecklistItemInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+                checklist_id=record.parameters["checklist"],
+                item_index=item_index,
+            )
+            checklist_check_context = self._validate_checklist_item(root, checklist)
+            swarm, actor, work, _, _ = checklist_check_context
         elif record.action == "work.decompose":
             decomposition = self._work_decomposition_input_from_action(record)
             parent, child, context = self._validate_decompose_work(root, decomposition)
@@ -5411,6 +6374,39 @@ class AgoraWorkspace:
                     f"Lifecycle Action decomposition context is not canonical: {record.id}"
                 )
             work_decompose_context = (parent, child, context)
+        elif record.action == "work.clarify":
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action clarification context is invalid: {record.id}")
+            advisory = WorkActorInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+            )
+            root, swarm, actor, work = self._validate_advisory_work_action(advisory, "work.clarify")
+            clarification_context = (
+                root,
+                swarm,
+                actor,
+                work,
+                record.parameters.get("runner") or None,
+            )
+        elif record.action in {"work.verify-consistency", "work.gherkin"}:
+            if record.work_id is None:
+                raise ValueError(f"Lifecycle Action advisory context is invalid: {record.id}")
+            advisory = WorkActorInput(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                actor_id=record.actor,
+            )
+            root, swarm, actor, work = self._validate_advisory_work_action(advisory, record.action)
+            advisory_context = (
+                record.action,
+                root,
+                swarm,
+                actor,
+                work,
+                record.parameters.get("runner") or None,
+            )
         elif record.action == "gate.waive":
             waiver = self._gate_waiver_input_from_action(record)
             waiver, swarm, actor, work = self._validate_gate_waiver(root, waiver)
@@ -5721,10 +6717,26 @@ class AgoraWorkspace:
             assert work_create_context is not None
             creation, context = work_create_context
             self._apply_create_work(creation, context)
+        elif record.action == "checklist.add":
+            assert checklist_add_context is not None
+            self._apply_add_checklist(*checklist_add_context)
+        elif record.action == "checklist.check":
+            assert checklist_check_context is not None
+            self._apply_checklist_item(*checklist_check_context)
         elif record.action == "work.decompose":
             assert work_decompose_context is not None
             parent, child, context = work_decompose_context
             self._apply_decompose_work(parent, child, context)
+        elif record.action == "work.clarify":
+            assert clarification_context is not None
+            self._apply_work_clarification(*clarification_context)
+        elif record.action in {"work.verify-consistency", "work.gherkin"}:
+            assert advisory_context is not None
+            action, root, swarm, actor, work, runner = advisory_context
+            if action == "work.verify-consistency":
+                self._apply_verify_work_consistency(root, swarm, actor, work, runner)
+            else:
+                self._apply_generate_work_gherkin(root, swarm, actor, work, runner)
         elif record.action == "gate.waive":
             assert gate_waiver_context is not None
             waiver, swarm, actor, work = gate_waiver_context
@@ -6110,6 +7122,137 @@ class AgoraWorkspace:
             if (state is None or record.state == state)
             and (operational_status is None or record.operational_status == operational_status)
         ]
+
+    def work_traceability(self, swarm_id: str, work_id: str) -> dict[str, object]:
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        artifact_rows = self._work_artifact_rows(work)
+        evidence_rows = self._work_evidence_rows(work)
+        clarification_hash = self._clarification_input_sha256(work)
+        gherkin_hash = self._gherkin_input_sha256(work)
+        _, consistency_hash = self._consistency_inputs(root, work)
+
+        clarification_rows = (
+            self._load_clarification_rows(work)
+            if (Path(work.path) / "clarifications.md").is_file()
+            else []
+        )
+        clarifications = {
+            "questions": len(clarification_rows),
+            "current-input-sha256": clarification_hash,
+            "recorded-input-sha256": sorted(
+                {row["input-sha256"] for row in clarification_rows if row["input-sha256"]}
+            ),
+        }
+        clarifications["stale"] = any(
+            digest != clarification_hash for digest in clarifications["recorded-input-sha256"]
+        )
+
+        gherkin_records: list[dict[str, object]] = []
+        consistency_records: list[dict[str, object]] = []
+        for kind, uri in artifact_rows:
+            if not uri.startswith("repo://"):
+                continue
+            path = root / uri.removeprefix("repo://")
+            if kind == "gherkin-feature":
+                recorded = self._gherkin_recorded_sha256(path)
+                gherkin_records.append(
+                    {
+                        "uri": uri,
+                        "criterion": path.stem,
+                        "recorded-input-sha256": recorded,
+                        "current-input-sha256": gherkin_hash,
+                        "stale": recorded is not None and recorded != gherkin_hash,
+                        "provenance-missing": recorded is None,
+                    }
+                )
+            elif kind == "consistency-report":
+                recorded = self._consistency_recorded_sha256(path)
+                result = next(
+                    (
+                        evidence_result
+                        for evidence_type, evidence_result, references in evidence_rows
+                        if evidence_type == "consistency-check" and uri in references
+                    ),
+                    None,
+                )
+                consistency_records.append(
+                    {
+                        "uri": uri,
+                        "result": result,
+                        "recorded-input-sha256": recorded,
+                        "current-input-sha256": consistency_hash,
+                        "stale": recorded is not None and recorded != consistency_hash,
+                        "provenance-missing": recorded is None,
+                    }
+                )
+
+        criteria = []
+        for criterion_id, description in work.acceptance_criteria.items():
+            feature_uris = [
+                str(record["uri"])
+                for record in gherkin_records
+                if record["criterion"] == criterion_id
+            ]
+            linked_evidence = [
+                {
+                    "type": type_,
+                    "result": result,
+                    "artifact-references": references,
+                }
+                for type_, result, references in evidence_rows
+                if set(references) & set(feature_uris)
+            ]
+            criteria.append(
+                {
+                    "id": criterion_id,
+                    "description": description,
+                    "stages": work.criterion_statuses.get(criterion_id, []),
+                    "satisfied": criterion_id in work.satisfied_criteria,
+                    "gherkin-features": feature_uris,
+                    "evidence": linked_evidence,
+                }
+            )
+
+        stale = bool(clarifications["stale"]) or any(
+            bool(record["stale"]) for record in [*gherkin_records, *consistency_records]
+        )
+        return {
+            "swarm": swarm.id,
+            "work": work.id,
+            "state": work.state,
+            "stale": stale,
+            "criteria": criteria,
+            "clarifications": clarifications,
+            "gherkin": gherkin_records,
+            "consistency": consistency_records,
+            "artifacts": [{"kind": kind, "uri": uri} for kind, uri in artifact_rows],
+            "evidence": [
+                {"type": type_, "result": result, "artifact-references": references}
+                for type_, result, references in evidence_rows
+            ],
+        }
+
+    @staticmethod
+    def _gherkin_recorded_sha256(path: Path) -> str | None:
+        if not path.is_file():
+            return None
+        first_line = path.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+        if not first_line:
+            return None
+        match = re.fullmatch(r"# agora-input-sha256: ([0-9a-f]{64})", first_line[0])
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _consistency_recorded_sha256(path: Path) -> str | None:
+        if not path.is_file():
+            return None
+        document = read_markdown(path)
+        value = optional_string_attribute(document.attributes, "input-sha256")
+        if value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError(f"Consistency input digest must be a SHA-256 value: {path}")
+        return value
 
     @_locked_mutation("project")
     def block_work(self, data: ChangeWorkStatusInput) -> StatusChangeRecord:
@@ -7165,12 +8308,12 @@ class AgoraWorkspace:
         if work is not None:
             self._assert_work_mutable(root, swarm, work)
 
-        integration = executor.integration or project.integration
-        provider = executor.provider or project.provider
-        model = executor.model or project.model
         self._assert_session_execution_boundaries(
             data.timeout_seconds,
             data.max_output_bytes,
+        )
+        integration, provider, model = self._resolve_actor_runtime(
+            root, executor, project, data.runner
         )
         command = self._runtime_command(integration, data.runner, model)
         runtime_available = bool(command and shutil.which(command[0]))
@@ -7370,11 +8513,7 @@ class AgoraWorkspace:
             if work is not None:
                 self._assert_work_mutable(root, swarm, work)
             project = self._load_project_configuration(root)
-            expected_runtime = (
-                executor.integration or project.integration,
-                executor.provider or project.provider,
-                executor.model or project.model,
-            )
+            expected_runtime = self._resolve_actor_runtime(root, executor, project, None)
             if (record.integration, record.provider, record.model) != expected_runtime:
                 raise ValueError(
                     f"Prepared session runtime no longer matches its actor: {record.id}"
@@ -8863,6 +10002,8 @@ class AgoraWorkspace:
             "actor-keys": 0,
             "swarms": 0,
             "work": 0,
+            "clarifications": 0,
+            "checklists": 0,
             "usage": 0,
             "approval-delegations": 0,
             "gate-waivers": 0,
@@ -9959,8 +11100,10 @@ class AgoraWorkspace:
                 artifact_path = Path(work.path) / "artifacts.md"
                 evidence_path = Path(work.path) / "evidence.md"
                 try:
-                    artifact_references = self._work_artifact_references(work)
+                    artifact_rows = self._work_artifact_rows(work)
+                    artifact_references = {uri for _, uri in artifact_rows}
                 except ValueError as error:
+                    artifact_rows = []
                     artifact_references = set()
                     issue("artifact.table-invalid", artifact_path, str(error))
                 for reference in sorted(artifact_references):
@@ -9988,6 +11131,97 @@ class AgoraWorkspace:
                             "Evidence references unregistered work artifacts: "
                             + ", ".join(missing_references),
                         )
+                clarifications_path = Path(work.path) / "clarifications.md"
+                if clarifications_path.is_file():
+                    clarification_rows = inspect(
+                        "clarifications",
+                        "clarifications.invalid",
+                        clarifications_path,
+                        lambda work=work: self._load_clarification_rows(work),
+                    )
+                    if isinstance(clarification_rows, list):
+                        current_hash = self._clarification_input_sha256(work)
+                        for row in clarification_rows:
+                            resolve_actor(row["actor"], clarifications_path)
+                            recorded_hash = row["input-sha256"]
+                            if recorded_hash and recorded_hash != current_hash:
+                                issue(
+                                    "clarifications.stale",
+                                    clarifications_path,
+                                    "Clarifications were generated from superseded work inputs",
+                                    "warning",
+                                )
+                                break
+                        if clarification_rows and not any(
+                            row["input-sha256"] for row in clarification_rows
+                        ):
+                            issue(
+                                "clarifications.provenance-missing",
+                                clarifications_path,
+                                "Clarifications predate input provenance tracking",
+                                "warning",
+                            )
+                try:
+                    current_gherkin_hash = self._gherkin_input_sha256(work)
+                    _, current_consistency_hash = self._consistency_inputs(root, work)
+                except (FileNotFoundError, ValueError):
+                    current_gherkin_hash = self._gherkin_input_sha256(work)
+                    current_consistency_hash = None
+                for kind, uri in artifact_rows:
+                    if not uri.startswith("repo://") or kind not in {
+                        "gherkin-feature",
+                        "consistency-report",
+                    }:
+                        continue
+                    generated_path = root / uri.removeprefix("repo://")
+                    if not generated_path.is_file():
+                        continue
+                    if kind == "gherkin-feature":
+                        recorded_hash = self._gherkin_recorded_sha256(generated_path)
+                        expected_hash = current_gherkin_hash
+                    else:
+                        recorded_hash = self._consistency_recorded_sha256(generated_path)
+                        expected_hash = current_consistency_hash
+                    if recorded_hash is None:
+                        issue(
+                            "artifact.provenance-missing",
+                            generated_path,
+                            f"Generated {kind} predates input provenance tracking",
+                            "warning",
+                        )
+                    elif expected_hash is not None and recorded_hash != expected_hash:
+                        issue(
+                            "artifact.stale",
+                            generated_path,
+                            f"Generated {kind} is stale relative to current work inputs",
+                            "warning",
+                        )
+                for checklist_path in sorted((Path(work.path) / "checklists").glob("*.md")):
+                    checklist = inspect(
+                        "checklists",
+                        "checklist.invalid",
+                        checklist_path,
+                        lambda work=work, checklist_path=checklist_path: self._load_checklist(
+                            work, checklist_path.stem
+                        ),
+                    )
+                    if not isinstance(checklist, ChecklistRecord):
+                        continue
+                    if checklist.id != checklist_path.stem:
+                        issue(
+                            "checklist.id-mismatch",
+                            checklist_path,
+                            "Checklist id does not match its filename",
+                        )
+                    if checklist.swarm_id != swarm.id or checklist.work_id != work.id:
+                        issue(
+                            "checklist.owner-mismatch",
+                            checklist_path,
+                            "Checklist does not belong to its filesystem owner",
+                        )
+                    resolve_actor(checklist.created_by, checklist_path)
+                    if checklist.updated_by is not None:
+                        resolve_actor(checklist.updated_by, checklist_path)
                 if work.operational_status != "cancelled":
                     state_counts[work.state] = state_counts.get(work.state, 0) + 1
                 usage_totals: dict[str, int] = {}
@@ -11943,6 +13177,17 @@ class AgoraWorkspace:
         kind = string_attribute(attributes, "kind")
         if kind not in ACTOR_KINDS:
             raise ValueError(f"Unsupported actor kind: {kind}")
+        raw_fallbacks = attributes.get("runtime-fallbacks", [])
+        if not isinstance(raw_fallbacks, list) or any(
+            not isinstance(item, dict)
+            or set(item) != {"integration", "provider", "model"}
+            or any(not isinstance(value, str) or not value for value in item.values())
+            for item in raw_fallbacks
+        ):
+            raise ValueError(f"Actor runtime-fallbacks are invalid: {path}")
+        runtime_fallbacks = [dict(item) for item in raw_fallbacks]
+        for item in runtime_fallbacks:
+            self._assert_integration(item["integration"])
         record = ActorRecord(
             id=string_attribute(attributes, "id"),
             name=string_attribute(attributes, "name"),
@@ -11957,6 +13202,7 @@ class AgoraWorkspace:
             ),
             provider=optional_string_attribute(attributes, "provider"),
             model=optional_string_attribute(attributes, "model"),
+            runtime_fallbacks=runtime_fallbacks,
             represented_swarm=optional_string_attribute(attributes, "represented-swarm"),
             authentication_required=_boolean_attribute_default(
                 attributes, "authentication-required", False
@@ -12893,13 +14139,19 @@ class AgoraWorkspace:
         ]
 
     @staticmethod
-    def _runtime_command(integration: Integration, runner: str | None, model: str) -> list[str]:
+    def _runtime_command(
+        integration: Integration,
+        runner: str | None,
+        model: str,
+        *,
+        prompt: str | None = None,
+    ) -> list[str]:
         if runner is not None:
             command = shlex.split(runner)
             if not command:
                 raise ValueError("Runner command cannot be empty")
             return command
-        prompt = (
+        prompt = prompt or (
             "Read the Agora session context from the path in AGORA_CONTEXT. Follow its operational "
             "Markdown, perform only the next action permitted for the assigned role, persist "
             "artifacts and evidence through Agora, and stop at human approval or unavailable "
@@ -12924,6 +14176,76 @@ class AgoraWorkspace:
                 command.extend(["--model", model])
             return [*command, prompt]
         return []
+
+    def _resolve_actor_runtime(
+        self,
+        root: Path,
+        actor: ActorRecord,
+        project: ProjectConfiguration,
+        runner: str | None,
+    ) -> tuple[Integration, str, str]:
+        primary: tuple[Integration, str, str] = (
+            actor.integration or project.integration,
+            actor.provider or project.provider,
+            actor.model or project.model,
+        )
+        if runner is not None:
+            return primary
+        candidates = [
+            primary,
+            *[
+                (
+                    self._integration(item["integration"]),
+                    item["provider"],
+                    item["model"],
+                )
+                for item in actor.runtime_fallbacks
+            ],
+        ]
+        for integration, provider, model in candidates:
+            command = self._runtime_command(integration, None, model)
+            executable_available = bool(command and shutil.which(command[0]))
+            if executable_available and not self._runtime_recently_rate_limited(
+                root, actor.reference, integration, provider, model
+            ):
+                return integration, provider, model
+        return candidates[0]
+
+    def _runtime_recently_rate_limited(
+        self,
+        root: Path,
+        actor_reference: str,
+        integration: Integration,
+        provider: str,
+        model: str,
+    ) -> bool:
+        sessions = [
+            item
+            for item in self.list_sessions()
+            if (item.executor or item.actor) == actor_reference
+            and (item.integration, item.provider, item.model) == (integration, provider, model)
+        ]
+        if not sessions:
+            return False
+        latest = max(sessions, key=lambda item: (item.created_at, item.id))
+        if latest.status != "failed":
+            return False
+        result_path = Path(latest.path) / "RESULT.md"
+        if not result_path.is_file():
+            return False
+        output = result_path.read_text(encoding="utf-8", errors="replace").lower()
+        signatures = (
+            "rate limit",
+            "rate-limit",
+            "too many requests",
+            "quota exceeded",
+            "quota exhausted",
+            "usage limit",
+            "credits exhausted",
+            "http 429",
+            "status 429",
+        )
+        return any(signature in output for signature in signatures)
 
     @staticmethod
     def _work_precondition_sha256(work: WorkRecord) -> str:
@@ -12955,6 +14277,17 @@ class AgoraWorkspace:
             digest.update(b"\0")
             digest.update(path.read_bytes())
             digest.update(b"\0")
+        clarification_path = work_root / "clarifications.md"
+        if clarification_path.is_file():
+            digest.update(b"clarifications\0")
+            digest.update(clarification_path.read_bytes())
+            digest.update(b"\0")
+        for path in sorted((work_root / "checklists").glob("*.md")):
+            digest.update(b"checklist\0")
+            digest.update(path.name.encode("ascii"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
         return digest.hexdigest()
 
     def _lifecycle_precondition_sha256(
@@ -12971,12 +14304,17 @@ class AgoraWorkspace:
             "approval.delegate",
             "approval.delegation.revoke",
             "artifact.add",
+            "checklist.add",
+            "checklist.check",
             "criterion.satisfy",
             "evidence.add",
             "usage.add",
             "gate.waive",
             "work.block",
             "work.cancel",
+            "work.clarify",
+            "work.verify-consistency",
+            "work.gherkin",
             "work.decompose",
             "work.resume",
             "work.transition",
@@ -13183,6 +14521,8 @@ class AgoraWorkspace:
             "approval.delegate",
             "approval.delegation.revoke",
             "artifact.add",
+            "checklist.add",
+            "checklist.check",
             "criterion.satisfy",
             "delegation.accept",
             "delegation.block",
@@ -13199,7 +14539,10 @@ class AgoraWorkspace:
             "swarm.assign",
             "work.block",
             "work.cancel",
+            "work.clarify",
             "work.decompose",
+            "work.verify-consistency",
+            "work.gherkin",
             "work.resume",
             "work.transition",
             "work.create",
@@ -13221,11 +14564,20 @@ class AgoraWorkspace:
             },
             "actor.key.revoke": {"target", "fingerprint", "reason"},
             "actor.key.rotate": {"from", "public-key", "fingerprint", "reason"},
-            "actor.runtime.update": {"integration", "provider", "model", "clear"},
+            "actor.runtime.update": {
+                "integration",
+                "provider",
+                "model",
+                "clear",
+                "fallbacks",
+                "clear-fallbacks",
+            },
             "approval.add": {"role", "note", "delegation"},
             "approval.delegate": {"delegation", "role", "target", "reason"},
             "approval.delegation.revoke": {"delegation", "reason"},
             "artifact.add": {"kind", "uri"},
+            "checklist.add": {"title", "items"},
+            "checklist.check": {"checklist", "item"},
             "criterion.satisfy": {"criterion", "stage"},
             "delegation.accept": {"delegation"},
             "delegation.block": {"delegation", "reason"},
@@ -13268,6 +14620,9 @@ class AgoraWorkspace:
             "swarm.assign": {"role", "target"},
             "work.block": {"reason"},
             "work.cancel": {"reason"},
+            "work.clarify": {"runner"},
+            "work.verify-consistency": {"runner"},
+            "work.gherkin": {"runner"},
             "work.resume": {"reason"},
             "work.transition": {"to"},
             "work.create": {
@@ -13299,12 +14654,19 @@ class AgoraWorkspace:
             {"session", "runner"},
             {"session", "runner", "timeout-seconds", "max-output-bytes"},
         )
+        legacy_actor_runtime_parameters = action == "actor.runtime.update" and parameter_keys == {
+            "integration",
+            "provider",
+            "model",
+            "clear",
+        }
         if (
             parameter_keys != expected_parameters
             and not legacy_delegation_parameters
             and not legacy_approval_parameters
             and not legacy_criterion_parameters
             and not legacy_session_parameters
+            and not legacy_actor_runtime_parameters
         ):
             raise ValueError(f"Lifecycle Action has invalid {action} parameters: {path}")
         if action in {"actor.key.recover", "actor.key.revoke", "actor.key.rotate"}:

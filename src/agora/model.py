@@ -59,6 +59,7 @@ class ActorRecord:
     integration: Integration | None = None
     provider: str | None = None
     model: str | None = None
+    runtime_fallbacks: list[dict[str, str]] = field(default_factory=list)
     represented_swarm: str | None = None
     authentication_required: bool = False
     authentication_algorithm: str | None = None
@@ -1379,6 +1380,8 @@ class SetActorRuntimeInput:
     provider: str | None = None
     model: str | None = None
     clear: bool = False
+    fallbacks: list[str] | None = None
+    clear_fallbacks: bool = False
 
 
 @dataclass(frozen=True)
@@ -1644,6 +1647,39 @@ class PrepareEvidenceInput(AddEvidenceInput):
 
 
 @dataclass(frozen=True)
+class AddClarificationInput(WorkActorInput):
+    question: str = ""
+    answer: str | None = None
+
+
+@dataclass(frozen=True)
+class AddChecklistInput(WorkActorInput):
+    title: str = ""
+    items: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CheckChecklistItemInput(WorkActorInput):
+    checklist_id: str = ""
+    item_index: int = 0
+
+
+@dataclass(frozen=True)
+class ChecklistRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    title: str
+    items: list[str]
+    checked_items: list[int]
+    created_by: str
+    created_at: str
+    updated_by: str | None
+    updated_at: str | None
+    path: str
+
+
+@dataclass(frozen=True)
 class AddUsageInput(WorkActorInput):
     id: str
     amounts: dict[str, int] = field(default_factory=dict)
@@ -1661,6 +1697,19 @@ class AddApprovalInput(WorkActorInput):
     role_id: str = ""
     note: str = ""
     delegation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class GateDecisionInput(WorkActorInput):
+    project_identity: str = ""
+    gate_id: str = ""
+    decision: Literal["approved", "rejected"] = "rejected"
+    reason: str = ""
+    expected_state: str = ""
+    evidence_refs: list[str] = field(default_factory=list)
+    authentication_payload: bytes | None = None
+    authentication_signature: str | None = None
+    authentication_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)

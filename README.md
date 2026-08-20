@@ -267,6 +267,22 @@ the actor's current runtime rather than replaying the failed attempt's command) 
 is the `generic` integration, which has no runtime to derive a command from and always requires an
 explicit `--runner`, so a runner-less retry there reuses the prior explicit runner.
 
+Actors may also declare ordered, reviewed fallbacks. Agora chooses the first executable declared
+runtime, and skips a runtime only when its most recent matching session contains a recognized quota
+or rate-limit signal; ordinary task failures remain on the primary runtime:
+
+```bash
+agora actor runtime --actor delivery-agent \
+  --integration codex --provider openai --model primary \
+  --fallback claude:anthropic:fallback-model
+```
+
+For specification tooling, `agora work clarify`, `work checklist`, `work verify-consistency`, and
+`work gherkin` create advisory Markdown, evidence, and artifacts without changing gate state. Use
+`agora work traceability` to detect generated output made stale by changed criteria or artifacts,
+and `agora status --board` for a one-frame aggregate view. See the
+[spec-tooling and runtime resilience guide](docs/guides/spec-tooling-and-runtime-resilience.md).
+
 ## Run the daily loop
 
 ```mermaid

@@ -197,6 +197,21 @@ agora actor runtime --actor ai-facilitator \
 agora actor runtime --actor ai-facilitator --clear
 ```
 
+Declare ordered fallbacks with repeatable `--fallback` values:
+
+```bash
+agora actor runtime --actor ai-facilitator \
+  --integration codex --provider openai --model primary \
+  --fallback claude:anthropic:fallback-model
+
+agora actor runtime --actor ai-facilitator --clear-fallbacks
+```
+
+Fallback selection is bounded to a fresh session. Agora uses the first declared runtime whose
+executable is available and whose most recent matching session was not rejected for a recognized
+quota or rate-limit condition. It does not move past ordinary nonzero exits, timeouts, output-limit
+failures, or implementation errors. `SESSION.md` and `SUMMARY.md` record the runtime actually used.
+
 `--clear` restores project inheritance. A human, AI agent, swarm, service, or automation can carry
 runtime metadata; actor kind describes accountable identity, not a permanent execution technology.
 
@@ -206,7 +221,8 @@ When the actor requires authentication, prepare and sign the change in a swarm w
 ```bash
 agora actor runtime-prepare --id update-ai-facilitator-runtime \
   --actor ai-facilitator --swarm payment-idempotency \
-  --integration generic --provider internal-gateway --model security-reviewed-model
+  --integration codex --provider openai --model primary \
+  --fallback claude:anthropic:fallback-model
 agora action authorization --action update-ai-facilitator-runtime \
   --output /tmp/update-ai-facilitator-runtime.json
 # Sign the exact exported bytes outside Agora.
@@ -214,8 +230,9 @@ agora action apply --action update-ai-facilitator-runtime \
   --signature /tmp/update-ai-facilitator-runtime.sig
 ```
 
-The signature binds the requested runtime fields to the current actor and swarm documents. Apply
-also rechecks the assignment and current Method Pack permission before changing the actor record.
+The signature binds the requested primary runtime and ordered fallbacks to the current actor and
+swarm documents. Apply also rechecks the assignment and current Method Pack permission before
+changing the actor record.
 
 ## Prepare and launch a session
 
