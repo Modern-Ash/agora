@@ -1,65 +1,423 @@
 {
-  "core_version": "0.8.0",
   "artifact": {
+    "activity": null,
+    "content_sha256": null,
+    "kind": "external-report",
+    "produced_by": "project:developer",
     "schema": "agora/application/artifact-summary/v3",
-    "uri": "https://evidence.example.invalid/report",
-    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  },
-  "evidence": {
-    "schema": "agora/application/evidence-summary/v3",
-    "artifact_content_sha256": {
-      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    }
-  },
-  "gate_command": {
-    "schema": "agora/application/approve-gate-command/v4",
-    "evidence_content_sha256": {
-      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    "actor_fingerprint": null,
-    "prepared_at": "2026-08-20T15:00:00Z",
-    "expires_at": "2026-08-20T15:15:00Z"
-  },
-  "prepared_gate": {
-    "schema": "agora/application/prepared-gate-decision/v3",
-    "authorization_schema": "agora/application/approve-gate-authorization/v4",
-    "authorization_payload": "{}\n",
-    "authorization_digest": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
-    "freshness": "governed-material/v2",
-    "evidence_references": [
-      "https://evidence.example.invalid/report"
-    ],
-    "evidence_content_sha256": {
-      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    "prepared_at": "2026-08-20T15:00:00Z",
-    "expires_at": "2026-08-20T15:15:00Z"
-  },
-  "gate_option": {
-    "schema": "agora/application/gate-decision-option-summary/v3",
-    "evidence_content_sha256": {
-      "https://evidence.example.invalid/report": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "https://evidence.example.invalid/unselected": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    },
-    "content_addressed_evidence_required": true
-  },
-  "gate_options_projection_schema": "agora/application/gate-decision-options-projection/v3",
-  "gate_decision_projection_schema": "agora/application/gate-decision-projection/v3",
-  "work_control_projection_schema": "agora/application/work-control-projection/v3",
-  "operational_error": {
-    "schema": "agora/application/error/v2",
-    "code": "command.preparation-expired",
-    "category": "concurrency",
-    "retryable": true,
-    "durable_path": null,
-    "recovery_hint": "Prepare the command again before retrying.",
-    "details": {}
+    "timestamp": "2026-08-20T15:00:00Z",
+    "uri": "https://evidence.example.invalid/selected-null-digest"
   },
   "budget": {
-    "command_schema": "agora/application/amend-budget-command/v1",
-    "prepared_schema": "agora/application/prepared-budget-amendment/v1",
     "authorization_schema": "agora/application/amend-budget-authorization/v1",
-    "projection_schema": "agora/application/budget-amendment-projection/v1",
-    "durable_record_schema": "agora/budget-amendment/v1"
-  }
+    "command_schema": "agora/application/amend-budget-command/v1",
+    "durable_record_schema": "agora/budget-amendment/v1",
+    "prepared_schema": "agora/application/prepared-budget-amendment/v1",
+    "projection_schema": "agora/application/budget-amendment-projection/v1"
+  },
+  "core_version": "0.8.0",
+  "durable_activity": {
+    "actor": "project:owner",
+    "schema": "agora/application/activity-entry/v1",
+    "session_id": null,
+    "source": "repo://.agora/swarms/delivery/work/release/events.md",
+    "summary": "role=product-owner actor=project:owner delegation=none gate=completion evidence=https://evidence.example.invalid/selected-null-digest evidence-content-sha256={\"https://evidence.example.invalid/selected-null-digest\":null} precondition=bf6275e6e519bc1a8634c3a06794f2a165b620ad9e124a1c7ef1790ad0fae91e reason=Evidence reviewed and accepted",
+    "swarm_id": "delivery",
+    "timestamp": "2026-08-20T15:00:00Z",
+    "tool_run_id": null,
+    "type": "approval.added",
+    "work_id": "release"
+  },
+  "evidence": {
+    "activity": null,
+    "artifact_content_sha256": {
+      "https://evidence.example.invalid/selected-null-digest": null
+    },
+    "artifact_references": [
+      "https://evidence.example.invalid/selected-null-digest"
+    ],
+    "produced_by": "project:developer",
+    "result": "success",
+    "schema": "agora/application/evidence-summary/v3",
+    "timestamp": "2026-08-20T15:00:00Z",
+    "type": "test-run"
+  },
+  "gate_command": {
+    "actor_fingerprint": null,
+    "actor_id": "owner",
+    "authentication": null,
+    "decision": "approved",
+    "evidence_content_sha256": {
+      "https://evidence.example.invalid/selected-null-digest": null
+    },
+    "evidence_references": [
+      "https://evidence.example.invalid/selected-null-digest"
+    ],
+    "expected_state": "verifying",
+    "expires_at": "2026-08-20T15:15:00Z",
+    "gate_id": "completion",
+    "precondition_digest": "bf6275e6e519bc1a8634c3a06794f2a165b620ad9e124a1c7ef1790ad0fae91e",
+    "prepared_at": "2026-08-20T15:00:00Z",
+    "project_identity": "governed-project",
+    "reason": "Evidence reviewed and accepted",
+    "role_id": "product-owner",
+    "schema": "agora/application/approve-gate-command/v4",
+    "swarm_id": "delivery",
+    "transition_target": "completed",
+    "work_id": "release"
+  },
+  "gate_decision_projection": {
+    "activity": {
+      "actor": "project:owner",
+      "schema": "agora/application/activity-entry/v1",
+      "session_id": null,
+      "source": "repo://.agora/swarms/delivery/work/release/events.md",
+      "summary": "role=product-owner actor=project:owner delegation=none gate=completion evidence=https://evidence.example.invalid/selected-null-digest evidence-content-sha256={\"https://evidence.example.invalid/selected-null-digest\":null} precondition=bf6275e6e519bc1a8634c3a06794f2a165b620ad9e124a1c7ef1790ad0fae91e reason=Evidence reviewed and accepted",
+      "swarm_id": "delivery",
+      "timestamp": "2026-08-20T15:00:00Z",
+      "tool_run_id": null,
+      "type": "approval.added",
+      "work_id": "release"
+    },
+    "actor_fingerprint": null,
+    "actor_id": "project:owner",
+    "decision": "approved",
+    "evidence_content_sha256": {
+      "https://evidence.example.invalid/selected-null-digest": null
+    },
+    "evidence_references": [
+      "https://evidence.example.invalid/selected-null-digest"
+    ],
+    "expires_at": "2026-08-20T15:15:00Z",
+    "gate_id": "completion",
+    "lifecycle": {
+      "acceptance_criteria": {
+        "accepted": "The release is accepted"
+      },
+      "approval_roles": [
+        "product-owner"
+      ],
+      "artifact_kinds": [
+        "test-report",
+        "external-report"
+      ],
+      "available_transitions": [
+        "implementing",
+        "completed"
+      ],
+      "criterion_statuses": {
+        "accepted": [
+          "specified",
+          "implemented",
+          "verified",
+          "accepted"
+        ]
+      },
+      "current_state": "verifying",
+      "evidence_results": [
+        "success",
+        "success"
+      ],
+      "gates": [
+        {
+          "blockers": [],
+          "id": "completion",
+          "require_all_criteria": true,
+          "require_clean_git": false,
+          "require_content_addressed_evidence": false,
+          "require_git_commit": false,
+          "require_required_artifacts": true,
+          "require_successful_evidence": true,
+          "required_approval_roles": [
+            "product-owner"
+          ],
+          "required_artifacts": null,
+          "required_criterion_stage": "accepted",
+          "required_evidence_types": [],
+          "satisfied": true,
+          "schema": "agora/application/gate-summary/v2"
+        }
+      ],
+      "method": "scrum",
+      "operational_status": "active",
+      "required_artifacts": [
+        "test-report"
+      ],
+      "satisfied_criteria": [
+        "accepted"
+      ],
+      "schema": "agora/application/lifecycle-projection/v3",
+      "states": [
+        {
+          "id": "specified",
+          "initial": true,
+          "schema": "agora/application/method-state-summary/v1",
+          "terminal": false
+        },
+        {
+          "id": "planned",
+          "initial": false,
+          "schema": "agora/application/method-state-summary/v1",
+          "terminal": false
+        },
+        {
+          "id": "implementing",
+          "initial": false,
+          "schema": "agora/application/method-state-summary/v1",
+          "terminal": false
+        },
+        {
+          "id": "reviewing",
+          "initial": false,
+          "schema": "agora/application/method-state-summary/v1",
+          "terminal": false
+        },
+        {
+          "id": "verifying",
+          "initial": false,
+          "schema": "agora/application/method-state-summary/v1",
+          "terminal": false
+        },
+        {
+          "id": "completed",
+          "initial": false,
+          "schema": "agora/application/method-state-summary/v1",
+          "terminal": true
+        }
+      ],
+      "swarm_id": "delivery",
+      "terminal_state": "completed",
+      "transitions": [
+        {
+          "authorized_roles": [
+            "developer"
+          ],
+          "available": false,
+          "blockers": [
+            {
+              "category": "state",
+              "code": "transition.source-state-mismatch",
+              "message": "Transition requires state specified; current state is verifying",
+              "references": [
+                "specified",
+                "verifying"
+              ],
+              "schema": "agora/application/gate-blocker-summary/v1"
+            }
+          ],
+          "gate_id": null,
+          "required_approval_roles": [],
+          "schema": "agora/application/transition-summary/v1",
+          "source": "specified",
+          "target": "planned"
+        },
+        {
+          "authorized_roles": [
+            "developer"
+          ],
+          "available": false,
+          "blockers": [
+            {
+              "category": "state",
+              "code": "transition.source-state-mismatch",
+              "message": "Transition requires state planned; current state is verifying",
+              "references": [
+                "planned",
+                "verifying"
+              ],
+              "schema": "agora/application/gate-blocker-summary/v1"
+            }
+          ],
+          "gate_id": null,
+          "required_approval_roles": [],
+          "schema": "agora/application/transition-summary/v1",
+          "source": "planned",
+          "target": "implementing"
+        },
+        {
+          "authorized_roles": [
+            "developer"
+          ],
+          "available": false,
+          "blockers": [
+            {
+              "category": "state",
+              "code": "transition.source-state-mismatch",
+              "message": "Transition requires state implementing; current state is verifying",
+              "references": [
+                "implementing",
+                "verifying"
+              ],
+              "schema": "agora/application/gate-blocker-summary/v1"
+            }
+          ],
+          "gate_id": null,
+          "required_approval_roles": [],
+          "schema": "agora/application/transition-summary/v1",
+          "source": "implementing",
+          "target": "reviewing"
+        },
+        {
+          "authorized_roles": [
+            "developer"
+          ],
+          "available": false,
+          "blockers": [
+            {
+              "category": "state",
+              "code": "transition.source-state-mismatch",
+              "message": "Transition requires state reviewing; current state is verifying",
+              "references": [
+                "reviewing",
+                "verifying"
+              ],
+              "schema": "agora/application/gate-blocker-summary/v1"
+            }
+          ],
+          "gate_id": null,
+          "required_approval_roles": [],
+          "schema": "agora/application/transition-summary/v1",
+          "source": "reviewing",
+          "target": "implementing"
+        },
+        {
+          "authorized_roles": [
+            "scrum-master"
+          ],
+          "available": false,
+          "blockers": [
+            {
+              "category": "state",
+              "code": "transition.source-state-mismatch",
+              "message": "Transition requires state reviewing; current state is verifying",
+              "references": [
+                "reviewing",
+                "verifying"
+              ],
+              "schema": "agora/application/gate-blocker-summary/v1"
+            }
+          ],
+          "gate_id": null,
+          "required_approval_roles": [],
+          "schema": "agora/application/transition-summary/v1",
+          "source": "reviewing",
+          "target": "verifying"
+        },
+        {
+          "authorized_roles": [
+            "developer"
+          ],
+          "available": true,
+          "blockers": [],
+          "gate_id": null,
+          "required_approval_roles": [],
+          "schema": "agora/application/transition-summary/v1",
+          "source": "verifying",
+          "target": "implementing"
+        },
+        {
+          "authorized_roles": [
+            "product-owner"
+          ],
+          "available": true,
+          "blockers": [],
+          "gate_id": "completion",
+          "required_approval_roles": [
+            "product-owner"
+          ],
+          "schema": "agora/application/transition-summary/v1",
+          "source": "verifying",
+          "target": "completed"
+        }
+      ],
+      "work_id": "release"
+    },
+    "precondition_digest": "bf6275e6e519bc1a8634c3a06794f2a165b620ad9e124a1c7ef1790ad0fae91e",
+    "prepared_at": "2026-08-20T15:00:00Z",
+    "project_identity": "governed-project",
+    "reason": "Evidence reviewed and accepted",
+    "role_id": "product-owner",
+    "schema": "agora/application/gate-decision-projection/v3",
+    "swarm_id": "delivery",
+    "work_id": "release"
+  },
+  "gate_option": {
+    "actor_id": "project:owner",
+    "allowed": true,
+    "authentication_algorithm": null,
+    "authentication_fingerprint": null,
+    "authentication_required": false,
+    "blockers": [],
+    "content_addressed_evidence_required": false,
+    "decision": "approved",
+    "evidence_content_sha256": {
+      "https://evidence.example.invalid/selected-null-digest": null,
+      "repo://reports/release.txt": "2700165975f68815c97d605c56eca8e90d497ade1264b6282401d13fee99ac27"
+    },
+    "evidence_references": [
+      "repo://reports/release.txt",
+      "https://evidence.example.invalid/selected-null-digest"
+    ],
+    "evidence_references_by_type": {
+      "test-run": [
+        "repo://reports/release.txt",
+        "https://evidence.example.invalid/selected-null-digest"
+      ]
+    },
+    "evidence_required": true,
+    "expected_state": "verifying",
+    "gate_id": "completion",
+    "required_evidence_types": [],
+    "role_id": "product-owner",
+    "schema": "agora/application/gate-decision-option-summary/v3",
+    "swarm_id": "delivery",
+    "transition_source": "verifying",
+    "transition_target": "completed",
+    "unavailable_reason": null,
+    "work_id": "release"
+  },
+  "gate_options_projection_schema": "agora/application/gate-decision-options-projection/v3",
+  "operational_error": {
+    "category": "concurrency",
+    "code": "command.preparation-expired",
+    "details": {},
+    "durable_path": null,
+    "message": "The prepared gate decision expired",
+    "recovery_hint": "Prepare the command again before retrying.",
+    "retryable": true,
+    "schema": "agora/application/error/v2"
+  },
+  "prepared_gate": {
+    "actor_fingerprint": null,
+    "actor_id": "project:owner",
+    "authentication_algorithm": null,
+    "authentication_fingerprint": null,
+    "authentication_public_key": null,
+    "authentication_required": false,
+    "authorization_digest": "e5bb60ffa56377587bfcf5c27d889ada6b8154989517cf0bb84198b052eb0dd2",
+    "authorization_payload": "{\"actor_fingerprint\":null,\"actor_id\":\"owner\",\"authorization_schema\":\"agora/application/approve-gate-authorization/v4\",\"decision\":\"approved\",\"evidence_content_sha256\":{\"https://evidence.example.invalid/selected-null-digest\":null},\"evidence_references\":[\"https://evidence.example.invalid/selected-null-digest\"],\"expected_state\":\"verifying\",\"expires_at\":\"2026-08-20T15:15:00Z\",\"gate_id\":\"completion\",\"precondition_digest\":\"bf6275e6e519bc1a8634c3a06794f2a165b620ad9e124a1c7ef1790ad0fae91e\",\"prepared_at\":\"2026-08-20T15:00:00Z\",\"project_identity\":\"governed-project\",\"reason\":\"Evidence reviewed and accepted\",\"role_id\":\"product-owner\",\"schema\":\"agora/application/approve-gate-command/v4\",\"swarm_id\":\"delivery\",\"transition_target\":\"completed\",\"work_id\":\"release\"}\n",
+    "authorization_schema": "agora/application/approve-gate-authorization/v4",
+    "command_schema": "agora/application/approve-gate-command/v4",
+    "decision": "approved",
+    "evidence_content_sha256": {
+      "https://evidence.example.invalid/selected-null-digest": null
+    },
+    "evidence_references": [
+      "https://evidence.example.invalid/selected-null-digest"
+    ],
+    "expected_state": "verifying",
+    "expires_at": "2026-08-20T15:15:00Z",
+    "freshness": "governed-material/v2",
+    "gate_id": "completion",
+    "precondition_digest": "bf6275e6e519bc1a8634c3a06794f2a165b620ad9e124a1c7ef1790ad0fae91e",
+    "prepared_at": "2026-08-20T15:00:00Z",
+    "project_identity": "governed-project",
+    "reason": "Evidence reviewed and accepted",
+    "role_id": "product-owner",
+    "schema": "agora/application/prepared-gate-decision/v3",
+    "swarm_id": "delivery",
+    "transition_target": "completed",
+    "work_id": "release"
+  },
+  "work_control_projection_schema": "agora/application/work-control-projection/v3"
 }

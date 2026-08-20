@@ -15,6 +15,7 @@ from agora.application import (
     ActivityFilters,
     ActorFilters,
     AgoraReadService,
+    ApproveGateCommand,
     ConcurrentDurableEditError,
     InvalidDurableStateError,
     InvalidReadQueryError,
@@ -23,6 +24,7 @@ from agora.application import (
     SessionFilters,
     SwarmFilters,
     WorkItemFilters,
+    approve_gate_authorization_payload,
 )
 from agora.application.dto import ArtifactSummary, SerializableDTO
 from agora.cli import main
@@ -1008,7 +1010,7 @@ def test_core_0_7_governance_fixture_versions_the_incompatible_contracts() -> No
     assert "private_key" not in serialized
 
 
-def test_core_0_8_fixture_versions_freshness_digests_errors_and_budgets() -> None:
+def test_core_0_8_fixture_is_confirmable_coherent_and_portable() -> None:
     path = Path(__file__).parent / "contracts" / "core-0.8-application-contracts.json"
     fixture = json.loads(path.read_text(encoding="utf-8"))
 
@@ -1020,20 +1022,63 @@ def test_core_0_8_fixture_versions_freshness_digests_errors_and_budgets() -> Non
     assert fixture["prepared_gate"]["authorization_schema"].endswith(
         "approve-gate-authorization/v4"
     )
+
+    command_values = dict(fixture["gate_command"])
+    command_values.pop("schema")
+    command_values["evidence_references"] = tuple(command_values["evidence_references"])
+    command = ApproveGateCommand(**command_values)
+    assert command.to_dict() == fixture["gate_command"]
+    assert (
+        approve_gate_authorization_payload(command).decode("ascii")
+        == fixture["prepared_gate"]["authorization_payload"]
+    )
     assert (
         fixture["prepared_gate"]["authorization_digest"]
         == hashlib.sha256(
             fixture["prepared_gate"]["authorization_payload"].encode("ascii")
         ).hexdigest()
     )
-    assert fixture["gate_option"]["content_addressed_evidence_required"] is True
-    assert (
-        fixture["prepared_gate"]["evidence_content_sha256"]
-        == (fixture["gate_command"]["evidence_content_sha256"])
-    )
+    assert fixture["gate_option"]["content_addressed_evidence_required"] is False
+    payload = json.loads(fixture["prepared_gate"]["authorization_payload"])
+    projection = fixture["gate_decision_projection"]
+    for field in (
+        "actor_fingerprint",
+        "decision",
+        "evidence_content_sha256",
+        "evidence_references",
+        "expires_at",
+        "gate_id",
+        "precondition_digest",
+        "prepared_at",
+        "project_identity",
+        "reason",
+        "role_id",
+        "swarm_id",
+        "work_id",
+    ):
+        expected = fixture["gate_command"][field]
+        assert fixture["prepared_gate"][field] == expected
+        assert payload[field] == expected
+        assert projection[field] == expected
+
     assert set(fixture["prepared_gate"]["evidence_content_sha256"]) < set(
         fixture["gate_option"]["evidence_content_sha256"]
     )
+    assert list(fixture["prepared_gate"]["evidence_content_sha256"].values()) == [None]
+    assert any(
+        digest is not None
+        for reference, digest in fixture["gate_option"]["evidence_content_sha256"].items()
+        if reference not in fixture["prepared_gate"]["evidence_content_sha256"]
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", fixture["prepared_gate"]["precondition_digest"])
+    assert fixture["durable_activity"] == projection["activity"]
+    assert fixture["durable_activity"]["type"] == "approval.added"
+    activity_summary = fixture["durable_activity"]["summary"]
+    assert f"gate={fixture['gate_command']['gate_id']}" in activity_summary
+    assert f"role={fixture['gate_command']['role_id']}" in activity_summary
+    assert f"reason={fixture['gate_command']['reason']}" in activity_summary
+    assert "evidence-content-sha256=" in activity_summary
+    assert fixture["gate_decision_projection"]["schema"].endswith("gate-decision-projection/v3")
     assert fixture["work_control_projection_schema"].endswith("work-control-projection/v3")
     assert fixture["operational_error"]["schema"].endswith("error/v2")
     assert fixture["budget"]["projection_schema"].endswith("budget-amendment-projection/v1")

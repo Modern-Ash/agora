@@ -34,7 +34,9 @@ minor and installed Core minor differ.
 
 Budget amendment command, preparation, authorization, and projection begin at v1. Historical
 fixtures stay under `tests/contracts/`; `core-0.8-application-contracts.json` is the portable 0.8
-consumer fixture.
+golden contract. It is generated from a real prepare/confirm flow and includes the complete
+canonical authorization payload, its byte-exact digest, the confirmed projection, and the durable
+Activity entry.
 
 ## Gate confirmation flow
 
@@ -125,7 +127,10 @@ hash for a content hash.
 
 The portable fixture `tests/contracts/core-0.8-application-contracts.json` intentionally contains a
 gate option with more eligible evidence than the prepared command selects. Consumers should assert
-that the prepared and confirmed maps equal the selected command map, not the option-wide map.
+that the prepared and confirmed maps equal the selected command map, not the option-wide map. The
+selected external reference deliberately has a `null` digest while an unselected `repo://`
+reference has a calculated digest, so both representations remain covered without synthetic
+authorization data.
 
 ## Work Control reads
 

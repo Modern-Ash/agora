@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from io import StringIO
@@ -32,6 +33,7 @@ from agora.model import (
     LaunchSessionInput,
     LaunchToolRunInput,
     PrepareActorAssignmentInput,
+    PrepareActorKeyRecoveryInput,
     PrepareActorKeyRevocationInput,
     PrepareActorKeyRotationInput,
     PrepareActorRuntimeInput,
@@ -229,7 +231,7 @@ def test_applies_a_signed_work_transition_as_a_durable_lifecycle_action(
     assert any(issue.code == "lifecycle-action.invalid" for issue in report.issues)
 
 
-@pytest.mark.parametrize("fail_at", [1, 3, 5])
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5])
 def test_signed_lifecycle_apply_rolls_back_domain_event_activity_and_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -293,7 +295,7 @@ def test_signed_lifecycle_apply_rolls_back_domain_event_activity_and_action(
     )
 
 
-@pytest.mark.parametrize("fail_at", [1, 3, 6])
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5, 6])
 def test_signed_actor_key_rotation_rolls_back_identity_history_event_and_activity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -363,6 +365,321 @@ def test_signed_actor_key_rotation_rolls_back_identity_history_event_and_activit
     )
     assert applied.status == "applied"
     assert replacement_record.exists()
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5])
+def test_direct_actor_key_rotation_restores_every_record_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
+    fail_at: int,
+) -> None:
+    root, workspace, _, _ = _authenticated_project(tmp_path, monkeypatch)
+    current_private_key = Ed25519PrivateKey.generate()
+    workspace.add_actor(
+        AddActorInput(
+            id="direct-rotation",
+            name="Direct Rotation Actor",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+            public_key=str(_write_public_key(current_private_key, tmp_path / "direct.pem")),
+        )
+    )
+    replacement_private_key = Ed25519PrivateKey.generate()
+    replacement_path = _write_public_key(replacement_private_key, tmp_path / "direct-next.pem")
+    actor = next(item for item in workspace.list_actors() if item.id == "direct-rotation")
+    assert actor.authentication_fingerprint is not None
+    key_root = Path(actor.path).with_suffix("") / "keys"
+    current_key = key_root / f"{actor.authentication_fingerprint}.md"
+    replacement_fingerprint = hashlib.sha256(
+        replacement_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+    ).hexdigest()
+    replacement_record = key_root / f"{replacement_fingerprint}.md"
+    tracked = [
+        Path(actor.path),
+        current_key,
+        root / ".agora" / "events.md",
+        root / ".agora" / "activity.md",
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    request = RotateActorKeyInput(
+        actor_id=actor.reference,
+        public_key=str(replacement_path),
+        reason="Exercise direct rotation rollback",
+    )
+    atomic_write_fault.arm(fail_at)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.rotate_actor_key(request)
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not replacement_record.exists()
+    assert next(item for item in workspace.list_actors() if item.id == actor.id) == actor
+    atomic_write_fault.restore()
+    assert workspace.rotate_actor_key(request).fingerprint == replacement_fingerprint
+    assert replacement_record.is_file()
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4])
+def test_direct_actor_key_revocation_restores_every_record_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
+    fail_at: int,
+) -> None:
+    root, workspace, _, _ = _authenticated_project(tmp_path, monkeypatch)
+    current_private_key = Ed25519PrivateKey.generate()
+    workspace.add_actor(
+        AddActorInput(
+            id="direct-revocation",
+            name="Direct Revocation Actor",
+            kind="ai-agent",
+            capabilities=["implementation"],
+            scope="project",
+            public_key=str(_write_public_key(current_private_key, tmp_path / "revoke.pem")),
+        )
+    )
+    actor = next(item for item in workspace.list_actors() if item.id == "direct-revocation")
+    assert actor.authentication_fingerprint is not None
+    current_key = (
+        Path(actor.path).with_suffix("") / "keys" / f"{actor.authentication_fingerprint}.md"
+    )
+    tracked = [
+        Path(actor.path),
+        current_key,
+        root / ".agora" / "events.md",
+        root / ".agora" / "activity.md",
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    request = RevokeActorKeyInput(
+        actor_id=actor.reference,
+        reason="Exercise direct revocation rollback",
+    )
+    atomic_write_fault.arm(fail_at)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.revoke_actor_key(request)
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert next(item for item in workspace.list_actors() if item.id == actor.id) == actor
+    atomic_write_fault.restore()
+    assert workspace.revoke_actor_key(request).status == "revoked"
+    assert (
+        next(
+            item for item in workspace.list_actors() if item.id == actor.id
+        ).authentication_revoked_at
+        is not None
+    )
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5, 6])
+def test_signed_actor_key_recovery_restores_action_identity_events_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
+    fail_at: int,
+) -> None:
+    root, workspace, _, _ = _authenticated_project(tmp_path, monkeypatch)
+    security_private_key = Ed25519PrivateKey.generate()
+    workspace.add_actor(
+        AddActorInput(
+            id="security",
+            name="Security Governor",
+            kind="human",
+            capabilities=["facilitation", "governance"],
+            scope="project",
+            public_key=str(_write_public_key(security_private_key, tmp_path / "security.pem")),
+            require_authentication=True,
+        )
+    )
+    workspace.create_swarm(
+        CreateSwarmInput(
+            id="identity-governance",
+            objective="Govern actor identity recovery",
+            create_branch=False,
+        )
+    )
+    for role, actor_id in (
+        ("product-owner", "owner"),
+        ("scrum-master", "security"),
+        ("developer", "developer"),
+    ):
+        workspace.assign_actor(
+            AssignActorInput(
+                swarm_id="identity-governance",
+                role_id=role,
+                actor_id=actor_id,
+            )
+        )
+
+    revocation = workspace.prepare_actor_key_revocation(
+        PrepareActorKeyRevocationInput(
+            action_id="revoke-before-recovery",
+            swarm_id="identity-governance",
+            target_actor_id="developer",
+            authorized_by="security",
+            reason="Revoke the compromised identity",
+        )
+    )
+    revocation_payload = tmp_path / "revoke-before-recovery.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=revocation.id,
+            output=str(revocation_payload),
+        )
+    )
+    revocation_signature = tmp_path / "revoke-before-recovery.sig"
+    revocation_signature.write_bytes(security_private_key.sign(revocation_payload.read_bytes()))
+    workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=revocation.id,
+            signature=str(revocation_signature),
+        )
+    )
+
+    replacement_private_key = Ed25519PrivateKey.generate()
+    replacement_path = _write_public_key(replacement_private_key, tmp_path / "recovered.pem")
+    recovery = workspace.prepare_actor_key_recovery(
+        PrepareActorKeyRecoveryInput(
+            action_id="atomic-key-recovery",
+            swarm_id="identity-governance",
+            target_actor_id="developer",
+            authorized_by="security",
+            public_key=str(replacement_path),
+            reason="Install an independently reviewed replacement",
+        )
+    )
+    recovery_payload = tmp_path / "atomic-key-recovery.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=recovery.id,
+            output=str(recovery_payload),
+        )
+    )
+    recovery_signature = tmp_path / "atomic-key-recovery.sig"
+    recovery_signature.write_bytes(security_private_key.sign(recovery_payload.read_bytes()))
+    actor = next(item for item in workspace.list_actors() if item.id == "developer")
+    assert actor.authentication_fingerprint is not None
+    key_root = Path(actor.path).with_suffix("") / "keys"
+    current_key = key_root / f"{actor.authentication_fingerprint}.md"
+    replacement_record = key_root / f"{recovery.parameters['fingerprint']}.md"
+    action_path = root / ".agora" / "actions" / recovery.id / "ACTION.md"
+    tracked = [
+        Path(actor.path),
+        current_key,
+        root / ".agora" / "events.md",
+        root / ".agora" / "activity.md",
+        action_path,
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    atomic_write_fault.arm(fail_at)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(
+                action_id=recovery.id,
+                signature=str(recovery_signature),
+            )
+        )
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not replacement_record.exists()
+    assert workspace.list_lifecycle_actions("prepared")[-1].id == recovery.id
+    assert (
+        next(
+            item for item in workspace.list_actors() if item.id == actor.id
+        ).authentication_revoked_at
+        is not None
+    )
+    atomic_write_fault.restore()
+    assert (
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(
+                action_id=recovery.id,
+                signature=str(recovery_signature),
+            )
+        ).status
+        == "applied"
+    )
+    assert replacement_record.is_file()
+    assert (
+        next(
+            item for item in workspace.list_actors() if item.id == actor.id
+        ).authentication_revoked_at
+        is None
+    )
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5])
+def test_signed_handoff_restores_assignment_record_action_events_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
+    fail_at: int,
+) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    workspace.add_actor(
+        AddActorInput(
+            id="incoming-developer",
+            name="Incoming Developer",
+            kind="human",
+            capabilities=["implementation"],
+            scope="project",
+        )
+    )
+    action = workspace.prepare_handoff(
+        HandoffActorInput(
+            id="atomic-signed-handoff",
+            swarm_id="delivery",
+            role_id="developer",
+            from_actor_id="developer",
+            to_actor_id="incoming-developer",
+            authorized_by="developer",
+            reason="Transfer signed responsibility",
+        )
+    )
+    payload = tmp_path / "atomic-signed-handoff.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(action_id=action.id, output=str(payload))
+    )
+    signature = tmp_path / "atomic-signed-handoff.sig"
+    signature.write_bytes(private_key.sign(payload.read_bytes()))
+    swarm_root = root / ".agora" / "swarms" / "delivery"
+    action_path = root / ".agora" / "actions" / action.id / "ACTION.md"
+    handoff_path = swarm_root / "handoffs" / action.id / "HANDOFF.md"
+    tracked = [
+        swarm_root / "SWARM.md",
+        swarm_root / "events.md",
+        root / ".agora" / "activity.md",
+        action_path,
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    atomic_write_fault.arm(fail_at)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action.id, signature=str(signature))
+        )
+
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not handoff_path.exists()
+    assert workspace.show_swarm("delivery").assignments["developer"] == "project:developer"
+    assert workspace.list_lifecycle_actions("prepared")[-1].id == action.id
+    atomic_write_fault.restore()
+    assert (
+        workspace.apply_lifecycle_action(
+            ApplyLifecycleActionInput(action_id=action.id, signature=str(signature))
+        ).status
+        == "applied"
+    )
+    assert handoff_path.is_file()
+    assert workspace.show_swarm("delivery").assignments["developer"] == (
+        "project:incoming-developer"
+    )
 
 
 def test_applies_a_signed_granular_gate_waiver(tmp_path: Path, monkeypatch) -> None:
