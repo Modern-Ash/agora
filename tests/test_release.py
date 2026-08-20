@@ -91,6 +91,7 @@ def test_verifies_installed_version_quickstart_and_workspace(tmp_path: Path) -> 
     responses = iter(
         [
             subprocess.CompletedProcess([], 0, "1.2.3\n", ""),
+            subprocess.CompletedProcess([], 0, "agora 1.2.3\n", ""),
             subprocess.CompletedProcess([], 0, '{"swarm":{"status":"ready"}}', ""),
             subprocess.CompletedProcess([], 0, '{"ok":true}', ""),
         ]
@@ -102,10 +103,11 @@ def test_verifies_installed_version_quickstart_and_workspace(tmp_path: Path) -> 
 
     verify_installed_release(Path("/clean/bin/python"), "1.2.3", tmp_path, runner=runner)
 
-    assert calls[1][0][0] == "/clean/bin/agora"
-    assert calls[1][0][1] == "quickstart"
-    assert calls[2][0][1] == "validate"
-    assert calls[1][1]["cwd"] == tmp_path
+    assert calls[1][0] == ["/clean/bin/agora", "--version"]
+    assert calls[2][0][0] == "/clean/bin/agora"
+    assert calls[2][0][1] == "quickstart"
+    assert calls[3][0][1] == "validate"
+    assert calls[2][1]["cwd"] == tmp_path
     assert all(call[1]["timeout"] == 60 for call in calls)
 
 
