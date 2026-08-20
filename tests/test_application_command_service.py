@@ -211,6 +211,82 @@ def add_external_evidence(
     )
 
 
+def _core_0_8_golden_contract(
+    workspace: AgoraWorkspace,
+    service: AgoraCommandService,
+) -> dict[str, object]:
+    selected_reference = "https://evidence.example.invalid/selected-null-digest"
+    add_external_evidence(
+        workspace,
+        uri=selected_reference,
+        digest=None,
+    )
+    reads = AgoraReadService(workspace)
+    options_projection = reads.gate_decision_options("delivery", "release")
+    option = next(
+        item
+        for item in options_projection.options
+        if item.decision == "approved" and item.gate_id == "completion"
+    )
+    intent = command(
+        reason="  Evidence   reviewed and accepted  ",
+        evidence_references=(selected_reference,),
+    )
+    prepared = service.prepare_gate_decision(intent)
+    confirmation = replace(
+        intent,
+        reason=prepared.reason,
+        evidence_references=prepared.evidence_references,
+        evidence_content_sha256=prepared.evidence_content_sha256,
+        actor_fingerprint=prepared.actor_fingerprint,
+        precondition_digest=prepared.precondition_digest,
+        prepared_at=prepared.prepared_at,
+        expires_at=prepared.expires_at,
+    )
+    projection = service.approve_gate(confirmation)
+    artifact = next(
+        item for item in reads.artifacts("delivery", "release") if item.uri == selected_reference
+    )
+    evidence = next(
+        item
+        for item in reads.evidence("delivery", "release")
+        if selected_reference in item.artifact_references
+    )
+    return {
+        "core_version": "0.8.0",
+        "artifact": artifact.to_dict(),
+        "evidence": evidence.to_dict(),
+        "gate_command": confirmation.to_dict(),
+        "prepared_gate": prepared.to_dict(),
+        "gate_option": option.to_dict(),
+        "gate_options_projection_schema": options_projection.schema,
+        "gate_decision_projection": projection.to_dict(),
+        "work_control_projection_schema": "agora/application/work-control-projection/v3",
+        "durable_activity": projection.activity.to_dict(),
+        "operational_error": PreparationExpiredError(
+            "The prepared gate decision expired"
+        ).to_dict(),
+        "budget": {
+            "command_schema": "agora/application/amend-budget-command/v1",
+            "prepared_schema": "agora/application/prepared-budget-amendment/v1",
+            "authorization_schema": "agora/application/amend-budget-authorization/v1",
+            "projection_schema": "agora/application/budget-amendment-projection/v1",
+            "durable_record_schema": "agora/budget-amendment/v1",
+        },
+    }
+
+
+def test_core_0_8_fixture_is_generated_by_a_real_confirmable_gate_flow(
+    gate_project: tuple[Path, AgoraWorkspace, AgoraCommandService],
+) -> None:
+    _, workspace, service = gate_project
+    path = Path(__file__).parent / "contracts" / "core-0.8-application-contracts.json"
+
+    assert _core_0_8_golden_contract(workspace, service) == json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+
 def test_serializes_the_immutable_versioned_command() -> None:
     value = command(
         authentication={

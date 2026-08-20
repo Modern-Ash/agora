@@ -32,6 +32,7 @@ from agora.model import (
     InstallToolAdapterInput,
     InstallToolInput,
     InvokeToolInput,
+    LaunchToolRunInput,
     ResumeSessionInput,
     RevokeApprovalDelegationInput,
     SetActorRuntimeInput,
@@ -1323,10 +1324,10 @@ def test_governs_and_persists_external_tool_invocations(
         )
 
 
-@pytest.mark.parametrize("fail_at", [1, 2, 4])
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4])
 def test_handoff_transaction_keeps_assignment_events_and_activity_aligned(
     project: tuple[Path, AgoraWorkspace],
-    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
     fail_at: int,
 ) -> None:
     root, workspace = project
@@ -1343,61 +1344,41 @@ def test_handoff_transaction_keeps_assignment_events_and_activity_aligned(
     swarm = root / ".agora" / "swarms" / "delivery"
     tracked = [swarm / "SWARM.md", swarm / "events.md", root / ".agora" / "activity.md"]
     before = {path: path.read_bytes() for path in tracked}
-    from agora import filesystem
-
-    original = filesystem._atomic_write_direct
-    writes = 0
-
-    def fail_selected(path: Path, contents: str) -> None:
-        nonlocal writes
-        writes += 1
-        if writes == fail_at:
-            raise OSError(f"handoff failure {fail_at}")
-        original(path, contents)
-
-    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+    atomic_write_fault.arm(fail_at)
+    request = HandoffActorInput(
+        id="atomic-handoff",
+        swarm_id="delivery",
+        role_id="developer",
+        from_actor_id="developer",
+        to_actor_id="alternate-developer",
+        authorized_by="developer",
+        reason="Transfer implementation responsibility",
+    )
 
     with pytest.raises(FilesystemTransactionFailure):
-        workspace.handoff_actor(
-            HandoffActorInput(
-                id="atomic-handoff",
-                swarm_id="delivery",
-                role_id="developer",
-                from_actor_id="developer",
-                to_actor_id="alternate-developer",
-                authorized_by="developer",
-                reason="Transfer implementation responsibility",
-            )
-        )
+        workspace.handoff_actor(request)
 
     assert {path: path.read_bytes() for path in tracked} == before
     assert not (swarm / "handoffs" / "atomic-handoff").exists()
     assert workspace.show_swarm("delivery").assignments["developer"] == "project:developer"
+    atomic_write_fault.restore()
+    assert workspace.handoff_actor(request).to_actor == "project:alternate-developer"
+    assert workspace.show_swarm("delivery").assignments["developer"] == (
+        "project:alternate-developer"
+    )
 
 
-@pytest.mark.parametrize("fail_at", [1, 3, 5])
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5])
 def test_session_preparation_transaction_removes_partial_records_and_can_retry(
     project: tuple[Path, AgoraWorkspace],
-    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
     fail_at: int,
 ) -> None:
     root, workspace = project
     _prepare_scrum_team(workspace)
     tracked = [root / ".agora" / "events.md", root / ".agora" / "activity.md"]
     before = {path: path.read_bytes() for path in tracked}
-    from agora import filesystem
-
-    original = filesystem._atomic_write_direct
-    writes = 0
-
-    def fail_selected(path: Path, contents: str) -> None:
-        nonlocal writes
-        writes += 1
-        if writes == fail_at:
-            raise OSError(f"session failure {fail_at}")
-        original(path, contents)
-
-    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+    atomic_write_fault.arm(fail_at)
     request = StartSessionInput(
         id="atomic-session",
         actor_id="developer",
@@ -1410,33 +1391,21 @@ def test_session_preparation_transaction_removes_partial_records_and_can_retry(
 
     assert {path: path.read_bytes() for path in tracked} == before
     assert not (root / ".agora" / "sessions" / "atomic-session").exists()
-    monkeypatch.setattr(filesystem, "_atomic_write_direct", original)
+    atomic_write_fault.restore()
     assert workspace.start_session(request).status == "prepared"
 
 
 @pytest.mark.parametrize("fail_at", [1, 2, 3])
 def test_tool_preparation_transaction_removes_partial_records_and_can_retry(
     project: tuple[Path, AgoraWorkspace],
-    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
     fail_at: int,
 ) -> None:
     root, workspace = project
     _prepare_scrum_team(workspace)
     tracked = [root / ".agora" / "events.md", root / ".agora" / "activity.md"]
     before = {path: path.read_bytes() for path in tracked}
-    from agora import filesystem
-
-    original = filesystem._atomic_write_direct
-    writes = 0
-
-    def fail_selected(path: Path, contents: str) -> None:
-        nonlocal writes
-        writes += 1
-        if writes == fail_at:
-            raise OSError(f"tool preparation failure {fail_at}")
-        original(path, contents)
-
-    monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_selected)
+    atomic_write_fault.arm(fail_at)
     request = InvokeToolInput(
         id="atomic-tool-run",
         tool_id="repository",
@@ -1450,32 +1419,191 @@ def test_tool_preparation_transaction_removes_partial_records_and_can_retry(
 
     assert {path: path.read_bytes() for path in tracked} == before
     assert not (root / ".agora" / "tool-runs" / "atomic-tool-run").exists()
-    monkeypatch.setattr(filesystem, "_atomic_write_direct", original)
+    atomic_write_fault.restore()
     assert workspace.invoke_tool(request).status == "prepared"
 
 
-@pytest.mark.parametrize("fail_at", [1, 3, 5])
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+def test_session_running_commit_blocks_external_execution_and_can_retry(
+    project: tuple[Path, AgoraWorkspace],
+    atomic_write_fault,
+    fail_at: int,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    runner_calls: list[str] = []
+    governed = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        launcher=lambda command, cwd, environment: (
+            runner_calls.append(environment["AGORA_SESSION_ID"]) or 0
+        ),
+    )
+    request = StartSessionInput(
+        id="running-commit-session",
+        actor_id="developer",
+        swarm_id="delivery",
+        runner="/bin/true",
+        launch=False,
+    )
+    governed.start_session(request)
+    session_root = root / ".agora" / "sessions" / request.id
+    tracked = [
+        session_root / "SESSION.md",
+        root / ".agora" / "events.md",
+        root / ".agora" / "activity.md",
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    atomic_write_fault.arm(fail_at)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        governed.resume_session(ResumeSessionInput(session_id=request.id))
+
+    assert runner_calls == []
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert governed.show_session(request.id).status == "prepared"
+    assert not (session_root / "RESULT.md").exists()
+    assert not (session_root / "SUMMARY.md").exists()
+    atomic_write_fault.restore()
+    assert governed.resume_session(ResumeSessionInput(session_id=request.id)).status == "completed"
+    assert runner_calls == [request.id]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+def test_tool_running_commit_blocks_external_execution_and_can_retry(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
+    fail_at: int,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    monkeypatch.setattr("agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}")
+    runner_calls: list[list[str]] = []
+    governed = AgoraWorkspace(
+        cwd=root,
+        now=lambda: TIMESTAMP,
+        tool_runner=lambda command, cwd, environment: (
+            runner_calls.append(command)
+            or subprocess.CompletedProcess(command, 0, stdout="clean", stderr="")
+        ),
+    )
+    request = InvokeToolInput(
+        id="running-commit-tool",
+        tool_id="repository",
+        operation_id="status",
+        actor_id="developer",
+        swarm_id="delivery",
+    )
+    governed.invoke_tool(request)
+    run_root = root / ".agora" / "tool-runs" / request.id
+    tracked = [
+        run_root / "RUN.md",
+        root / ".agora" / "events.md",
+        root / ".agora" / "activity.md",
+    ]
+    before = {path: path.read_bytes() for path in tracked}
+    atomic_write_fault.arm(fail_at)
+
+    with pytest.raises(FilesystemTransactionFailure):
+        governed.launch_tool_run(LaunchToolRunInput(run_id=request.id))
+
+    assert runner_calls == []
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert governed.show_tool_run(request.id).run.status == "prepared"
+    assert not (run_root / "RESULT.md").exists()
+    atomic_write_fault.restore()
+    assert governed.launch_tool_run(LaunchToolRunInput(run_id=request.id)).status == "completed"
+    assert runner_calls == [["git", "status", "--short"]]
+
+
+def test_resume_session_reuses_prepared_and_failed_limits_without_partial_attempts(
+    project: tuple[Path, AgoraWorkspace],
+    atomic_write_fault,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    calls: list[str] = []
+
+    def launcher(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
+        calls.append(environment["AGORA_SESSION_ID"])
+        return 9 if len(calls) == 1 else 0
+
+    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launcher)
+    prepared = governed.start_session(
+        StartSessionInput(
+            id="prepared-resume",
+            actor_id="developer",
+            swarm_id="delivery",
+            runner="/bin/true",
+            launch=False,
+            timeout_seconds=17,
+            max_output_bytes=2048,
+        )
+    )
+    assert (
+        governed.resume_session(ResumeSessionInput(session_id=prepared.id, prepare_only=True))
+        == prepared
+    )
+    with pytest.raises(RuntimeError, match="exited with code 9"):
+        governed.resume_session(ResumeSessionInput(session_id=prepared.id))
+    failed = governed.show_session(prepared.id)
+    assert failed.status == "failed"
+    assert (failed.timeout_seconds, failed.max_output_bytes) == (17, 2048)
+
+    tracked = [root / ".agora" / "events.md", root / ".agora" / "activity.md"]
+    before = {path: path.read_bytes() for path in tracked}
+    atomic_write_fault.arm(3)
+    with pytest.raises(FilesystemTransactionFailure):
+        governed.resume_session(
+            ResumeSessionInput(
+                session_id=failed.id,
+                replacement_id="failed-resume-retry",
+                prepare_only=True,
+            )
+        )
+    assert {path: path.read_bytes() for path in tracked} == before
+    assert not (root / ".agora" / "sessions" / "failed-resume-retry").exists()
+
+    atomic_write_fault.restore()
+    retry = governed.resume_session(
+        ResumeSessionInput(session_id=failed.id, replacement_id="failed-resume-retry")
+    )
+    assert retry.status == "completed"
+    assert (retry.timeout_seconds, retry.max_output_bytes) == (17, 2048)
+    assert calls == ["prepared-resume", "failed-resume-retry"]
+    assert sorted(item.id for item in governed.list_sessions()) == [
+        "failed-resume-retry",
+        "prepared-resume",
+    ]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5])
 def test_session_finalization_failure_leaves_an_explicit_running_recovery_state(
     project: tuple[Path, AgoraWorkspace],
     monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
     fail_at: int,
 ) -> None:
     root, workspace = project
     _prepare_scrum_team(workspace)
     from agora import filesystem
 
-    original = filesystem._atomic_write_direct
-    writes = 0
-
-    def fail_finalization(path: Path, contents: str) -> None:
-        nonlocal writes
-        writes += 1
-        if writes == fail_at:
-            raise OSError(f"session finalization failure {fail_at}")
-        original(path, contents)
+    runner_calls: list[str] = []
+    running_snapshot: dict[Path, bytes] = {}
 
     def launch(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
-        monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_finalization)
+        runner_calls.append(environment["AGORA_SESSION_ID"])
+        assert filesystem._ACTIVE_TRANSACTION.get() is None
+        assert getattr(governed._lock_state, "depth", 0) == 0
+        session_root = root / ".agora" / "sessions" / "finalization-failure"
+        for path in (
+            session_root / "SESSION.md",
+            root / ".agora" / "events.md",
+            root / ".agora" / "activity.md",
+        ):
+            running_snapshot[path] = path.read_bytes()
+        atomic_write_fault.arm(fail_at)
         return 0
 
     governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launch)
@@ -1495,16 +1623,19 @@ def test_session_finalization_failure_leaves_an_explicit_running_recovery_state(
     assert governed.show_session("finalization-failure").status == "running"
     assert not (session_root / "RESULT.md").exists()
     assert not (session_root / "SUMMARY.md").exists()
+    assert {path: path.read_bytes() for path in running_snapshot} == running_snapshot
+    assert runner_calls == ["finalization-failure"]
     assert [item.type for item in governed.list_activity(session_id="finalization-failure")] == [
         "session.prepared",
         "session.running",
     ]
 
 
-@pytest.mark.parametrize("fail_at", [1, 2, 4])
+@pytest.mark.parametrize("fail_at", [1, 2, 3, 4, 5])
 def test_tool_finalization_failure_leaves_an_explicit_running_recovery_state(
     project: tuple[Path, AgoraWorkspace],
     monkeypatch: pytest.MonkeyPatch,
+    atomic_write_fault,
     fail_at: int,
 ) -> None:
     root, workspace = project
@@ -1512,20 +1643,39 @@ def test_tool_finalization_failure_leaves_an_explicit_running_recovery_state(
     from agora import filesystem
 
     monkeypatch.setattr("agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}")
-    original = filesystem._atomic_write_direct
-    writes = 0
-
-    def fail_finalization(path: Path, contents: str) -> None:
-        nonlocal writes
-        writes += 1
-        if writes == fail_at:
-            raise OSError(f"tool finalization failure {fail_at}")
-        original(path, contents)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="tool-finalization-work",
+            title="Track Tool Run finalization",
+            actor_id="owner",
+        )
+    )
+    running_snapshot: dict[Path, bytes] = {}
 
     def run_tool(
         command: list[str], cwd: Path, environment: dict[str, str]
     ) -> subprocess.CompletedProcess[str]:
-        monkeypatch.setattr(filesystem, "_atomic_write_direct", fail_finalization)
+        assert filesystem._ACTIVE_TRANSACTION.get() is None
+        assert getattr(governed._lock_state, "depth", 0) == 0
+        run_root = root / ".agora" / "tool-runs" / "tool-finalization-failure"
+        work_events = (
+            root
+            / ".agora"
+            / "swarms"
+            / "delivery"
+            / "work"
+            / "tool-finalization-work"
+            / "events.md"
+        )
+        for path in (
+            run_root / "RUN.md",
+            root / ".agora" / "events.md",
+            root / ".agora" / "activity.md",
+            work_events,
+        ):
+            running_snapshot[path] = path.read_bytes()
+        atomic_write_fault.arm(fail_at)
         return subprocess.CompletedProcess(command, 0, stdout="clean", stderr="")
 
     governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, tool_runner=run_tool)
@@ -1538,6 +1688,7 @@ def test_tool_finalization_failure_leaves_an_explicit_running_recovery_state(
                 operation_id="status",
                 actor_id="developer",
                 swarm_id="delivery",
+                work_id="tool-finalization-work",
                 launch=True,
             )
         )
@@ -1545,9 +1696,13 @@ def test_tool_finalization_failure_leaves_an_explicit_running_recovery_state(
     run_root = root / ".agora" / "tool-runs" / "tool-finalization-failure"
     assert governed.show_tool_run("tool-finalization-failure").run.status == "running"
     assert not (run_root / "RESULT.md").exists()
-    assert [
+    assert {path: path.read_bytes() for path in running_snapshot} == running_snapshot
+    activity_types = [
         item.type for item in governed.list_activity(tool_run_id="tool-finalization-failure")
-    ] == ["tool.prepared", "tool.running"]
+    ]
+    assert activity_types.count("tool.prepared") == 2
+    assert activity_types.count("tool.running") == 2
+    assert not set(activity_types) & {"tool.completed", "tool.failed"}
 
 
 def test_tool_external_execution_does_not_hold_the_project_writer_lock(
@@ -1572,6 +1727,11 @@ def test_tool_external_execution_does_not_hold_the_project_writer_lock(
     def run_tool(
         command: list[str], cwd: Path, environment: dict[str, str]
     ) -> subprocess.CompletedProcess[str]:
+        from agora import filesystem
+
+        assert filesystem._ACTIVE_TRANSACTION.get() is None
+        assert getattr(governed._lock_state, "depth", 0) == 0
+
         def mutate() -> None:
             try:
                 governed.block_work(

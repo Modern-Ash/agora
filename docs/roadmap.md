@@ -45,8 +45,11 @@ artifact and evidence registration, approvals, gate decisions, status changes, a
 Activity write-set of usage, decomposition, delegation create/accept/collect, signed lifecycle-action
 preparation/application, actor key rotation/revocation/recovery, handoffs, Session state transitions,
 Tool Run state transitions, and budget amendments. Session and Tool Run external processes remain
-outside both filesystem transactions and the project lock. Fault injection covers first,
-intermediate, final, Activity, commit, rollback, new-file removal, permission restoration, and retry.
+outside both filesystem transactions and the project lock. Integration fault injection covers each
+Session and Tool Run commit boundary, direct and signed actor identity changes, and handoffs across
+first, intermediate, event-stream, Activity, and final writes, including deterministic retry or
+recovery. Shared transaction tests additionally cover commit, rollback, new-file removal, permission
+restoration, and indeterminate outcomes.
 Post-rollback verification distinguishes a reported rollback error from an indeterminate durable
 state.
 
