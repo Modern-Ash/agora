@@ -2,6 +2,9 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
+from agora import __version__
 from agora.cli import main
 from agora.model import (
     AddActorInput,
@@ -13,6 +16,14 @@ from agora.model import (
     ToolRuntimeProbe,
 )
 from agora.workspace import AgoraWorkspace
+
+
+def test_cli_reports_package_version(capsys) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--version"])
+
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out == f"agora {__version__}\n"
 
 
 def test_cli_init_defaults_to_spec_driven(tmp_path: Path, monkeypatch) -> None:

@@ -93,6 +93,11 @@ def verify_installed_release(
         raise ValueError(f"Installed Agora version {installed_version} does not match {version}")
 
     executable = python.parent / ("agora.exe" if sys.platform == "win32" else "agora")
+    executable_version = _run_checked([str(executable), "--version"], runner=runner).strip()
+    if executable_version != f"agora {version}":
+        raise ValueError(
+            f"Installed Agora executable reports {executable_version!r}, expected 'agora {version}'"
+        )
     quickstart = json.loads(
         _run_checked(
             [str(executable), "quickstart", "--objective", f"Verify PyPI release {version}"],

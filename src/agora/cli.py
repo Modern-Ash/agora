@@ -9,6 +9,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
+from agora import __version__
 from agora.application import (
     ActivityFilters,
     ActorFilters,
@@ -1809,6 +1810,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Precedence: Agora defaults < ~/.agora < project .agora < swarm."
         ),
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--project", help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
 
