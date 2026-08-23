@@ -4615,3 +4615,27 @@ def test_propagates_and_enforces_delegation_budgets(
         "tokens": 100,
     }
     assert workspace.validate().ok
+
+
+def test_next_gate_readiness_previews_gate_requirements(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="readiness-test",
+            title="Test gate readiness preview",
+            actor_id="owner",
+        )
+    )
+    readiness = workspace.next_gate_readiness("delivery", "readiness-test")
+    assert readiness["swarm_id"] == "delivery"
+    assert readiness["work_id"] == "readiness-test"
+    assert readiness["state"] == "specified"
+    assert len(readiness["transitions"]) == 1
+    transition = readiness["transitions"][0]
+    assert transition["target_state"] == "planned"
+    assert "gate" in transition
+

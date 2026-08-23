@@ -175,6 +175,13 @@ def main(
                     input_stream=input_stream,
                     output_stream=error_output,
                 )
+            elif namespace.command == "approval" and namespace.approval_command == "add":
+                result = _run_approval_add_wizard(
+                    workspace,
+                    namespace,
+                    input_stream=input_stream,
+                    output_stream=error_output,
+                )
             elif namespace.command == "run" and namespace.until_blocked:
                 result = _dispatch(
                     workspace,
@@ -184,7 +191,7 @@ def main(
             else:
                 result = _dispatch(workspace, namespace)
         if result is not None:
-            _present_result(output, namespace, result, workspace=workspace)
+            _present_result(output, namespace, result, workspace=workspace, input_stream=input_stream)
         if isinstance(result, (AdoptionReport, ValidationReport)) and not result.ok:
             return 1
         if isinstance(result, dict) and result.get("ok") is False:
@@ -201,6 +208,7 @@ def _present_result(
     result: Any,
     *,
     workspace: AgoraWorkspace,
+    input_stream: TextIO | None = None,
 ) -> None:
     if args.command == "status" and args.board:
         print(result, file=output)
@@ -210,11 +218,20 @@ def _present_result(
     continue_guided = args.command == "continue"
     work_start_guided = args.command == "work" and args.work_command == "start"
     work_finish_guided = args.command == "work" and args.work_command == "finish"
+    approval_add_guided = (
+        args.command == "approval"
+        and getattr(args, "approval_command", None) == "add"
+        and (
+            getattr(args, "interactive", False)
+            or (input_stream is not None and is_human_terminal(input_stream) and not getattr(args, "yes", False))
+        )
+    )
     guided_dialogue_already_rendered = (
         (setup_guided and not args.non_interactive)
         or (continue_guided and not args.yes)
         or work_start_guided
         or work_finish_guided
+        or approval_add_guided
     )
     if is_human_terminal(output) or getattr(args, "narrate", False):
         if not guided_dialogue_already_rendered:
@@ -1285,6 +1302,101 @@ def _finish_work_interactively(
         "status": "completed",
         "work": completed,
         "approved_by": approved_by,
+    }
+
+
+def _run_approval_add_wizard(
+    workspace: AgoraWorkspace,
+    args: argparse.Namespace,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> dict[str, Any]:
+    interactive = args.interactive or (input_stream.isatty() and not args.yes)
+    if interactive and not input_stream.isatty():
+        raise ValueError(
+            "agora approval add --interactive needs an interactive terminal; pass --yes to bypass confirmation"
+        )
+    if not interactive:
+        return workspace.add_approval(
+            AddApprovalInput(
+                swarm_id=args.swarm,
+                work_id=args.work,
+                actor_id=args.by,
+                role_id=args.role,
+                note=args.note,
+                delegation_id=args.delegation,
+            )
+        )
+
+    wizard = Wizard(input_stream, output_stream, brand="Agora Approval")
+    readiness = None
+    try:
+        readiness = workspace.completion_readiness(args.swarm, args.work)
+    except ValueError:
+        try:
+            readiness_data = workspace.next_gate_readiness(args.swarm, args.work)
+            if readiness_data.get("transitions"):
+                readiness = readiness_data["transitions"][0]
+        except ValueError:
+            pass
+
+    wizard.heading(
+        "Review approval",
+        "Confirm formal role approval for this work item before Agora records it.",
+    )
+    wizard.rows(
+        (
+            ("Work", f"{args.swarm}/{args.work}"),
+            ("Role", args.role),
+            ("Approver", args.by),
+            ("Note", args.note or "(none)"),
+            ("Delegation", args.delegation or "(none)"),
+        )
+    )
+    if readiness is not None:
+        gate = readiness.get("gate", {})
+        wizard.section("Gate status preview")
+        wizard.rows(
+            (
+                ("Current state", readiness.get("state")),
+                ("Target state", readiness.get("target_state")),
+                (
+                    "Unsatisfied criteria",
+                    ", ".join(gate.get("unsatisfied", [])) if gate.get("unsatisfied") else "none",
+                ),
+                (
+                    "Missing artifacts",
+                    ", ".join(gate.get("missing_artifacts", []))
+                    if gate.get("missing_artifacts")
+                    else "none",
+                ),
+            )
+        )
+
+    if not wizard.confirm("Record this formal approval", default=False):
+        wizard.success("Approval cancelled", "No approval record was created.")
+        return {"ok": True, "applied": False, "status": "cancelled"}
+
+    approval = workspace.add_approval(
+        AddApprovalInput(
+            swarm_id=args.swarm,
+            work_id=args.work,
+            actor_id=args.by,
+            role_id=args.role,
+            note=args.note,
+            delegation_id=args.delegation,
+        )
+    )
+    wizard.success(
+        "Approval recorded",
+        f"Role {args.role} approval by {args.by} recorded for {args.swarm}/{args.work}.",
+    )
+    return {
+        "ok": True,
+        "applied": True,
+        "status": "approved",
+        "approval": approval,
     }
 
 
@@ -2652,6 +2764,16 @@ def _build_parser() -> argparse.ArgumentParser:
     work_show.add_argument("--swarm", required=True)
     work_show.add_argument("--work", required=True)
 
+    work_readiness = work.add_parser(
+        "readiness",
+        help=(
+            "Preview what the next gate (e.g. completion) requires before "
+            "attempting a transition, without needing an interactive terminal"
+        ),
+    )
+    work_readiness.add_argument("--swarm", required=True)
+    work_readiness.add_argument("--work", required=True)
+
     work_list = work.add_parser("list", help="List work items")
     work_list.add_argument("--swarm")
     work_list.add_argument("--state")
@@ -2948,6 +3070,18 @@ def _build_parser() -> argparse.ArgumentParser:
     approval_add.add_argument("--by", required=True)
     approval_add.add_argument("--note", default="")
     approval_add.add_argument("--delegation")
+    approval_add.add_argument(
+        "--interactive",
+        "-i",
+        action="store_true",
+        help="Interactive confirmation mode before recording approval",
+    )
+    approval_add.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompt when running interactively",
+    )
     approval_prepare = approval.add_parser("prepare", help="Prepare a durable approval intent")
     approval_prepare.add_argument("--id", required=True)
     approval_prepare.add_argument("--swarm", required=True)
@@ -3791,6 +3925,8 @@ def _dispatch(
         return workspace.list_work_status_changes(args.swarm, args.work)
     if args.command == "work" and args.work_command == "show":
         return reads.get_work_item(args.swarm, args.work)
+    if args.command == "work" and args.work_command == "readiness":
+        return workspace.next_gate_readiness(args.swarm, args.work)
     if args.command == "work" and args.work_command == "list":
         return reads.list_work_items(
             WorkItemFilters(

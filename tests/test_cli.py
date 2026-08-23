@@ -1363,3 +1363,143 @@ def test_cli_status_board_argument_is_a_boolean_flag(tmp_path: Path, monkeypatch
     output2 = io.StringIO()
     assert main(["status", "--board"], cwd=tmp_path, stdout=output2, stderr=errors) == 0
     assert "Agora status board" in output2.getvalue()
+
+
+def test_work_readiness_cli_command_json_and_narrated(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.add_actor(
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="human",
+            capabilities=["specification", "acceptance", "implementation"],
+            scope="project",
+        )
+    )
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship feature", create_branch=False))
+    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="spec-owner", actor_id="owner"))
+    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="owner"))
+    workspace.create_work(
+        CreateWorkInput(swarm_id="delivery", id="feature", title="New feature", actor_id="owner")
+    )
+
+    json_output = io.StringIO()
+    errors = io.StringIO()
+    assert (
+        main(
+            ["work", "readiness", "--swarm", "delivery", "--work", "feature"],
+            cwd=tmp_path,
+            stdout=json_output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert errors.getvalue() == ""
+    assert '"swarm_id": "delivery"' in json_output.getvalue()
+    assert '"work_id": "feature"' in json_output.getvalue()
+
+    narrated_output = io.StringIO()
+    assert (
+        main(
+            ["--narrate", "work", "readiness", "--swarm", "delivery", "--work", "feature"],
+            cwd=tmp_path,
+            stdout=narrated_output,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert "Gate readiness · delivery/feature" in narrated_output.getvalue()
+
+
+class TTYInput(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_approval_add_interactive_mode_confirm_and_cancel(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
+    for actor_id, name, caps in (
+        ("owner", "Owner", ["backlog-management", "acceptance"]),
+        ("dev", "Developer", ["implementation"]),
+        ("fac", "Facilitator", ["facilitation", "governance"]),
+    ):
+        workspace.add_actor(
+            AddActorInput(
+                id=actor_id,
+                name=name,
+                kind="human",
+                capabilities=caps,
+                scope="project",
+            )
+        )
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship feature", create_branch=False))
+    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="product-owner", actor_id="owner"))
+    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="scrum-master", actor_id="fac"))
+    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="dev"))
+    workspace.create_work(
+        CreateWorkInput(swarm_id="delivery", id="feature", title="New feature", actor_id="owner")
+    )
+
+    # 1. Test Interactive Mode Cancelled
+    cancel_in = TTYInput("n\n")
+    cancel_err = io.StringIO()
+    cancel_out = io.StringIO()
+    exit_code = main(
+        [
+            "approval",
+            "add",
+            "--interactive",
+            "--swarm",
+            "delivery",
+            "--work",
+            "feature",
+            "--role",
+            "product-owner",
+            "--by",
+            "owner",
+        ],
+        cwd=tmp_path,
+        stdin=cancel_in,
+        stdout=cancel_out,
+        stderr=cancel_err,
+    )
+    assert exit_code == 0
+    assert "Approval cancelled" in cancel_err.getvalue()
+    assert workspace.list_work_approvals("delivery", "feature") == []
+
+    # 2. Test Interactive Mode Confirmed
+    confirm_in = TTYInput("y\n")
+    confirm_err = io.StringIO()
+    confirm_out = io.StringIO()
+    exit_code = main(
+        [
+            "approval",
+            "add",
+            "--interactive",
+            "--swarm",
+            "delivery",
+            "--work",
+            "feature",
+            "--role",
+            "product-owner",
+            "--by",
+            "owner",
+            "--note",
+            "Approved design",
+        ],
+        cwd=tmp_path,
+        stdin=confirm_in,
+        stdout=confirm_out,
+        stderr=confirm_err,
+    )
+    assert exit_code == 0
+    assert "Approval recorded" in confirm_err.getvalue()
+    approvals = workspace.list_work_approvals("delivery", "feature")
+    assert len(approvals) == 1
+    assert approvals[0].role == "product-owner"
+    assert approvals[0].actor in {"owner", "project:owner"}
+

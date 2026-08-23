@@ -4364,6 +4364,38 @@ class AgoraWorkspace:
                 f"Work {swarm.id}/{work.id} has no completion transition from {work.state}"
             )
         transition = transitions[0]
+        return self._transition_readiness(root, swarm, work, contract, transition)
+
+    def next_gate_readiness(self, swarm_id: str, work_id: str) -> dict[str, Any]:
+        """Describe every transition available from the work item's current state,
+        including non-terminal gates (e.g. drafting -> clarified), so a caller can
+        preview what a gate requires before attempting the transition and hitting
+        a rejection."""
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        transitions = [item for item in contract.transitions if item.source == work.state]
+        if not transitions:
+            raise ValueError(f"Work {swarm.id}/{work.id} has no outgoing transition from {work.state}")
+        return {
+            "swarm_id": swarm.id,
+            "work_id": work.id,
+            "state": work.state,
+            "transitions": [
+                self._transition_readiness(root, swarm, work, contract, transition)
+                for transition in transitions
+            ],
+        }
+
+    def _transition_readiness(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        work: WorkRecord,
+        contract: Any,
+        transition: Any,
+    ) -> dict[str, Any]:
         blockers: list[str] = []
         try:
             self._assert_child_work_closed(root, swarm, work)
@@ -4404,7 +4436,7 @@ class AgoraWorkspace:
             "title": work.title,
             "method": swarm.method,
             "state": work.state,
-            "target_state": contract.terminal_state,
+            "target_state": transition.target,
             "roles": transition.roles,
             "blockers": blockers,
             "gate": assessment,
