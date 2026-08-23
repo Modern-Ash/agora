@@ -251,6 +251,8 @@ class ConsoleResult:
             self._tasks(command, data)
         elif command == "session diagnose" and isinstance(data, dict):
             self._session_diagnosis(data)
+        elif command == "work readiness" and isinstance(data, dict):
+            self._work_readiness(data)
         else:
             self._generic(command, data)
         self.stream.flush()
@@ -398,6 +400,44 @@ class ConsoleResult:
             self._check("Recovery", str(data["recovered_by"]), ok=True)
         self._section("Next step")
         self._rows((("Command", data.get("recommended_command")),))
+
+    def _work_readiness(self, data: dict[str, Any]) -> None:
+        swarm_id = data.get("swarm_id")
+        work_id = data.get("work_id")
+        state = data.get("state")
+        transitions = data.get("transitions", [])
+        self._headline(f"Gate readiness · {swarm_id}/{work_id}", ok=True)
+        self._rows((("Current state", state), ("Available transitions", len(transitions))))
+        for item in transitions:
+            target = item.get("target_state")
+            ready = bool(item.get("ready_to_complete") or item.get("ready_for_human_approval"))
+            self._section(f"Transition: {state} → {target}")
+            self._rows(
+                (
+                    ("Responsible roles", ", ".join(item.get("roles", [])) or "none"),
+                    ("Ready for transition", "yes" if ready else "no"),
+                )
+            )
+            blockers = item.get("blockers", [])
+            if blockers:
+                self._check("Blockers", "; ".join(blockers), ok=False)
+            gate = item.get("gate", {})
+            if isinstance(gate, dict) and gate.get("gate"):
+                self._check("Gate name", str(gate.get("gate")), ok=True)
+                if gate.get("unsatisfied"):
+                    self._check("Unsatisfied criteria", ", ".join(gate["unsatisfied"]), ok=False)
+                if gate.get("missing_artifacts"):
+                    self._check("Missing artifacts", ", ".join(gate["missing_artifacts"]), ok=False)
+                if gate.get("missing_evidence_types"):
+                    self._check(
+                        "Missing evidence types",
+                        ", ".join(gate["missing_evidence_types"]),
+                        ok=False,
+                    )
+                if gate.get("missing_approvals"):
+                    self._check("Missing approvals", ", ".join(gate["missing_approvals"]), ok=False)
+                if gate.get("git_issues"):
+                    self._check("Git issues", ", ".join(gate["git_issues"]), ok=False)
 
     def _generic(self, command: str, data: Any) -> None:
         ok = not (isinstance(data, dict) and data.get("ok") is False)
