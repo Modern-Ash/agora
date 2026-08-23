@@ -4377,7 +4377,9 @@ class AgoraWorkspace:
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
         transitions = [item for item in contract.transitions if item.source == work.state]
         if not transitions:
-            raise ValueError(f"Work {swarm.id}/{work.id} has no outgoing transition from {work.state}")
+            raise ValueError(
+                f"Work {swarm.id}/{work.id} has no outgoing transition from {work.state}"
+            )
         return {
             "swarm_id": swarm.id,
             "work_id": work.id,
@@ -5838,13 +5840,14 @@ class AgoraWorkspace:
             hint = (
                 "; registered artifact URIs for this work: " + ", ".join(sorted(registered))
                 if registered
-                else "; no artifacts are registered on this work yet — run `agora artifact add` first"
+                else "; no artifacts are registered on this work yet "
+                "— run `agora artifact add` first"
             )
             raise ValueError(
                 "Evidence references unregistered work artifacts: "
                 + ", ".join(missing)
-                + " (pass the exact registered URI, e.g. file://test-report.txt, not the artifact kind)"
-                + hint
+                + " (pass the exact registered URI, e.g. file://test-report.txt, "
+                "not the artifact kind)" + hint
             )
         for reference in references:
             self._assert_artifact_reference(root, reference)

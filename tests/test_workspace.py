@@ -4638,4 +4638,3 @@ def test_next_gate_readiness_previews_gate_requirements(
     transition = readiness["transitions"][0]
     assert transition["target_state"] == "planned"
     assert "gate" in transition
-

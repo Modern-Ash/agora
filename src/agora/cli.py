@@ -191,7 +191,9 @@ def main(
             else:
                 result = _dispatch(workspace, namespace)
         if result is not None:
-            _present_result(output, namespace, result, workspace=workspace, input_stream=input_stream)
+            _present_result(
+                output, namespace, result, workspace=workspace, input_stream=input_stream
+            )
         if isinstance(result, (AdoptionReport, ValidationReport)) and not result.ok:
             return 1
         if isinstance(result, dict) and result.get("ok") is False:
@@ -223,7 +225,11 @@ def _present_result(
         and getattr(args, "approval_command", None) == "add"
         and (
             getattr(args, "interactive", False)
-            or (input_stream is not None and is_human_terminal(input_stream) and not getattr(args, "yes", False))
+            or (
+                input_stream is not None
+                and is_human_terminal(input_stream)
+                and not getattr(args, "yes", False)
+            )
         )
     )
     guided_dialogue_already_rendered = (
@@ -1315,7 +1321,8 @@ def _run_approval_add_wizard(
     interactive = args.interactive or (input_stream.isatty() and not args.yes)
     if interactive and not input_stream.isatty():
         raise ValueError(
-            "agora approval add --interactive needs an interactive terminal; pass --yes to bypass confirmation"
+            "agora approval add --interactive needs an interactive terminal; "
+            "pass --yes to bypass confirmation"
         )
     if not interactive:
         return workspace.add_approval(
@@ -2672,7 +2679,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--criterion",
         action="append",
         default=[],
-        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+        help=(
+            "Acceptance criterion as ID:DESCRIPTION, "
+            "e.g. --criterion tests-pass:'All tests pass'. Repeatable."
+        ),
     )
     work_create.add_argument("--required-artifact", action="append", default=[])
     work_create_prepare = work.add_parser(
@@ -2688,7 +2698,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--criterion",
         action="append",
         default=[],
-        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+        help=(
+            "Acceptance criterion as ID:DESCRIPTION, "
+            "e.g. --criterion tests-pass:'All tests pass'. Repeatable."
+        ),
     )
     work_create_prepare.add_argument("--required-artifact", action="append", default=[])
 
@@ -2705,7 +2718,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--criterion",
         action="append",
         default=[],
-        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+        help=(
+            "Acceptance criterion as ID:DESCRIPTION, "
+            "e.g. --criterion tests-pass:'All tests pass'. Repeatable."
+        ),
     )
     work_decompose.add_argument("--required-artifact", action="append", default=[])
     work_decompose_prepare = work.add_parser(
@@ -2722,7 +2738,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--criterion",
         action="append",
         default=[],
-        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+        help=(
+            "Acceptance criterion as ID:DESCRIPTION, "
+            "e.g. --criterion tests-pass:'All tests pass'. Repeatable."
+        ),
     )
     work_decompose_prepare.add_argument("--required-artifact", action="append", default=[])
 
@@ -4246,9 +4265,7 @@ def _extract_project(arguments: list[str]) -> tuple[str | None, list[str]]:
 
 
 def _parse_criterion(value: str) -> tuple[str, str]:
-    hint = (
-        'expected "id:description", e.g. --criterion tests-pass:"All tests pass"'
-    )
+    hint = 'expected "id:description", e.g. --criterion tests-pass:"All tests pass"'
     if ":" not in value:
         raise ValueError(f'Invalid criterion "{value}"; {hint}')
     criterion_id, description = value.split(":", 1)

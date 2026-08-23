@@ -1378,9 +1378,15 @@ def test_work_readiness_cli_command_json_and_narrated(tmp_path: Path, monkeypatc
             scope="project",
         )
     )
-    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship feature", create_branch=False))
-    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="spec-owner", actor_id="owner"))
-    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="owner"))
+    workspace.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Ship feature", create_branch=False)
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="spec-owner", actor_id="owner")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="owner")
+    )
     workspace.create_work(
         CreateWorkInput(swarm_id="delivery", id="feature", title="New feature", actor_id="owner")
     )
@@ -1436,10 +1442,18 @@ def test_approval_add_interactive_mode_confirm_and_cancel(tmp_path: Path, monkey
                 scope="project",
             )
         )
-    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship feature", create_branch=False))
-    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="product-owner", actor_id="owner"))
-    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="scrum-master", actor_id="fac"))
-    workspace.assign_actor(AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="dev"))
+    workspace.create_swarm(
+        CreateSwarmInput(id="delivery", objective="Ship feature", create_branch=False)
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="product-owner", actor_id="owner")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="scrum-master", actor_id="fac")
+    )
+    workspace.assign_actor(
+        AssignActorInput(swarm_id="delivery", role_id="developer", actor_id="dev")
+    )
     workspace.create_work(
         CreateWorkInput(swarm_id="delivery", id="feature", title="New feature", actor_id="owner")
     )
@@ -1502,4 +1516,3 @@ def test_approval_add_interactive_mode_confirm_and_cancel(tmp_path: Path, monkey
     assert len(approvals) == 1
     assert approvals[0].role == "product-owner"
     assert approvals[0].actor in {"owner", "project:owner"}
-

@@ -429,7 +429,11 @@ class ConsoleResult:
                 if gate.get("missing_artifacts"):
                     self._check("Missing artifacts", ", ".join(gate["missing_artifacts"]), ok=False)
                 if gate.get("missing_evidence_types"):
-                    self._check("Missing evidence types", ", ".join(gate["missing_evidence_types"]), ok=False)
+                    self._check(
+                        "Missing evidence types",
+                        ", ".join(gate["missing_evidence_types"]),
+                        ok=False,
+                    )
                 if gate.get("missing_approvals"):
                     self._check("Missing approvals", ", ".join(gate["missing_approvals"]), ok=False)
                 if gate.get("git_issues"):
