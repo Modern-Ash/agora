@@ -5803,8 +5803,16 @@ class AgoraWorkspace:
         registered = self._work_artifact_references(work)
         missing = sorted(set(references) - registered)
         if missing:
+            hint = (
+                "; registered artifact URIs for this work: " + ", ".join(sorted(registered))
+                if registered
+                else "; no artifacts are registered on this work yet — run `agora artifact add` first"
+            )
             raise ValueError(
-                "Evidence references unregistered work artifacts: " + ", ".join(missing)
+                "Evidence references unregistered work artifacts: "
+                + ", ".join(missing)
+                + " (pass the exact registered URI, e.g. file://test-report.txt, not the artifact kind)"
+                + hint
             )
         for reference in references:
             self._assert_artifact_reference(root, reference)

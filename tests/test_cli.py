@@ -1108,6 +1108,60 @@ def test_cli_status_output_is_unchanged_without_the_board_flag(tmp_path: Path, m
     assert plain_before.getvalue() == plain_after.getvalue()
 
 
+def test_work_create_reports_the_expected_criterion_format_on_a_bad_value(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship the increment"))
+
+    errors = io.StringIO()
+    exit_code = main(
+        [
+            "work",
+            "create",
+            "--swarm",
+            "delivery",
+            "--id",
+            "feature",
+            "--title",
+            "Ship a feature",
+            "--by",
+            "owner",
+            "--criterion",
+            "missing-a-colon",
+        ],
+        cwd=tmp_path,
+        stdout=io.StringIO(),
+        stderr=errors,
+    )
+    assert exit_code == 1
+    assert "id:description" in errors.getvalue()
+
+
+def test_narrate_forces_human_readable_output_on_a_non_terminal_stream(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An agent driving the CLI through a pipe still gets JSON by default, but
+    --narrate lets it force the human-readable summary so it can relay a
+    status to the user instead of raw JSON."""
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    workspace = AgoraWorkspace(cwd=tmp_path)
+    workspace.initialize(InitInput(integration="generic"))
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship the increment"))
+
+    plain = io.StringIO()
+    errors = io.StringIO()
+    assert main(["status"], cwd=tmp_path, stdout=plain, stderr=errors) == 0
+    assert plain.getvalue().strip().startswith("{")  # non-terminal default: JSON
+
+    narrated = io.StringIO()
+    assert main(["--narrate", "status"], cwd=tmp_path, stdout=narrated, stderr=errors) == 0
+    assert not narrated.getvalue().strip().startswith("{")
+    assert "Agora status" in narrated.getvalue()
+
+
 def test_cli_status_board_with_zero_swarms_shows_a_sensible_message(
     tmp_path: Path, monkeypatch
 ) -> None:

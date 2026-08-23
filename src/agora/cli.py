@@ -216,7 +216,7 @@ def _present_result(
         or work_start_guided
         or work_finish_guided
     )
-    if is_human_terminal(output):
+    if is_human_terminal(output) or getattr(args, "narrate", False):
         if not guided_dialogue_already_rendered:
             ConsoleResult(output).render(_command_name(args), result)
         return
@@ -1812,6 +1812,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--project", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--narrate",
+        action="store_true",
+        help=(
+            "Force the human-readable console summary instead of raw JSON, even when "
+            "stdout is not a terminal (e.g. when driven by an agent or a skill and the "
+            "result should still be communicated to the user)."
+        ),
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     setup = commands.add_parser(
@@ -2547,7 +2556,12 @@ def _build_parser() -> argparse.ArgumentParser:
     work_create.add_argument("--title", required=True)
     work_create.add_argument("--by", required=True)
     work_create.add_argument("--description", default="")
-    work_create.add_argument("--criterion", action="append", default=[])
+    work_create.add_argument(
+        "--criterion",
+        action="append",
+        default=[],
+        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+    )
     work_create.add_argument("--required-artifact", action="append", default=[])
     work_create_prepare = work.add_parser(
         "create-prepare", help="Prepare a signed work creation intent"
@@ -2558,7 +2572,12 @@ def _build_parser() -> argparse.ArgumentParser:
     work_create_prepare.add_argument("--title", required=True)
     work_create_prepare.add_argument("--by", required=True)
     work_create_prepare.add_argument("--description", default="")
-    work_create_prepare.add_argument("--criterion", action="append", default=[])
+    work_create_prepare.add_argument(
+        "--criterion",
+        action="append",
+        default=[],
+        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+    )
     work_create_prepare.add_argument("--required-artifact", action="append", default=[])
 
     work_decompose = work.add_parser(
@@ -2570,7 +2589,12 @@ def _build_parser() -> argparse.ArgumentParser:
     work_decompose.add_argument("--title", required=True)
     work_decompose.add_argument("--by", required=True)
     work_decompose.add_argument("--description", default="")
-    work_decompose.add_argument("--criterion", action="append", default=[])
+    work_decompose.add_argument(
+        "--criterion",
+        action="append",
+        default=[],
+        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+    )
     work_decompose.add_argument("--required-artifact", action="append", default=[])
     work_decompose_prepare = work.add_parser(
         "decompose-prepare", help="Prepare a signed work decomposition intent"
@@ -2582,7 +2606,12 @@ def _build_parser() -> argparse.ArgumentParser:
     work_decompose_prepare.add_argument("--title", required=True)
     work_decompose_prepare.add_argument("--by", required=True)
     work_decompose_prepare.add_argument("--description", default="")
-    work_decompose_prepare.add_argument("--criterion", action="append", default=[])
+    work_decompose_prepare.add_argument(
+        "--criterion",
+        action="append",
+        default=[],
+        help="Acceptance criterion as ID:DESCRIPTION, e.g. --criterion tests-pass:'All tests pass'. Repeatable.",
+    )
     work_decompose_prepare.add_argument("--required-artifact", action="append", default=[])
 
     criterion = work.add_parser("criterion-satisfy", help="Satisfy an acceptance criterion")
@@ -4081,11 +4110,14 @@ def _extract_project(arguments: list[str]) -> tuple[str | None, list[str]]:
 
 
 def _parse_criterion(value: str) -> tuple[str, str]:
+    hint = (
+        'expected "id:description", e.g. --criterion tests-pass:"All tests pass"'
+    )
     if ":" not in value:
-        raise ValueError(f'Invalid criterion "{value}"; expected id:description')
+        raise ValueError(f'Invalid criterion "{value}"; {hint}')
     criterion_id, description = value.split(":", 1)
     if not criterion_id or not description:
-        raise ValueError(f'Invalid criterion "{value}"; expected id:description')
+        raise ValueError(f'Invalid criterion "{value}"; {hint}')
     return criterion_id, description
 
 

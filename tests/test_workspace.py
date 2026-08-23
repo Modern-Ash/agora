@@ -4295,7 +4295,7 @@ def test_verifies_local_artifacts_and_binds_successful_evidence(
                 result="success",
             )
         )
-    with pytest.raises(ValueError, match="unregistered work artifacts"):
+    with pytest.raises(ValueError, match="unregistered work artifacts") as unregistered_error:
         workspace.add_evidence(
             AddEvidenceInput(
                 swarm_id="delivery",
@@ -4306,6 +4306,9 @@ def test_verifies_local_artifacts_and_binds_successful_evidence(
                 artifact_refs=["ci://builds/unregistered/tests"],
             )
         )
+    # The error should name the exact registered URI so callers stop guessing
+    # between an artifact's kind and its URI (see agora-cli session feedback).
+    assert "repo://src/feature.py" in str(unregistered_error.value)
     workspace.add_evidence(
         AddEvidenceInput(
             swarm_id="delivery",
