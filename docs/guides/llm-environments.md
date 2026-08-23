@@ -109,6 +109,20 @@ The adapter materializes portable instructions as Claude command files:
 Agora only creates these files. Command discovery, invocation syntax, model access, permissions, and
 execution remain responsibilities of the installed Claude environment.
 
+### Optional: a global Claude Code skill instead of per-project commands
+
+The `.claude/commands/agora.*.md` files above are project-local and only appear after
+`--integration claude` has been configured and `agora init` has run in that project. If you want
+Claude Code to know how to install, adopt, or troubleshoot `agora` in *any* project — including
+ones that haven't run `agora init` yet — write a skill once to `~/.claude/skills/agora-cli/SKILL.md`
+(a user-level, not project-level, skill directory). Claude Code loads user-level skills in every
+project automatically, with nothing to install per repository.
+
+This is a separate concern from the `--integration claude` actor runtime described above: the
+global skill is about Claude knowing how to *drive the CLI*, while `--integration claude` is about
+Agora *dispatching a Claude process* as a configured actor's runtime executor inside an
+already-governed project. The two don't conflict and don't require each other.
+
 ## Generic or local model example
 
 Use `generic` for an IDE agent, internal orchestrator, local model runner, CI job, or environment
