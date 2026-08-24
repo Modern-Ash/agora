@@ -92,6 +92,13 @@ grants its capabilities.
 
 Agora creates current collaboration state under `.agora/`. Common records include:
 
+Newly created swarms get a directory prefixed with a sequential number (`001-`, `002-`, ...), so
+`.agora/swarms/` sorts in creation order at a glance — e.g. `.agora/swarms/001-delivery/`. The
+logical swarm id stays unprefixed (`--swarm delivery` keeps working unchanged); only the directory
+name carries the number. Swarm directories created before this feature shipped are left unnumbered
+and continue to resolve normally — every path lookup goes through one resolver that accepts either
+form.
+
 ```text
 .agora/actors/<actor>/ACTOR.md
 .agora/swarms/<swarm>/SWARM.md
