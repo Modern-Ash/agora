@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -151,6 +151,7 @@ from agora.model import (
     ConfigureInput,
     CoordinationPolicyRecord,
     CreateDelegationInput,
+    CreatePatchWorkInput,
     CreateSwarmInput,
     CreateWorkInput,
     DecomposeWorkInput,
@@ -4500,11 +4501,17 @@ class AgoraWorkspace:
         )
 
     def _validate_create_work(
-        self, root: Path, data: CreateWorkInput, action: str = "work.create"
+        self,
+        root: Path,
+        data: CreateWorkInput,
+        action: str = "work.create",
+        *,
+        allow_completed_swarm: bool = False,
     ) -> tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path]:
         assert_slug(data.id, "Work id")
         swarm = self._load_swarm(root, data.swarm_id)
-        if swarm.status not in {"ready", "running"}:
+        allowed_statuses = {"ready", "running"} | ({"completed"} if allow_completed_swarm else set())
+        if swarm.status not in allowed_statuses:
             raise ValueError(f"Swarm {swarm.id} must be ready before work can be created")
         actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
@@ -4685,6 +4692,77 @@ class AgoraWorkspace:
             "work.decomposition-linked",
             f"parent={parent_reference} actor={actor.reference}",
         )
+        return result
+
+    @_locked_mutation("project")
+    def create_patch_work(self, data: CreatePatchWorkInput) -> WorkRecord:
+        """Create a lightweight fix work item against a swarm that already
+        reached 'completed', without creating a new swarm, role
+        assignment, or branch. Reuses the parent work's swarm as-is; the
+        swarm's status self-heals from 'completed' back to 'running' once
+        this new work item exists (_refresh_swarm_status is status-derived
+        from work items, not a field this sets directly)."""
+        root = self.project_root()
+        parent, child, context = self._validate_create_patch_work(root, data)
+        actor = context[1]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "work.patch has no prepare/apply signed variant yet — use an "
+                "actor that does not require signing"
+            )
+        return self._apply_create_patch_work(root, parent, child, context)
+
+    def _validate_create_patch_work(
+        self, root: Path, data: CreatePatchWorkInput
+    ) -> tuple[
+        WorkRecord,
+        CreateWorkInput,
+        tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ]:
+        if data.parent_work_id == data.id:
+            raise ValueError("Patch work id must differ from its parent work id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        parent = self._load_work(swarm, data.parent_work_id)
+        child = CreateWorkInput(
+            swarm_id=data.swarm_id,
+            id=data.id,
+            title=data.title,
+            actor_id=data.actor_id,
+            acceptance_criteria=data.acceptance_criteria,
+            required_artifacts=data.required_artifacts,
+            description=data.description,
+        )
+        context = self._validate_create_work(
+            root, child, action="work.patch", allow_completed_swarm=True
+        )
+        return parent, child, context
+
+    @_compound_mutation
+    def _apply_create_patch_work(
+        self,
+        root: Path,
+        parent: WorkRecord,
+        child: CreateWorkInput,
+        context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ) -> WorkRecord:
+        swarm, actor, _, _, _ = context
+        parent_reference = f"{swarm.id}/{parent.id}"
+        child_reference = f"{swarm.id}/{child.id}"
+        result = self._apply_create_work(child, context, parent_work_ref=parent_reference)
+        parent.child_work_refs = list(dict.fromkeys([*parent.child_work_refs, child_reference]))
+        atomic_write(Path(parent.path) / "WORK.md", self._render_work(parent))
+        self._append_work_event(
+            parent,
+            "work.patched",
+            f"child={child_reference} actor={actor.reference}",
+        )
+        self._append_work_event(
+            result,
+            "work.patch-linked",
+            f"parent={parent_reference} actor={actor.reference}",
+        )
+        self._refresh_swarm_status(root, swarm, changed_work=[parent, result])
         return result
 
     @_locked_mutation("project")
@@ -15419,15 +15497,28 @@ class AgoraWorkspace:
         return "ready"
 
     def _refresh_swarm_status(
-        self, root: Path, swarm: SwarmRecord, *, changed_work: WorkRecord | None = None
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        *,
+        changed_work: WorkRecord | Sequence[WorkRecord] | None = None,
     ) -> None:
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
         work = [
             self._load_work(swarm, path.parent.name)
             for path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
         ]
-        if changed_work is not None:
-            work = [changed_work if item.id == changed_work.id else item for item in work]
+        changed_items = (
+            [changed_work] if isinstance(changed_work, WorkRecord) else list(changed_work or [])
+        )
+        for item in changed_items:
+            # A brand-new item (e.g. a just-created patch child) may not be on
+            # disk yet mid-transaction; the glob above won't see it either, so
+            # replace-or-append rather than assuming it's already present.
+            if any(existing.id == item.id for existing in work):
+                work = [item if existing.id == item.id else existing for existing in work]
+            else:
+                work = [*work, item]
         target = self._derived_swarm_status(swarm, work, contract)
         if target == swarm.status:
             return
