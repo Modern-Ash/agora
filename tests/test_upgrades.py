@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import swarm_dir
+
 import agora.upgrades as upgrades
 from agora.cli import main
 from agora.markdown import read_markdown, render_markdown
@@ -84,7 +86,7 @@ def test_plans_and_applies_a_non_destructive_legacy_upgrade(
     standards_path.unlink()
     commit_path.unlink()
 
-    work_path = root / ".agora" / "swarms" / "legacy" / "work" / "item" / "WORK.md"
+    work_path = swarm_dir(root, "legacy") / "work" / "item" / "WORK.md"
     work_path.parent.mkdir(parents=True)
     work_path.write_text(
         """---

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import swarm_dir
+
 from agora.application import (
     ActivityFilters,
     ActorFilters,
@@ -707,7 +709,7 @@ def test_rejects_repository_artifact_paths_resolving_outside_project(
     outside.write_text("outside\n", encoding="utf-8")
     (root / "escape.txt").symlink_to(outside)
     artifacts_path = (
-        root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "artifacts.md"
+        swarm_dir(root, "delivery") / "work" / "read-boundary" / "artifacts.md"
     )
     artifacts_path.write_text(
         f"{artifacts_path.read_text(encoding='utf-8').rstrip()}\n"
@@ -729,7 +731,7 @@ def test_specification_revision_rejects_repository_uri_traversal(
 ) -> None:
     root, _, service = read_project
     artifacts_path = (
-        root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "artifacts.md"
+        swarm_dir(root, "delivery") / "work" / "read-boundary" / "artifacts.md"
     )
     artifacts_path.write_text(
         f"{artifacts_path.read_text(encoding='utf-8').rstrip()}\n"
@@ -768,7 +770,7 @@ def test_work_control_retries_after_one_interleaved_external_markdown_edit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, workspace, service = read_project
-    work_path = root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "WORK.md"
+    work_path = swarm_dir(root, "delivery") / "work" / "read-boundary" / "WORK.md"
     original = workspace.work_control_read_set_sha256
     calls = 0
 
@@ -795,7 +797,7 @@ def test_work_control_never_returns_a_mixed_snapshot_during_repeated_external_ed
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, workspace, service = read_project
-    work_path = root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "WORK.md"
+    work_path = swarm_dir(root, "delivery") / "work" / "read-boundary" / "WORK.md"
     original = workspace.work_control_read_set_sha256
     calls = 0
 
@@ -822,7 +824,7 @@ def test_rejects_invalid_durable_external_content_digest(
     read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
 ) -> None:
     root, _, service = read_project
-    artifacts = root / ".agora" / "swarms" / "delivery" / "work" / "read-boundary" / "artifacts.md"
+    artifacts = swarm_dir(root, "delivery") / "work" / "read-boundary" / "artifacts.md"
     contents = artifacts.read_text(encoding="utf-8")
     contents = re.sub(
         r"(\| test-report \| repo://reports/read-service\.txt \|) [0-9a-f]{64} (\|)",

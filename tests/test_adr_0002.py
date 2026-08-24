@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import swarm_dir
+
 from agora.cli import main
 from agora.markdown import read_markdown, render_markdown
 from agora.model import (
@@ -150,7 +152,7 @@ def test_clarify_appends_at_most_five_structured_questions(tmp_path: Path, monke
     assert traceability["clarifications"]["stale"] is False
     assert len(traceability["clarifications"]["recorded-input-sha256"]) == 1
 
-    work_path = tmp_path / ".agora/swarms/delivery/work/feature/WORK.md"
+    work_path = swarm_dir(tmp_path, "delivery") / "work" / "feature" / "WORK.md"
     document = read_markdown(work_path)
     document.attributes["acceptance-criteria"]["safe-response"] = "A revised safe response"
     work_path.write_text(render_markdown(document))
@@ -190,7 +192,7 @@ def test_generic_advisory_runner_is_bound_through_a_prepared_action(
     assert applied.status == "applied"
     assert observed["command"] == ["/bin/true", "advise"]
     assert "Return only JSON" in observed["prompt"]
-    assert (tmp_path / ".agora/swarms/delivery/work/feature/clarifications.md").is_file()
+    assert (swarm_dir(tmp_path, "delivery") / "work" / "feature" / "clarifications.md").is_file()
 
 
 def test_consistency_and_gherkin_outputs_reuse_artifact_and_evidence_records(
@@ -237,9 +239,12 @@ def test_consistency_and_gherkin_outputs_reuse_artifact_and_evidence_records(
 
     assert consistency["result"] == "success"
     assert consistency["report"].startswith("repo://.agora/")
-    assert gherkin["features"] == [
-        "repo://.agora/swarms/delivery/work/feature/gherkin/safe-response.feature"
-    ]
+    expected_feature_uri = (
+        "repo://"
+        + swarm_dir(tmp_path, "delivery").relative_to(tmp_path).as_posix()
+        + "/work/feature/gherkin/safe-response.feature"
+    )
+    assert gherkin["features"] == [expected_feature_uri]
     work = workspace.show_work("delivery", "feature")
     assert "consistency-report" in work.artifact_kinds
     assert "gherkin-feature" in work.artifact_kinds

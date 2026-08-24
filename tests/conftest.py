@@ -6,6 +6,24 @@ import pytest
 from agora import filesystem
 
 
+def swarm_dir(root: Path, swarm_id: str) -> Path:
+    """Resolve a swarm id to its actual directory under .agora/swarms/,
+    whether legacy (unnumbered) or created with the sequential '00x-'
+    prefix (see AgoraWorkspace._next_swarm_directory). Tests that assert
+    against raw filesystem paths should use this instead of hardcoding
+    `.agora/swarms/<id>` — the directory name is no longer guaranteed to
+    equal the swarm id."""
+    base = root / ".agora" / "swarms"
+    direct = base / swarm_id
+    if direct.exists():
+        return direct
+    if base.is_dir():
+        matches = sorted(base.glob(f"[0-9][0-9][0-9]-{swarm_id}"))
+        if matches:
+            return matches[0]
+    return direct
+
+
 class AtomicWriteFault:
     """Inject one atomic-write failure while preserving the real writer for retries."""
 

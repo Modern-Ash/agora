@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+
+from conftest import swarm_dir
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -153,10 +155,7 @@ def test_prepares_and_applies_an_auditable_budget_amendment(
     assert result.activity.type == "budget.amended"
     assert workspace.show_work("delivery", "child").budget_limits == {"effort": 10}
     amendment = (
-        root
-        / ".agora"
-        / "swarms"
-        / "delivery"
+        swarm_dir(root, "delivery")
         / "work"
         / "child"
         / "budget-amendments"
@@ -199,7 +198,7 @@ def test_rejects_stale_material_without_writes(
 ) -> None:
     root, _, service = budget_project
     request = prepared(service, command())
-    child = root / ".agora" / "swarms" / "delivery" / "work" / "child" / "WORK.md"
+    child = swarm_dir(root, "delivery") / "work" / "child" / "WORK.md"
     child.write_text(child.read_text(encoding="utf-8") + "\nExternal note.\n", encoding="utf-8")
 
     with pytest.raises(GovernedMaterialStaleError):
@@ -215,7 +214,7 @@ def test_rolls_back_every_budget_record_on_each_write_failure(
 ) -> None:
     root, workspace, service = budget_project
     request = prepared(service, command())
-    child_root = root / ".agora" / "swarms" / "delivery" / "work" / "child"
+    child_root = swarm_dir(root, "delivery") / "work" / "child"
     tracked = [child_root / "WORK.md", child_root / "events.md", root / ".agora" / "activity.md"]
     before = {path: path.read_bytes() for path in tracked}
     from agora import filesystem

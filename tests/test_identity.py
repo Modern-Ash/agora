@@ -5,6 +5,8 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+
+from conftest import swarm_dir
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -254,7 +256,7 @@ def test_signed_lifecycle_apply_rolls_back_domain_event_activity_and_action(
     )
     signature = tmp_path / "atomic-signed-transition.sig"
     signature.write_bytes(private_key.sign(payload.read_bytes()))
-    work_root = root / ".agora" / "swarms" / "delivery" / "work" / "signed-work"
+    work_root = swarm_dir(root, "delivery") / "work" / "signed-work"
     action_path = root / ".agora" / "actions" / action.id / "ACTION.md"
     tracked = [
         work_root / "WORK.md",
@@ -648,7 +650,7 @@ def test_signed_handoff_restores_assignment_record_action_events_and_retries(
     )
     signature = tmp_path / "atomic-signed-handoff.sig"
     signature.write_bytes(private_key.sign(payload.read_bytes()))
-    swarm_root = root / ".agora" / "swarms" / "delivery"
+    swarm_root = swarm_dir(root, "delivery")
     action_path = root / ".agora" / "actions" / action.id / "ACTION.md"
     handoff_path = swarm_root / "handoffs" / action.id / "HANDOFF.md"
     tracked = [
@@ -749,10 +751,7 @@ def test_applies_a_signed_granular_gate_waiver(tmp_path: Path, monkeypatch) -> N
     assert persisted[0].action_id == prepared.id
     assert persisted[0].authorized_by == "project:owner"
     waiver_path = (
-        root
-        / ".agora"
-        / "swarms"
-        / "delivery"
+        swarm_dir(root, "delivery")
         / "work"
         / "waived-work"
         / "waivers"
@@ -828,7 +827,7 @@ def test_applies_a_signed_work_decomposition(tmp_path: Path, monkeypatch) -> Non
     assert (
         "work.decomposed"
         in (
-            root / ".agora" / "swarms" / "delivery" / "work" / "parent-work" / "events.md"
+            swarm_dir(root, "delivery") / "work" / "parent-work" / "events.md"
         ).read_text()
     )
 
@@ -1118,7 +1117,7 @@ def test_signs_work_creation_criteria_artifacts_and_evidence(tmp_path: Path, mon
     assert workspace.validate().ok
 
     artifact_path = (
-        root / ".agora" / "swarms" / "delivery" / "work" / "signed-materials" / "artifacts.md"
+        swarm_dir(root, "delivery") / "work" / "signed-materials" / "artifacts.md"
     )
     artifact_path.write_text(
         artifact_path.read_text(encoding="utf-8").replace(
@@ -1219,7 +1218,7 @@ def test_applies_a_signed_approval_with_role_and_note_bound_to_the_action(
     assert applied.status == "applied"
     assert applied.authentication_verified
     assert workspace.show_work("delivery", "signed-work").approval_roles == ["product-owner"]
-    approval_path = root / ".agora" / "swarms" / "delivery" / "work" / "signed-work"
+    approval_path = swarm_dir(root, "delivery") / "work" / "signed-work"
     assert "Accepted \\| externally signed" in (approval_path / "approvals.md").read_text()
     assert workspace.validate().ok
 
@@ -1400,7 +1399,7 @@ def test_applies_a_signed_handoff_and_rejects_a_stale_assignment_precondition(
     assert report.ok, report.issues
     assert any(issue.code == "lifecycle-action.precondition-stale" for issue in report.issues)
 
-    handoff_path = root / ".agora" / "swarms" / "delivery" / "handoffs" / prepared.id / "HANDOFF.md"
+    handoff_path = swarm_dir(root, "delivery") / "handoffs" / prepared.id / "HANDOFF.md"
     handoff_path.write_text(
         handoff_path.read_text(encoding="utf-8").replace(
             "Human judgment is required",
@@ -1491,10 +1490,7 @@ def test_applies_signed_work_interruptions_with_durable_status_changes(
     assert workspace.validate().ok
 
     status_path = (
-        root
-        / ".agora"
-        / "swarms"
-        / "delivery"
+        swarm_dir(root, "delivery")
         / "work"
         / "signed-work"
         / "status-changes"

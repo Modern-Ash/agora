@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import swarm_dir
+
 from agora import __version__
 from agora.cli import main
 from agora.model import (
@@ -708,7 +710,7 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
         "specialist-result": "promoted-specialist-result"
     }
     assert (
-        root / ".agora" / "swarms" / "specialists" / "work" / "specialist-work" / "WORK.md"
+        swarm_dir(root, "specialists") / "work" / "specialist-work" / "WORK.md"
     ).exists()
 
 
