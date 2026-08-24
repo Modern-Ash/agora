@@ -306,7 +306,10 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             payload["runtime_fallbacks"] = [dict(item) for item in value.runtime_fallbacks]
         return payload
     if isinstance(value, SwarmSummary):
-        root = workspace.project_root()
+        # Directory may carry the sequential '00x-' prefix (see
+        # AgoraWorkspace._next_swarm_directory) that is not part of the
+        # logical id, so this asks the workspace for the resolved path
+        # instead of reconstructing it from value.id.
         return {
             "id": value.id,
             "method": value.method,
@@ -315,10 +318,9 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "required_roles": list(value.required_roles),
             "assignments": dict(value.assignments),
             "objective": value.objective,
-            "path": str(root / ".agora" / "swarms" / value.id),
+            "path": workspace.show_swarm(value.id).path,
         }
     if isinstance(value, (WorkItemSummary, WorkItemDetail)):
-        root = workspace.project_root()
         return {
             "id": value.id,
             "swarm_id": value.swarm_id,
@@ -331,7 +333,9 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "artifact_kinds": list(value.artifact_kinds),
             "evidence_results": list(value.evidence_results),
             "approval_roles": list(value.approval_roles),
-            "path": str(root / ".agora" / "swarms" / value.swarm_id / "work" / value.id),
+            # Directory may carry the swarm's sequential '00x-' prefix
+            # (see AgoraWorkspace._next_swarm_directory).
+            "path": workspace.show_work(value.swarm_id, value.id).path,
             "child_work_refs": list(value.child_work_refs),
             "budget_limits": dict(value.budget_limits) if value.budget_limits is not None else None,
             "operational_status": value.operational_status,

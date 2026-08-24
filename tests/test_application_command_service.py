@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import swarm_dir
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -620,7 +621,7 @@ def test_canonicalizes_reason_and_evidence_once_for_payload_projection_and_persi
     assert payload["evidence_references"] == ["repo://reports/release.txt"]
     assert result.reason == prepared.reason
     assert result.evidence_references == prepared.evidence_references
-    approvals = root / ".agora" / "swarms" / "delivery" / "work" / "release" / "approvals.md"
+    approvals = swarm_dir(root, "delivery") / "work" / "release" / "approvals.md"
     assert "Evidence reviewed and accepted" in approvals.read_text(encoding="utf-8")
     assert "evidence=repo://reports/release.txt" in result.activity.summary
     assert "reason=Evidence reviewed and accepted" in result.activity.summary
@@ -772,7 +773,7 @@ def test_rejects_governed_material_that_changed_after_preparation_without_writes
             encoding="utf-8",
         )
     elif changed_material == "assignment":
-        swarm_path = root / ".agora" / "swarms" / "delivery" / "SWARM.md"
+        swarm_path = swarm_dir(root, "delivery") / "SWARM.md"
         document = read_markdown(swarm_path)
         assignments = dict(document.attributes["assignments"])
         assignments["product-owner"] = "project:facilitator"
@@ -793,7 +794,7 @@ def test_rejects_governed_material_that_changed_after_preparation_without_writes
     else:
         (root / "reports" / "release.txt").write_text("changed\n", encoding="utf-8")
 
-    work_root = root / ".agora" / "swarms" / "delivery" / "work" / "release"
+    work_root = swarm_dir(root, "delivery") / "work" / "release"
     decision_paths = [
         work_root / "approvals.md",
         work_root / "events.md",
@@ -1310,7 +1311,7 @@ def test_external_evidence_digest_is_durable_and_stales_a_prepared_decision(
     assert prepared.precondition_digest == request.precondition_digest
 
     for name in ("artifacts.md", "evidence.md"):
-        path = root / ".agora" / "swarms" / "delivery" / "work" / "release" / name
+        path = swarm_dir(root, "delivery") / "work" / "release" / name
         path.write_text(
             path.read_text(encoding="utf-8").replace(original_digest, replacement_digest),
             encoding="utf-8",
@@ -1398,7 +1399,7 @@ def test_maps_an_intermediate_write_failure_and_rolls_back_every_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, workspace, service = gate_project
-    work_root = root / ".agora" / "swarms" / "delivery" / "work" / "release"
+    work_root = swarm_dir(root, "delivery") / "work" / "release"
     paths = [work_root / "approvals.md", work_root / "events.md", root / ".agora" / "activity.md"]
     before = {path: path.read_bytes() for path in paths}
     from agora import filesystem
@@ -1497,7 +1498,7 @@ def test_maps_an_interleaved_external_transaction_edit_to_stale_without_partial_
     root, workspace, service = gate_project
     from agora import filesystem
 
-    work_root = root / ".agora" / "swarms" / "delivery" / "work" / "release"
+    work_root = swarm_dir(root, "delivery") / "work" / "release"
     approvals = work_root / "approvals.md"
     events = work_root / "events.md"
     approvals_before = approvals.read_bytes()

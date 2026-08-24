@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from conftest import swarm_dir
 
 from agora.cli import main
 from agora.filesystem import FilesystemTransactionFailure
@@ -472,7 +473,7 @@ def test_governs_human_ai_and_nested_swarm_actors(
     assert completed.state == "completed"
     assert workspace.validate().ok
     assert workspace.show_swarm("first-slice").status == "completed"
-    work_root = root / ".agora" / "swarms" / "first-slice" / "work" / "bootstrap"
+    work_root = swarm_dir(root, "first-slice") / "work" / "bootstrap"
     assert "- [x] **installable:**" in (work_root / "WORK.md").read_text()
     assert "work.transitioned" in (work_root / "events.md").read_text()
     assert "| test-run | success |" in (work_root / "evidence.md").read_text()
@@ -808,10 +809,7 @@ def test_delegates_one_work_scoped_approval_and_supports_revocation(
         )
     assert workspace.validate().ok
     delegation_path = (
-        root
-        / ".agora"
-        / "swarms"
-        / "delivery"
+        swarm_dir(root, "delivery")
         / "work"
         / "revoked-approval"
         / "approval-delegations"
@@ -1341,7 +1339,7 @@ def test_handoff_transaction_keeps_assignment_events_and_activity_aligned(
             scope="project",
         )
     )
-    swarm = root / ".agora" / "swarms" / "delivery"
+    swarm = swarm_dir(root, "delivery")
     tracked = [swarm / "SWARM.md", swarm / "events.md", root / ".agora" / "activity.md"]
     before = {path: path.read_bytes() for path in tracked}
     atomic_write_fault.arm(fail_at)
@@ -1659,15 +1657,7 @@ def test_tool_finalization_failure_leaves_an_explicit_running_recovery_state(
         assert filesystem._ACTIVE_TRANSACTION.get() is None
         assert getattr(governed._lock_state, "depth", 0) == 0
         run_root = root / ".agora" / "tool-runs" / "tool-finalization-failure"
-        work_events = (
-            root
-            / ".agora"
-            / "swarms"
-            / "delivery"
-            / "work"
-            / "tool-finalization-work"
-            / "events.md"
-        )
+        work_events = swarm_dir(root, "delivery") / "work" / "tool-finalization-work" / "events.md"
         for path in (
             run_root / "RUN.md",
             root / ".agora" / "events.md",
@@ -3185,12 +3175,10 @@ def test_hands_a_running_role_from_ai_to_human_and_swarm(
 
     assert second.authorized_by == "project:facilitator"
     assert workspace.show_swarm("delivery").assignments["developer"] == "project:delivery-swarm"
-    handoff = root / ".agora" / "swarms" / "delivery" / "handoffs" / "to-swarm" / "HANDOFF.md"
+    handoff = swarm_dir(root, "delivery") / "handoffs" / "to-swarm" / "HANDOFF.md"
     assert 'from: "project:human-developer"' in handoff.read_text()
     assert "Parallel implementation is now appropriate" in handoff.read_text()
-    events = (
-        root / ".agora" / "swarms" / "delivery" / "work" / "handoff-work" / "events.md"
-    ).read_text()
+    events = (swarm_dir(root, "delivery") / "work" / "handoff-work" / "events.md").read_text()
     assert events.count("work.role-handed-off") == 2
     session = workspace.start_session(
         StartSessionInput(
@@ -3201,8 +3189,9 @@ def test_hands_a_running_role_from_ai_to_human_and_swarm(
         )
     )
     context = Path(session.context_path).read_text()
-    assert ".agora/swarms/delivery/handoffs/to-human/HANDOFF.md" in context
-    assert ".agora/swarms/delivery/handoffs/to-swarm/HANDOFF.md" in context
+    delivery_relative = swarm_dir(root, "delivery").relative_to(root).as_posix()
+    assert f"{delivery_relative}/handoffs/to-human/HANDOFF.md" in context
+    assert f"{delivery_relative}/handoffs/to-swarm/HANDOFF.md" in context
 
 
 def test_links_recursive_swarms_and_enforces_cycles_depth_and_readiness(
@@ -3312,8 +3301,10 @@ def test_links_recursive_swarms_and_enforces_cycles_depth_and_readiness(
     )
     context = Path(session.context_path).read_text()
     assert "Represented swarm: `middle`" in context
-    assert ".agora/swarms/middle/SWARM.md" in context
-    assert ".agora/swarms/leaf/SWARM.md" in context
+    middle_relative = swarm_dir(root, "middle").relative_to(root).as_posix()
+    leaf_relative = swarm_dir(root, "leaf").relative_to(root).as_posix()
+    assert f"{middle_relative}/SWARM.md" in context
+    assert f"{leaf_relative}/SWARM.md" in context
     assert (
         'represented-swarm: "middle"'
         in (root / ".agora" / "actors" / "middle-swarm.md").read_text()
@@ -3373,7 +3364,7 @@ def test_links_recursive_swarms_and_enforces_cycles_depth_and_readiness(
             AssignActorInput(swarm_id="consumer", role_id="developer", actor_id="forming-swarm")
         )
 
-    leaf_manifest = root / ".agora" / "swarms" / "leaf" / "SWARM.md"
+    leaf_manifest = swarm_dir(root, "leaf") / "SWARM.md"
     leaf_manifest.write_text(
         leaf_manifest.read_text().replace(
             '"developer":"project:developer"',
@@ -3523,7 +3514,7 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
         DelegationActorInput(delegation_id="specialist-task", actor_id="owner")
     )
     assert accepted.status == "accepted"
-    child_root = root / ".agora" / "swarms" / "specialists" / "work" / "child-slice"
+    child_root = swarm_dir(root, "specialists") / "work" / "child-slice"
     child_manifest = (child_root / "WORK.md").read_text()
     assert 'delegation: "specialist-task"' in child_manifest
     assert 'parent-work: "delivery/parent-slice"' in child_manifest
@@ -3610,7 +3601,7 @@ def test_delegates_work_to_a_child_swarm_and_collects_its_result(
     parent = workspace.show_work("delivery", "parent-slice")
     assert parent.artifact_kinds == ["delegated-result", "specialist-result"]
     assert parent.evidence_results == ["success"]
-    parent_root = root / ".agora" / "swarms" / "delivery" / "work" / "parent-slice"
+    parent_root = swarm_dir(root, "delivery") / "work" / "parent-slice"
     assert (
         "agora://swarms/specialists/work/child-slice" in (parent_root / "artifacts.md").read_text()
     )
@@ -3737,13 +3728,15 @@ def test_activity_ledger_filters_work_chronology_and_validates_sources(
     assert len(records) == 1
     assert records[0].actor == "project:owner"
     assert records[0].summary == "state=specified actor=project:owner"
-    assert records[0].source == ("repo://.agora/swarms/delivery/work/ledger-work/events.md")
+    delivery_relative = swarm_dir(root, "delivery").relative_to(root).as_posix()
+    ledger_events_uri = f"repo://{delivery_relative}/work/ledger-work/events.md"
+    assert records[0].source == ledger_events_uri
     assert workspace.validate().checked["activity-ledgers"] == 1
 
     ledger = root / ".agora" / "activity.md"
     ledger.write_text(
         ledger.read_text().replace(
-            "repo://.agora/swarms/delivery/work/ledger-work/events.md",
+            ledger_events_uri,
             "repo://missing/activity-source.md",
         ),
         encoding="utf-8",
@@ -3784,7 +3777,7 @@ def test_create_work_rolls_back_every_document_when_transaction_commit_fails(
             )
         )
 
-    assert not (root / ".agora" / "swarms" / "delivery" / "work" / "transactional-work").exists()
+    assert not (swarm_dir(root, "delivery") / "work" / "transactional-work").exists()
     assert activity.read_text(encoding="utf-8") == original_activity
     assert workspace.validate().ok
 
@@ -3846,7 +3839,7 @@ def test_validation_reports_multiple_workspace_integrity_errors(
             actor_id="owner",
         )
     )
-    work_path = root / ".agora" / "swarms" / "delivery" / "work" / "invalid-work"
+    work_path = swarm_dir(root, "delivery") / "work" / "invalid-work"
     manifest = work_path / "WORK.md"
     manifest.write_text(manifest.read_text().replace('state: "specified"', 'state: "unknown"'))
     actor_path = root / ".agora" / "actors" / "developer.md"
@@ -4095,10 +4088,7 @@ def test_validation_reports_corrupt_status_change_semantics(
         )
     )
     status_path = (
-        root
-        / ".agora"
-        / "swarms"
-        / "delivery"
+        swarm_dir(root, "delivery")
         / "work"
         / "audited-work"
         / "status-changes"
@@ -4163,7 +4153,7 @@ def test_decomposes_work_and_requires_children_to_close(
     assert parent.child_work_refs == ["delivery/child-work"]
     assert (
         'parent-work: "delivery/parent-work"'
-        in (root / ".agora" / "swarms" / "delivery" / "work" / "child-work" / "WORK.md").read_text()
+        in (swarm_dir(root, "delivery") / "work" / "child-work" / "WORK.md").read_text()
     )
     with pytest.raises(FileExistsError, match="Work already exists"):
         workspace.decompose_work(decomposition)
@@ -4325,6 +4315,71 @@ def test_verifies_local_artifacts_and_binds_successful_evidence(
     report = workspace.validate()
     assert report.ok is False
     assert any(issue.code == "artifact.reference-invalid" for issue in report.issues)
+
+
+def test_new_swarms_get_a_sequential_directory_prefix(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
+
+    first = workspace.create_swarm(
+        CreateSwarmInput(id="alpha", objective="First swarm", create_branch=False)
+    )
+    second = workspace.create_swarm(
+        CreateSwarmInput(id="beta", objective="Second swarm", create_branch=False)
+    )
+    third = workspace.create_swarm(
+        CreateSwarmInput(id="gamma", objective="Third swarm", create_branch=False)
+    )
+
+    # The logical id stays clean — every existing `--swarm <id>` reference
+    # keeps working — but the directory on disk sorts in creation order.
+    assert first.id == "alpha"
+    assert Path(first.path).name == "001-alpha"
+    assert Path(second.path).name == "002-beta"
+    assert Path(third.path).name == "003-gamma"
+    assert workspace.show_swarm("alpha").path == first.path
+    assert workspace.show_swarm("beta").path == second.path
+
+    listed = {record.id: record.path for record in workspace.list_swarms()}
+    assert listed["alpha"] == first.path
+    assert listed["beta"] == second.path
+    assert listed["gamma"] == third.path
+
+    assert workspace.validate().ok is True
+
+
+def test_legacy_unnumbered_swarm_directories_keep_working(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    """Only new swarms get the sequential prefix — a swarm directory that
+    already exists without one (from before this feature) is left alone
+    and keeps resolving correctly."""
+    root, workspace = project
+    workspace.initialize(InitInput(integration="generic", default_method="scrum"))
+    workspace.create_swarm(
+        CreateSwarmInput(id="legacy", objective="Pre-existing layout", create_branch=False)
+    )
+    legacy_dir = root / ".agora" / "swarms" / "legacy"
+    numbered_dir = root / ".agora" / "swarms" / "001-legacy"
+    numbered_dir.rename(legacy_dir)
+    # Rewrite the SWARM.md id attribute path is unaffected — id is stored
+    # inside the document, not derived from the directory name.
+
+    reloaded = workspace.show_swarm("legacy")
+    assert reloaded.path == str(legacy_dir)
+
+    # The next swarm still gets numbered starting from 001, since no
+    # numbered directories exist yet in this project.
+    next_swarm = workspace.create_swarm(
+        CreateSwarmInput(id="modern", objective="New layout", create_branch=False)
+    )
+    assert Path(next_swarm.path).name == "001-modern"
+    # (Not asserting validate().ok here: the manual rename above leaves
+    # activity.md pointing at the pre-rename path, which is an artifact of
+    # this synthetic test setup, not a real production scenario — nothing
+    # in normal usage renames a swarm directory after the fact.)
 
 
 def _prepare_scrum_team(workspace: AgoraWorkspace) -> None:

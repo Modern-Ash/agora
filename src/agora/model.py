@@ -1671,6 +1671,23 @@ class PrepareDecomposeWorkInput:
 
 
 @dataclass(frozen=True)
+class CreatePatchWorkInput:
+    """Lightweight fix work item for a swarm that already reached
+    'completed' — no new swarm, role assignment, or branch is created.
+    The swarm's status self-heals from 'completed' back to 'running' once
+    this work item exists (see AgoraWorkspace._refresh_swarm_status)."""
+
+    swarm_id: str
+    parent_work_id: str
+    id: str
+    title: str
+    actor_id: str
+    acceptance_criteria: list[tuple[str, str]] = field(default_factory=list)
+    required_artifacts: list[str] = field(default_factory=list)
+    description: str = ""
+
+
+@dataclass(frozen=True)
 class WaiveGateInput:
     id: str
     swarm_id: str

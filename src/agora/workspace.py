@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -151,6 +151,7 @@ from agora.model import (
     ConfigureInput,
     CoordinationPolicyRecord,
     CreateDelegationInput,
+    CreatePatchWorkInput,
     CreateSwarmInput,
     CreateWorkInput,
     DecomposeWorkInput,
@@ -602,7 +603,7 @@ class AgoraWorkspace:
         reserved_paths = [
             target / ".agora" / "actors" / "owner.md",
             target / ".agora" / "actors" / "agent.md",
-            target / ".agora" / "swarms" / data.swarm_id,
+            self._resolve_swarm_dir(target, data.swarm_id),
         ]
         collisions = [str(path.relative_to(target)) for path in reserved_paths if path.exists()]
         checks.append(
@@ -707,7 +708,7 @@ class AgoraWorkspace:
             target / ".agora" / "project.md",
             target / ".agora" / "actors" / "owner.md",
             target / ".agora" / "actors" / "agent.md",
-            target / ".agora" / "swarms" / swarm_id / "SWARM.md",
+            self._resolve_swarm_dir(target, swarm_id) / "SWARM.md",
         }
         for source, destination in (
             (root / "scaffold", target / ".agora"),
@@ -4003,9 +4004,9 @@ class AgoraWorkspace:
         self._assert_method_available(method, root / ".agora" / "methods")
         contract = load_method_contract(root / ".agora" / "methods" / method)
         branch = data.branch or f"agora/{data.id}"
-        swarm_path = root / ".agora" / "swarms" / data.id
-        if swarm_path.exists():
+        if self._resolve_swarm_dir(root, data.id).exists():
             raise FileExistsError(f"Swarm already exists: {data.id}")
+        swarm_path = self._next_swarm_directory(root, data.id)
         if data.create_branch and is_git_repository(root):
             create_branch(root, branch)
         effective_branch = current_branch(root) if is_git_repository(root) else "filesystem-only"
@@ -4263,7 +4264,7 @@ class AgoraWorkspace:
     def list_swarms(self, status: str | None = None) -> list[SwarmRecord]:
         root = self.project_root()
         records = [
-            self._load_swarm(root, path.parent.name)
+            self._load_swarm_from_dir(path.parent)
             for path in sorted((root / ".agora" / "swarms").glob("*/SWARM.md"))
         ]
         return [record for record in records if status is None or record.status == status]
@@ -4500,11 +4501,19 @@ class AgoraWorkspace:
         )
 
     def _validate_create_work(
-        self, root: Path, data: CreateWorkInput, action: str = "work.create"
+        self,
+        root: Path,
+        data: CreateWorkInput,
+        action: str = "work.create",
+        *,
+        allow_completed_swarm: bool = False,
     ) -> tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path]:
         assert_slug(data.id, "Work id")
         swarm = self._load_swarm(root, data.swarm_id)
-        if swarm.status not in {"ready", "running"}:
+        allowed_statuses = {"ready", "running"} | (
+            {"completed"} if allow_completed_swarm else set()
+        )
+        if swarm.status not in allowed_statuses:
             raise ValueError(f"Swarm {swarm.id} must be ready before work can be created")
         actor = self._require_actor_for_action(root, swarm, data.actor_id, action)
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
@@ -4685,6 +4694,77 @@ class AgoraWorkspace:
             "work.decomposition-linked",
             f"parent={parent_reference} actor={actor.reference}",
         )
+        return result
+
+    @_locked_mutation("project")
+    def create_patch_work(self, data: CreatePatchWorkInput) -> WorkRecord:
+        """Create a lightweight fix work item against a swarm that already
+        reached 'completed', without creating a new swarm, role
+        assignment, or branch. Reuses the parent work's swarm as-is; the
+        swarm's status self-heals from 'completed' back to 'running' once
+        this new work item exists (_refresh_swarm_status is status-derived
+        from work items, not a field this sets directly)."""
+        root = self.project_root()
+        parent, child, context = self._validate_create_patch_work(root, data)
+        actor = context[1]
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "work.patch has no prepare/apply signed variant yet — use an "
+                "actor that does not require signing"
+            )
+        return self._apply_create_patch_work(root, parent, child, context)
+
+    def _validate_create_patch_work(
+        self, root: Path, data: CreatePatchWorkInput
+    ) -> tuple[
+        WorkRecord,
+        CreateWorkInput,
+        tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ]:
+        if data.parent_work_id == data.id:
+            raise ValueError("Patch work id must differ from its parent work id")
+        swarm = self._load_swarm(root, data.swarm_id)
+        parent = self._load_work(swarm, data.parent_work_id)
+        child = CreateWorkInput(
+            swarm_id=data.swarm_id,
+            id=data.id,
+            title=data.title,
+            actor_id=data.actor_id,
+            acceptance_criteria=data.acceptance_criteria,
+            required_artifacts=data.required_artifacts,
+            description=data.description,
+        )
+        context = self._validate_create_work(
+            root, child, action="work.patch", allow_completed_swarm=True
+        )
+        return parent, child, context
+
+    @_compound_mutation
+    def _apply_create_patch_work(
+        self,
+        root: Path,
+        parent: WorkRecord,
+        child: CreateWorkInput,
+        context: tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path],
+    ) -> WorkRecord:
+        swarm, actor, _, _, _ = context
+        parent_reference = f"{swarm.id}/{parent.id}"
+        child_reference = f"{swarm.id}/{child.id}"
+        result = self._apply_create_work(child, context, parent_work_ref=parent_reference)
+        parent.child_work_refs = list(dict.fromkeys([*parent.child_work_refs, child_reference]))
+        atomic_write(Path(parent.path) / "WORK.md", self._render_work(parent))
+        self._append_work_event(
+            parent,
+            "work.patched",
+            f"child={child_reference} actor={actor.reference}",
+        )
+        self._append_work_event(
+            result,
+            "work.patch-linked",
+            f"parent={parent_reference} actor={actor.reference}",
+        )
+        self._refresh_swarm_status(root, swarm, changed_work=[parent, result])
         return result
 
     @_locked_mutation("project")
@@ -5424,16 +5504,11 @@ class AgoraWorkspace:
                 "Consistency runtime output requires result success/failure and a report"
             )
         report_id = self._now().astimezone(UTC).strftime("consistency-%Y%m%dt%H%M%sz")
-        relative = (
-            Path(".agora")
-            / "swarms"
-            / swarm.id
-            / "work"
-            / work.id
-            / "consistency"
-            / (report_id + ".md")
-        )
-        path = root / relative
+        # Usa work.path (ya resuelto) en vez de reconstruir con swarm.id: el
+        # directorio del swarm puede llevar el prefijo secuencial '00x-'
+        # (ver _next_swarm_directory), que no forma parte del id lógico.
+        path = Path(work.path) / "consistency" / (report_id + ".md")
+        relative = path.relative_to(root)
         write_new(
             path,
             render_markdown(
@@ -5507,16 +5582,10 @@ class AgoraWorkspace:
                 for marker in ("Feature:", "Scenario:", "Given ", "When ", "Then ")
             ):
                 raise ValueError(f"Generated Gherkin is invalid for criterion: {criterion_id}")
-            relative = (
-                Path(".agora")
-                / "swarms"
-                / swarm.id
-                / "work"
-                / work.id
-                / "gherkin"
-                / f"{criterion_id}.feature"
-            )
-            path = root / relative
+            # work.path ya está resuelto (ver nota análoga arriba en
+            # _apply_verify_work_consistency sobre el prefijo '00x-').
+            path = Path(work.path) / "gherkin" / f"{criterion_id}.feature"
+            relative = path.relative_to(root)
             generated = f"# agora-input-sha256: {input_sha256}\n{contents.rstrip()}\n"
             if path.exists():
                 atomic_write(path, generated)
@@ -6600,10 +6669,7 @@ class AgoraWorkspace:
         ):
             assert_slug(value, label)
         amendment_path = (
-            root
-            / ".agora"
-            / "swarms"
-            / data.child_swarm_id
+            self._resolve_swarm_dir(root, data.child_swarm_id)
             / "work"
             / data.child_work_id
             / "budget-amendments"
@@ -6708,7 +6774,7 @@ class AgoraWorkspace:
             Path(actor.path),
             root / ".agora" / "project.md",
             root / ".agora" / "methods" / parent_swarm.method,
-            root / ".agora" / "swarms" / parent.swarm_id / "SWARM.md",
+            Path(parent_swarm.path) / "SWARM.md",
         ]
         durable = durable_read_set_sha256(root, paths, include_git_state=False)
         material = {
@@ -11520,7 +11586,7 @@ class AgoraWorkspace:
                 summary = Path(last_session.path) / "SUMMARY.md"
                 source = summary if summary.is_file() else Path(last_session.path) / "SESSION.md"
             elif swarm_id is not None and work_id is not None:
-                candidate = root / ".agora" / "swarms" / swarm_id / "work" / work_id / "WORK.md"
+                candidate = self._resolve_swarm_dir(root, swarm_id) / "work" / work_id / "WORK.md"
                 if candidate.is_file():
                     source = candidate
             with self._mutation_lock((root,), "record_run_loop_stop"):
@@ -12694,16 +12760,21 @@ class AgoraWorkspace:
                 "swarms",
                 "swarm.invalid",
                 path,
-                lambda path=path: self._load_swarm(root, path.parent.name),
+                lambda path=path: self._load_swarm_from_dir(path.parent),
             )
             if not isinstance(swarm, SwarmRecord):
                 continue
             swarms[swarm.id] = swarm
-            if swarm.id != path.parent.name:
+            # Directory may be the bare id (legacy) or carry the sequential
+            # '00x-' prefix (see _next_swarm_directory) — either is valid.
+            directory_name = path.parent.name
+            if directory_name != swarm.id and not re.fullmatch(
+                rf"\d{{3}}-{re.escape(swarm.id)}", directory_name
+            ):
                 issue(
                     "swarm.id-mismatch",
                     path,
-                    f"Swarm id {swarm.id} does not match directory {path.parent.name}",
+                    f"Swarm id {swarm.id} does not match directory {directory_name}",
                 )
             if swarm.status not in {
                 "forming",
@@ -15322,7 +15393,7 @@ class AgoraWorkspace:
         for path in swarm_root.iterdir():
             if not path.is_dir() or not (path / "SWARM.md").exists():
                 continue
-            swarm = self._load_swarm(root, path.name)
+            swarm = self._load_swarm_from_dir(path)
             graph.setdefault(swarm.id, set())
             for role_id, reference in swarm.assignments.items():
                 if exclude == (swarm.id, role_id):
@@ -15428,15 +15499,28 @@ class AgoraWorkspace:
         return "ready"
 
     def _refresh_swarm_status(
-        self, root: Path, swarm: SwarmRecord, *, changed_work: WorkRecord | None = None
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        *,
+        changed_work: WorkRecord | Sequence[WorkRecord] | None = None,
     ) -> None:
         contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
         work = [
             self._load_work(swarm, path.parent.name)
             for path in sorted((Path(swarm.path) / "work").glob("*/WORK.md"))
         ]
-        if changed_work is not None:
-            work = [changed_work if item.id == changed_work.id else item for item in work]
+        changed_items = (
+            [changed_work] if isinstance(changed_work, WorkRecord) else list(changed_work or [])
+        )
+        for item in changed_items:
+            # A brand-new item (e.g. a just-created patch child) may not be on
+            # disk yet mid-transaction; the glob above won't see it either, so
+            # replace-or-append rather than assuming it's already present.
+            if any(existing.id == item.id for existing in work):
+                work = [item if existing.id == item.id else existing for existing in work]
+            else:
+                work = [*work, item]
         target = self._derived_swarm_status(swarm, work, contract)
         if target == swarm.status:
             return
@@ -15450,9 +15534,47 @@ class AgoraWorkspace:
             f"from={previous} to={target}",
         )
 
+    def _resolve_swarm_dir(self, root: Path, swarm_id: str) -> Path:
+        """Resolve a swarm id to its directory, whether it's a legacy
+        (unnumbered) swarm or one created with the sequential '00x-' prefix
+        (see _next_swarm_directory / create_swarm). The logical swarm id
+        never carries the number — only the directory name does — so every
+        existing `--swarm <id>` reference keeps working unchanged."""
+        base = root / ".agora" / "swarms"
+        direct = base / swarm_id
+        if direct.exists():
+            return direct
+        if base.is_dir():
+            matches = sorted(base.glob(f"[0-9][0-9][0-9]-{swarm_id}"))
+            if matches:
+                return matches[0]
+        return direct  # neither form exists; let the caller surface not-found
+
+    def _next_swarm_directory(self, root: Path, swarm_id: str) -> Path:
+        """Directory for a brand-new swarm, prefixed with the next
+        sequential number (001, 002, ...) so swarms/ sorts in creation
+        order at a glance. Only new swarms get numbered — existing
+        unnumbered swarm directories are left untouched."""
+        base = root / ".agora" / "swarms"
+        highest = 0
+        if base.is_dir():
+            for entry in base.iterdir():
+                if not entry.is_dir():
+                    continue
+                match = re.match(r"^(\d{3})-", entry.name)
+                if match:
+                    highest = max(highest, int(match.group(1)))
+        return base / f"{highest + 1:03d}-{swarm_id}"
+
     def _load_swarm(self, root: Path, swarm_id: str) -> SwarmRecord:
         assert_slug(swarm_id, "Swarm id")
-        path = root / ".agora" / "swarms" / swarm_id
+        return self._load_swarm_from_dir(self._resolve_swarm_dir(root, swarm_id))
+
+    def _load_swarm_from_dir(self, path: Path) -> SwarmRecord:
+        """Load a swarm record from its known directory, without deriving
+        the swarm id from that directory's name — the directory may carry
+        a sequential '00x-' prefix (see _next_swarm_directory) that is not
+        part of the logical id stored in SWARM.md."""
         document = read_markdown(path / "SWARM.md")
         _assert_schema(document, "agora/swarm/v1", path / "SWARM.md")
         return SwarmRecord(
@@ -17216,7 +17338,7 @@ class AgoraWorkspace:
         )
         for represented_root_id in represented_roots:
             for represented_id in self._delegated_swarm_ids(root, represented_root_id):
-                represented_root = root / ".agora" / "swarms" / represented_id
+                represented_root = self._resolve_swarm_dir(root, represented_id)
                 represented_paths.extend(
                     [
                         represented_root / "SWARM.md",
@@ -17915,17 +18037,15 @@ class AgoraWorkspace:
 
     def _append_swarm_event(self, root: Path, swarm_id: str, type_: str, detail: str) -> None:
         timestamp = self._timestamp()
-        append_entry(
-            root / ".agora" / "swarms" / swarm_id / "events.md",
-            f"- {timestamp} | {type_} | {detail}",
-        )
+        events_path = self._resolve_swarm_dir(root, swarm_id) / "events.md"
+        append_entry(events_path, f"- {timestamp} | {type_} | {detail}")
         self._append_activity(
             root,
             type_,
             detail,
             actor=self._event_detail_value(detail, "actor"),
             swarm_id=swarm_id,
-            source=root / ".agora" / "swarms" / swarm_id / "events.md",
+            source=events_path,
             timestamp=timestamp,
         )
 
@@ -18291,7 +18411,7 @@ class AgoraWorkspace:
         reserved_paths = (
             root / ".agora" / "actors" / f"{human_id}.md",
             root / ".agora" / "actors" / f"{ai_id}.md",
-            root / ".agora" / "swarms" / data.swarm_id,
+            self._resolve_swarm_dir(root, data.swarm_id),
         )
         existing = next((path for path in reserved_paths if path.exists()), None)
         if existing is not None:

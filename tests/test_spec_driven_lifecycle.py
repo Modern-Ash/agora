@@ -9,6 +9,7 @@ from agora.model import (
     AddEvidenceInput,
     AssignActorInput,
     ConfigureInput,
+    CreatePatchWorkInput,
     CreateSwarmInput,
     CreateWorkInput,
     InitInput,
@@ -203,12 +204,7 @@ def test_spec_driven_tracks_criterion_progress_without_transferring_acceptance(
     assert clarified.state == "clarified"
 
 
-def test_spec_driven_walks_to_completion_with_evidence_and_approval(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = _workspace(tmp_path, monkeypatch)
-    _form_swarm(workspace)
-
+def _walk_increment_to_completion(workspace: AgoraWorkspace) -> None:
     workspace.create_work(
         CreateWorkInput(
             swarm_id="delivery",
@@ -283,4 +279,55 @@ def test_spec_driven_walks_to_completion_with_evidence_and_approval(
         )
     )
     assert completed.state == "completed"
+    assert workspace.validate().ok is True
+
+
+def test_spec_driven_walks_to_completion_with_evidence_and_approval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    _form_swarm(workspace)
+    _walk_increment_to_completion(workspace)
+
+
+def test_patch_work_reuses_a_completed_swarm_without_new_ceremony(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A lightweight fix work item can be created directly against a swarm
+    that already reached 'completed', without creating a new swarm, role
+    assignment, or branch — the pattern this session repeated ~4 times by
+    hand before this feature existed."""
+    workspace = _workspace(tmp_path, monkeypatch)
+    _form_swarm(workspace)
+    _walk_increment_to_completion(workspace)
+    assert workspace.show_swarm("delivery").status == "completed"
+
+    patch = workspace.create_patch_work(
+        CreatePatchWorkInput(
+            swarm_id="delivery",
+            parent_work_id="increment",
+            id="increment-fix",
+            title="Fix a bug found testing the shipped increment",
+            actor_id="dev",
+            description="The retry path double-charges under a specific race.",
+            acceptance_criteria=[("no-double-charge", "Retries never double-charge")],
+        )
+    )
+
+    assert patch.state == "drafting"
+    assert patch.parent_work_ref == "delivery/increment"
+    # No new swarm was created — same roles, same branch, same swarm id.
+    assert patch.swarm_id == "delivery"
+    assert workspace.show_swarm("delivery").assignments == {
+        "spec-owner": "project:owner",
+        "developer": "project:dev",
+    }
+
+    # The swarm's status self-healed back to running now that a non-terminal
+    # work item exists (status is derived from work items, not set by hand).
+    assert workspace.show_swarm("delivery").status == "running"
+
+    parent = workspace.show_work("delivery", "increment")
+    assert "delivery/increment-fix" in parent.child_work_refs
+
     assert workspace.validate().ok is True
