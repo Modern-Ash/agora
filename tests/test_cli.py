@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from conftest import swarm_dir
 
 from agora import __version__
@@ -709,9 +708,7 @@ def test_proposes_accepts_and_shows_a_delegation_from_the_cli(tmp_path: Path, mo
     assert workspace.show_delegation("cli-delegation").artifact_promotions == {
         "specialist-result": "promoted-specialist-result"
     }
-    assert (
-        swarm_dir(root, "specialists") / "work" / "specialist-work" / "WORK.md"
-    ).exists()
+    assert (swarm_dir(root, "specialists") / "work" / "specialist-work" / "WORK.md").exists()
 
 
 def test_blocks_resumes_and_lists_work_status_from_the_cli(tmp_path: Path, monkeypatch) -> None:

@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 from conftest import swarm_dir
 
 from agora.cli import main
@@ -1658,12 +1657,7 @@ def test_tool_finalization_failure_leaves_an_explicit_running_recovery_state(
         assert filesystem._ACTIVE_TRANSACTION.get() is None
         assert getattr(governed._lock_state, "depth", 0) == 0
         run_root = root / ".agora" / "tool-runs" / "tool-finalization-failure"
-        work_events = (
-            swarm_dir(root, "delivery")
-            / "work"
-            / "tool-finalization-work"
-            / "events.md"
-        )
+        work_events = swarm_dir(root, "delivery") / "work" / "tool-finalization-work" / "events.md"
         for path in (
             run_root / "RUN.md",
             root / ".agora" / "events.md",
@@ -3184,9 +3178,7 @@ def test_hands_a_running_role_from_ai_to_human_and_swarm(
     handoff = swarm_dir(root, "delivery") / "handoffs" / "to-swarm" / "HANDOFF.md"
     assert 'from: "project:human-developer"' in handoff.read_text()
     assert "Parallel implementation is now appropriate" in handoff.read_text()
-    events = (
-        swarm_dir(root, "delivery") / "work" / "handoff-work" / "events.md"
-    ).read_text()
+    events = (swarm_dir(root, "delivery") / "work" / "handoff-work" / "events.md").read_text()
     assert events.count("work.role-handed-off") == 2
     session = workspace.start_session(
         StartSessionInput(

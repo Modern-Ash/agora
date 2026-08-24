@@ -4510,7 +4510,9 @@ class AgoraWorkspace:
     ) -> tuple[SwarmRecord, ActorRecord, MethodContract, dict[str, str], Path]:
         assert_slug(data.id, "Work id")
         swarm = self._load_swarm(root, data.swarm_id)
-        allowed_statuses = {"ready", "running"} | ({"completed"} if allow_completed_swarm else set())
+        allowed_statuses = {"ready", "running"} | (
+            {"completed"} if allow_completed_swarm else set()
+        )
         if swarm.status not in allowed_statuses:
             raise ValueError(f"Swarm {swarm.id} must be ready before work can be created")
         actor = self._require_actor_for_action(root, swarm, data.actor_id, action)

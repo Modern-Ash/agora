@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from conftest import swarm_dir
 
 from agora.cli import main

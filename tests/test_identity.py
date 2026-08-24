@@ -5,7 +5,6 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
-
 from conftest import swarm_dir
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -826,9 +825,7 @@ def test_applies_a_signed_work_decomposition(tmp_path: Path, monkeypatch) -> Non
     assert workspace.validate().ok
     assert (
         "work.decomposed"
-        in (
-            swarm_dir(root, "delivery") / "work" / "parent-work" / "events.md"
-        ).read_text()
+        in (swarm_dir(root, "delivery") / "work" / "parent-work" / "events.md").read_text()
     )
 
 
@@ -1116,9 +1113,7 @@ def test_signs_work_creation_criteria_artifacts_and_evidence(tmp_path: Path, mon
     )
     assert workspace.validate().ok
 
-    artifact_path = (
-        swarm_dir(root, "delivery") / "work" / "signed-materials" / "artifacts.md"
-    )
+    artifact_path = swarm_dir(root, "delivery") / "work" / "signed-materials" / "artifacts.md"
     artifact_path.write_text(
         artifact_path.read_text(encoding="utf-8").replace(
             "repo://delivery/signed-materials.md",
