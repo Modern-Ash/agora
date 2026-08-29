@@ -7,6 +7,23 @@ Agora Core owns the domain, application services, protocol, and persistence. Ago
 optional terminal and automation interface. Agora Studio is a local-first web control plane whose
 Studio API calls the same application services as the CLI; neither interface owns lifecycle rules.
 
+## Project map
+
+The three public repositories form one demonstrable stack:
+
+- [Agora Core](https://github.com/Modern-Ash/agora) is the reusable governance kernel and Python
+  package. Its `packs/` sources become the operational Markdown materialized in a governed project.
+- [Agora Studio](https://github.com/Modern-Ash/agora-studio) is the optional local visual adapter.
+  It calls Core's versioned application services and never becomes a second policy engine.
+- [Truco Agora](https://github.com/Modern-Ash/truco-agora) is the executable reference application.
+  It shows how a real product can use the Core workflow while comparing human and LLM players,
+  discovering local providers, and retaining evidence in Git.
+
+Use the Core guides for protocol and lifecycle behavior, the Studio README for visual operation,
+and the Truco README for a complete domain-level demo. Links between these repositories are
+deliberate: a reader can move from governance concepts to a UI and then to a running application
+without confusing their ownership boundaries.
+
 ## Documentation boundaries
 
 This directory contains explanatory product documentation. Operational Markdown is sourced from
@@ -57,6 +74,8 @@ do not exist as one static agent file in this repository.
 - [Spec tooling and runtime resilience](guides/spec-tooling-and-runtime-resilience.md): clarify
   intent, maintain non-binding checklists, verify artifacts, generate Gherkin, configure runtime
   fallbacks, and render the aggregate board.
+- [AI-native SDLC controls](guides/ai-native-sdlc.md): govern intent, continuous evaluations,
+  structured reviews, runtime guardrails, idempotent triggers, control bands, and delivery metrics.
 - [Getting started](getting-started.md): follow the governed workflow from installation to completed
   work.
 - [Installation and customization](guides/installation-and-customization.md): configure user,

@@ -23,6 +23,36 @@ Agora is independent of the project's programming language, LLM provider, agent 
 development process. Its Python application services coordinate the protocol; the CLI is an
 optional adapter and does not introduce an LLM SDK or runtime into the governed codebase.
 
+Developed by [Modern Ash](https://modern-ash.com/).
+
+## Agora ecosystem
+
+Agora is intentionally split into a small set of cooperating projects. The boundaries are part of
+the design: the Core owns governance and durable state, Studio provides a local visual control
+plane, and Truco Agora is a concrete application that demonstrates the method with real human and
+LLM participants.
+
+| Project | Role | When to use it |
+| --- | --- | --- |
+| [Agora Core](https://github.com/Modern-Ash/agora) | Python domain, application services, CLI, Method Packs, Tool Packs, persistence, gates, evidence, and actor governance | Install it in any existing or new repository to govern an SDLC workflow |
+| [Agora Studio](https://github.com/Modern-Ash/agora-studio) | Local-first web control plane over the same Core application services | Browse projects, swarms, work, specifications, lifecycle, artifacts, evidence, approvals, and Activity |
+| [Truco Agora](https://github.com/Modern-Ash/truco-agora) | End-to-end demonstration application | See Scrum/spec-driven ideas applied to a playable domain with human seats, LLM agents, provider discovery, observability, and tests |
+
+```mermaid
+flowchart LR
+    C[Agora Core\nGovernance + persistence] --> T[Agora CLI\nTerminal and automation]
+    C --> S[Agora Studio\nLocal visual control plane]
+    C --> D[Truco Agora\nMethodology demo application]
+    T -. operates .-> P[Project .agora/\nGit-backed records]
+    S -. reads and approves through .-> P
+    D -. demonstrates and records work in .-> P
+```
+
+The projects are complementary rather than three competing implementations. Start with Core when
+you need to govern a project, add Studio when a visual read/review surface helps adoption, and open
+Truco Agora when you want a runnable reference for the complete workflow. Studio does not replace
+the CLI, and Truco Agora does not redefine Core's lifecycle rules.
+
 ## Project status
 
 Agora is an **alpha (`0.x`) framework that is ready for controlled pilots**. The published CLI can
@@ -220,7 +250,13 @@ Agora installs operational Markdown rather than a hidden database:
 │   ├── actions/                # Prepared and applied mutations
 │   ├── artifacts/              # Governed artifact references
 │   ├── sessions/               # Resolved execution context
-│   └── tool-runs/              # External invocation requests and results
+│   ├── tool-runs/              # External invocation requests and results
+│   ├── intents/                # Reviewed problems and desired outcomes
+│   ├── evaluations/            # Continuous evaluation contracts and results
+│   ├── reviews/                # Structured review findings and decisions
+│   ├── guardrails/             # Deterministic pre-action policies
+│   ├── triggers/               # Idempotent external event routing
+│   └── control-bands/          # Production signals and proposed intents
 └── .agents/ or .claude/        # Environment-specific command projection
 ```
 
@@ -242,6 +278,11 @@ The active Method Pack defines the lifecycle, not the CLI core.
 Teams can author and install a custom Method Pack for another process without changing Agora's
 kernel. Start with the [Method Pack reference](docs/reference/method-packs.md) and the
 [custom lifecycle sample](samples/custom-lifecycle/README.md).
+
+For continuous agent operation, Agora also stores reviewed intent, evaluation outcomes, structured
+review findings, deterministic guardrails, idempotent event routing, production control-band
+findings, and derived delivery metrics. See the
+[AI-native SDLC controls guide](docs/guides/ai-native-sdlc.md).
 
 ## Choose an agent environment
 
@@ -449,6 +490,7 @@ Understand the model:
 Operate and extend it:
 
 - [Operations and validation](docs/guides/operations-and-validation.md)
+- [AI-native SDLC controls](docs/guides/ai-native-sdlc.md)
 - [Project upgrades](docs/guides/project-upgrades.md)
 - [Method Pack reference](docs/reference/method-packs.md)
 - [Tool Pack reference](docs/reference/tool-packs.md)
@@ -469,4 +511,5 @@ protocol Markdown-first; and use Conventional Commits. See [CONTRIBUTING.md](CON
 
 ## License
 
-Agora is licensed under the [Apache License 2.0](LICENSE).
+Agora is developed by [Modern Ash](https://modern-ash.com/) and licensed under the
+[Apache License 2.0](LICENSE), an open-source license.
