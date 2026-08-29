@@ -23,6 +23,8 @@ Agora is independent of the project's programming language, LLM provider, agent 
 development process. Its Python application services coordinate the protocol; the CLI is an
 optional adapter and does not introduce an LLM SDK or runtime into the governed codebase.
 
+Developed by [Modern Ash](https://modern-ash.com/).
+
 ## Agora ecosystem
 
 Agora is intentionally split into a small set of cooperating projects. The boundaries are part of
@@ -509,4 +511,5 @@ protocol Markdown-first; and use Conventional Commits. See [CONTRIBUTING.md](CON
 
 ## License
 
-Agora is licensed under the [Apache License 2.0](LICENSE).
+Agora is developed by [Modern Ash](https://modern-ash.com/) and licensed under the
+[Apache License 2.0](LICENSE), an open-source license.
