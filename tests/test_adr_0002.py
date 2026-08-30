@@ -161,6 +161,88 @@ def test_clarify_appends_at_most_five_structured_questions(tmp_path: Path, monke
     assert any(issue.code == "clarifications.stale" for issue in report.issues)
 
 
+@pytest.mark.parametrize(
+    ("method", "owner_role", "required_roles", "capabilities", "initial_state"),
+    [
+        (
+            "scrum",
+            "product-owner",
+            ["product-owner", "scrum-master", "developer"],
+            ["backlog-management", "acceptance", "facilitation", "governance", "implementation"],
+            "specified",
+        ),
+        (
+            "kanban",
+            "service-request-manager",
+            ["service-request-manager", "flow-manager", "delivery"],
+            ["demand-management", "acceptance", "flow-management", "governance", "implementation"],
+            "requested",
+        ),
+        (
+            "spec-driven",
+            "spec-owner",
+            ["spec-owner", "developer"],
+            ["specification", "acceptance", "implementation"],
+            "drafting",
+        ),
+    ],
+)
+def test_clarification_is_driven_by_each_method_pack(
+    tmp_path: Path,
+    monkeypatch,
+    method: str,
+    owner_role: str,
+    required_roles: list[str],
+    capabilities: list[str],
+    initial_state: str,
+) -> None:
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}")
+    observed: dict[str, str] = {}
+
+    def run(command, cwd, environment):
+        observed["prompt"] = Path(environment["AGORA_ADVISORY_PROMPT"]).read_text()
+        return subprocess.CompletedProcess(command, 0, '{"questions": []}', "")
+
+    workspace = AgoraWorkspace(cwd=tmp_path, tool_runner=run)
+    workspace.initialize(InitInput(integration="generic", default_method=method))
+    workspace.add_actor(
+        AddActorInput(
+            id="owner",
+            name="Owner",
+            kind="ai-agent",
+            capabilities=capabilities,
+            scope="project",
+            integration="codex",
+            provider="openai",
+            model="reviewed-model",
+        )
+    )
+    workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Ship", method=method))
+    for role in required_roles:
+        workspace.assign_actor(
+            AssignActorInput(swarm_id="delivery", role_id=role, actor_id="owner")
+        )
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="feature",
+            title="Ship a feature",
+            actor_id="owner",
+            description="Expose a safe endpoint.",
+            acceptance_criteria=[("safe-response", "Return a safe response")],
+        )
+    )
+
+    workspace.clarify_work(WorkActorInput(swarm_id="delivery", work_id="feature", actor_id="owner"))
+
+    prompt = observed["prompt"]
+    assert f'"id": "{method}"' in prompt
+    assert f'"current-state": "{initial_state}"' in prompt
+    assert f'"{owner_role}": "project:owner"' in prompt
+    assert "Do not assume Scrum ceremonies, Kanban flow" in prompt
+
+
 def test_generic_advisory_runner_is_bound_through_a_prepared_action(
     tmp_path: Path, monkeypatch
 ) -> None:

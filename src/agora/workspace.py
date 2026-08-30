@@ -124,11 +124,16 @@ from agora.model import (
     AddArtifactInput,
     AddChecklistInput,
     AddClarificationInput,
+    AddControlBandInput,
     AddEnvironmentInput,
+    AddEvaluationSuiteInput,
     AddEvidenceInput,
+    AddGuardrailInput,
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
+    AddReviewFindingInput,
     AddTransparencyTrustKeyInput,
+    AddTriggerInput,
     AddUsageInput,
     AdoptionInput,
     AdoptionReport,
@@ -151,17 +156,25 @@ from agora.model import (
     ChecklistRecord,
     ConfigureCoordinationInput,
     ConfigureInput,
+    ControlBandFindingRecord,
+    ControlBandRecord,
     CoordinationPolicyRecord,
     CreateDelegationInput,
+    CreateIntentInput,
     CreatePatchWorkInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecideIntentInput,
+    DecideReviewFindingInput,
     DecomposeWorkInput,
     DelegateApprovalInput,
     DelegationActorInput,
     DelegationRecord,
     DoctorCheck,
     EnvironmentPolicyRecord,
+    EvaluateControlBandInput,
+    EvaluationRunRecord,
+    EvaluationSuiteRecord,
     EventRecord,
     EvidenceRecord,
     ExternalIssueSnapshot,
@@ -171,8 +184,11 @@ from agora.model import (
     GateDecisionResult,
     GatePolicy,
     GateWaiverRecord,
+    GuardrailDecisionRecord,
+    GuardrailRecord,
     HandoffActorInput,
     HandoffRecord,
+    IngestTriggerEventInput,
     InitInput,
     InstallCatalogPackInput,
     InstallMethodInput,
@@ -180,6 +196,7 @@ from agora.model import (
     InstallToolAdapterInput,
     InstallToolInput,
     Integration,
+    IntentRecord,
     InvokeToolInput,
     IssueTrackerBindingRecord,
     IssueTrackerSyncEventRecord,
@@ -236,6 +253,7 @@ from agora.model import (
     ProjectConfiguration,
     QuickstartInput,
     QuickstartResult,
+    RecordEvaluationRunInput,
     RefreshPackLockInput,
     RegistryRecord,
     RegistryReleaseRecord,
@@ -248,6 +266,7 @@ from agora.model import (
     RemovePackInput,
     ReopenWorkInput,
     ResumeSessionInput,
+    ReviewFindingRecord,
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
     RevokeRegistryTrustKeyInput,
@@ -258,6 +277,7 @@ from agora.model import (
     RunLoopResult,
     RunNextInput,
     RunPreview,
+    SdlcMetricsRecord,
     SessionAuthorizationRecord,
     SessionRecord,
     SetActorRuntimeInput,
@@ -283,6 +303,8 @@ from agora.model import (
     TransparencyInclusionProofRecord,
     TransparencyTrustKeyRecord,
     TransparencyVerificationResult,
+    TriggerEventRecord,
+    TriggerRecord,
     UpdateCatalogPackInput,
     UpdateRegistryInput,
     UpgradeInput,
@@ -351,6 +373,7 @@ from agora.registry_distribution import (
     download_registry_release,
     inspect_registry_release,
 )
+from agora.sdlc import SdlcService
 from agora.tools import (
     CAPABILITY_PATTERN,
     DEFAULT_TOOL_MAX_OUTPUT_BYTES,
@@ -5494,15 +5517,20 @@ class AgoraWorkspace:
         work: WorkRecord,
         runner: str | None,
     ) -> dict[str, object]:
-        input_sha256 = self._clarification_input_sha256(work)
+        method_context = self._clarification_method_context(root, swarm, work)
+        input_sha256 = self._canonical_sha256(method_context)
         prompt = (
-            "You are reviewing a governed work specification before drafting. Return only JSON "
+            "You are disambiguating governed work before its next lifecycle decision. "
+            "Return only JSON "
             "with a 'questions' array containing at most five objects. Each object must have a "
             "non-empty 'question' string and an 'answer' that is either a string or null. Ask only "
-            "targeted questions that expose material ambiguity; propose an answer only when the "
-            "provided context is sufficient.\n\n"
-            f"Title: {work.title}\nDescription: {work.description}\n"
-            f"Acceptance criteria: {json.dumps(work.acceptance_criteria, ensure_ascii=False)}"
+            "targeted questions that expose ambiguity material to the active Method Pack, its next "
+            "allowed transitions, role responsibilities, gates, or acceptance criteria. Do not "
+            "assume Scrum ceremonies, Kanban flow, specification phases, or any other methodology "
+            "unless the supplied Method Pack defines them. Propose an answer only when the "
+            "provided "
+            "context is sufficient.\n\n"
+            f"Governed context: {json.dumps(method_context, ensure_ascii=False, sort_keys=True)}"
         )
         payload = self._run_advisory_prompt(root, actor, swarm, work, prompt, runner)
         raw_questions = payload.get("questions")
@@ -5817,16 +5845,48 @@ class AgoraWorkspace:
         ).encode("utf-8")
         return hashlib.sha256(serialized).hexdigest()
 
-    @classmethod
-    def _clarification_input_sha256(cls, work: WorkRecord) -> str:
-        return cls._canonical_sha256(
+    @staticmethod
+    def _clarification_method_context(
+        root: Path, swarm: SwarmRecord, work: WorkRecord
+    ) -> dict[str, object]:
+        method_root = root / ".agora" / "methods" / swarm.method
+        contract = load_method_contract(method_root)
+        protocol_path = method_root / "PROTOCOL.md"
+        protocol = (
+            protocol_path.read_text(encoding="utf-8").strip() if protocol_path.is_file() else ""
+        )
+        transitions = [
             {
-                "kind": "clarification",
+                "target": transition.target,
+                "roles": transition.roles,
+                "gate": transition.gate,
+            }
+            for transition in contract.transitions
+            if transition.source == work.state
+        ]
+        return {
+            "kind": "clarification",
+            "method": {
+                "id": contract.id,
+                "name": contract.name,
+                "version": contract.version,
+                "current-state": work.state,
+                "next-transitions": transitions,
+                "required-roles": contract.required_roles,
+                "assignments": swarm.assignments,
+                "protocol": protocol,
+            },
+            "work": {
                 "title": work.title,
                 "description": work.description,
                 "acceptance-criteria": work.acceptance_criteria,
-            }
-        )
+                "required-artifacts": work.required_artifacts,
+            },
+        }
+
+    @classmethod
+    def _clarification_input_sha256(cls, root: Path, swarm: SwarmRecord, work: WorkRecord) -> str:
+        return cls._canonical_sha256(cls._clarification_method_context(root, swarm, work))
 
     @classmethod
     def _gherkin_input_sha256(cls, work: WorkRecord) -> str:
@@ -9166,7 +9226,7 @@ class AgoraWorkspace:
         for _, uri in artifact_rows:
             self._assert_artifact_reference(root, uri)
         evidence_rows = self._work_evidence_rows(work)
-        clarification_hash = self._clarification_input_sha256(work)
+        clarification_hash = self._clarification_input_sha256(root, swarm, work)
         gherkin_hash = self._gherkin_input_sha256(work)
         _, consistency_hash = self._consistency_inputs(root, work)
 
@@ -12118,6 +12178,9 @@ class AgoraWorkspace:
             suffix += 1
         return candidate
 
+    def _sdlc_service(self) -> SdlcService:
+        return SdlcService(self.project_root(), self._now)
+
     def _issue_tracker_service(self) -> IssueTrackerService:
         return IssueTrackerService(self.project_root(), now=self._now)
 
@@ -12174,6 +12237,104 @@ class AgoraWorkspace:
         tracker_resource = root / ".agora" / "issue-trackers"
         with WorkspaceLock(tracker_resource, "issue_tracker_sync"):
             return service.sync(data, adapter, reopen=reopen)
+
+    @_locked_mutation("project")
+    def create_intent(self, data: CreateIntentInput) -> IntentRecord:
+        return self._sdlc_service().create_intent(data)
+
+    @_locked_mutation("project")
+    def decide_intent(self, data: DecideIntentInput) -> IntentRecord:
+        return self._sdlc_service().decide_intent(data)
+
+    def list_intents(self, status: str | None = None) -> list[IntentRecord]:
+        return self._sdlc_service().list_intents(status)
+
+    @_locked_mutation("project")
+    def add_evaluation_suite(self, data: AddEvaluationSuiteInput) -> EvaluationSuiteRecord:
+        return self._sdlc_service().add_evaluation_suite(data)
+
+    @_locked_mutation("project")
+    def record_evaluation_run(self, data: RecordEvaluationRunInput) -> EvaluationRunRecord:
+        return self._sdlc_service().record_evaluation_run(data)
+
+    def list_evaluation_suites(self) -> list[EvaluationSuiteRecord]:
+        return self._sdlc_service().list_evaluation_suites()
+
+    def impacted_evaluation_suites(self, paths: list[str]) -> list[EvaluationSuiteRecord]:
+        return self._sdlc_service().impacted_evaluation_suites(paths)
+
+    def list_evaluation_runs(self, suite_id: str | None = None) -> list[EvaluationRunRecord]:
+        return self._sdlc_service().list_evaluation_runs(suite_id)
+
+    @_locked_mutation("project")
+    def add_review_finding(self, data: AddReviewFindingInput) -> ReviewFindingRecord:
+        root = self.project_root()
+        swarm = self._load_swarm(root, data.swarm_id)
+        self._load_work(swarm, data.work_id)
+        return SdlcService(root, self._now).add_review_finding(data)
+
+    @_locked_mutation("project")
+    def decide_review_finding(self, data: DecideReviewFindingInput) -> ReviewFindingRecord:
+        return self._sdlc_service().decide_review_finding(data)
+
+    def list_review_findings(
+        self, swarm_id: str | None = None, work_id: str | None = None
+    ) -> list[ReviewFindingRecord]:
+        if work_id is not None and swarm_id is None:
+            raise ValueError("--work requires --swarm when listing review findings")
+        return self._sdlc_service().list_review_findings(swarm_id, work_id)
+
+    @_locked_mutation("project")
+    def add_guardrail(self, data: AddGuardrailInput) -> GuardrailRecord:
+        return self._sdlc_service().add_guardrail(data)
+
+    def check_guardrails(self, action: str, target: str) -> GuardrailDecisionRecord:
+        return self._sdlc_service().check_guardrails(action, target)
+
+    def list_guardrails(self) -> list[GuardrailRecord]:
+        return self._sdlc_service().list_guardrails()
+
+    @_locked_mutation("project")
+    def add_trigger(self, data: AddTriggerInput) -> TriggerRecord:
+        return self._sdlc_service().add_trigger(data)
+
+    @_locked_mutation("project")
+    def ingest_trigger_event(self, data: IngestTriggerEventInput) -> TriggerEventRecord:
+        return self._sdlc_service().ingest_trigger_event(data)
+
+    def list_triggers(self) -> list[TriggerRecord]:
+        return self._sdlc_service().list_triggers()
+
+    def list_trigger_events(self) -> list[TriggerEventRecord]:
+        return self._sdlc_service().list_trigger_events()
+
+    @_locked_mutation("project")
+    def add_control_band(self, data: AddControlBandInput) -> ControlBandRecord:
+        return self._sdlc_service().add_control_band(data)
+
+    @_locked_mutation("project")
+    def evaluate_control_band(self, data: EvaluateControlBandInput) -> ControlBandFindingRecord:
+        return self._sdlc_service().evaluate_control_band(data)
+
+    def list_control_bands(self) -> list[ControlBandRecord]:
+        return self._sdlc_service().list_control_bands()
+
+    def sdlc_metrics(self) -> SdlcMetricsRecord:
+        root = self.project_root()
+        swarms = self.list_swarms()
+        terminal_by_swarm = {
+            swarm.id: load_method_contract(
+                root / ".agora" / "methods" / swarm.method
+            ).terminal_state
+            for swarm in swarms
+        }
+        work = self.list_work()
+        completed = sum(item.state == terminal_by_swarm[item.swarm_id] for item in work)
+        return SdlcService(root, self._now).metrics(
+            self.list_events(limit=1_000_000),
+            work_items=len(work),
+            completed_work_items=completed,
+        )
 
     def list_events(
         self,
@@ -12259,6 +12420,7 @@ class AgoraWorkspace:
             "pack-histories": 0,
             "pack-locks": 0,
             "pack-removals": 0,
+            "sdlc-records": 0,
             "work-revisions": 0,
             "evidence-entries": 0,
             "issue-tracker-bindings": 0,
@@ -12312,6 +12474,22 @@ class AgoraWorkspace:
                     f"Project version {project.version} is newer than this Agora CLI "
                     f"({CURRENT_PROJECT_VERSION})",
                 )
+
+        sdlc = SdlcService(root, self._now)
+        sdlc_paths = [
+            *sorted((root / ".agora" / "intents").glob("*/INTENT.md")),
+            *sorted((root / ".agora" / "evaluations" / "suites").glob("*/SUITE.md")),
+            *sorted((root / ".agora" / "evaluations" / "runs").glob("*/RUN.md")),
+            *sorted((root / ".agora" / "reviews" / "findings").glob("*/FINDING.md")),
+            *sorted((root / ".agora" / "guardrails").glob("*.md")),
+            *sorted((root / ".agora" / "triggers" / "rules").glob("*.md")),
+            *sorted((root / ".agora" / "triggers" / "events").glob("*/EVENT.md")),
+            *sorted((root / ".agora" / "control-bands").glob("*/BAND.md")),
+            *sorted((root / ".agora" / "control-bands").glob("*/findings/*/FINDING.md")),
+        ]
+        checked["sdlc-records"] = len(sdlc_paths)
+        for code, path, message in sdlc.validate():
+            issue(code, path, message)
 
         for directory in _child_directories(root / ".agora" / "upgrades"):
             path = directory / "UPGRADE.md"
@@ -13647,7 +13825,7 @@ class AgoraWorkspace:
                         lambda work=work: self._load_clarification_rows(work),
                     )
                     if isinstance(clarification_rows, list):
-                        current_hash = self._clarification_input_sha256(work)
+                        current_hash = self._clarification_input_sha256(root, swarm, work)
                         for row in clarification_rows:
                             resolve_actor(row["actor"], clarifications_path)
                             recorded_hash = row["input-sha256"]

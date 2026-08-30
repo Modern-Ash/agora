@@ -98,15 +98,47 @@ def main() -> None:
                 target_state="clarified",
             )
         )
-        for state in ("planned", "implementing"):
-            workspace.transition_work(
-                TransitionWorkInput(
-                    swarm_id=quickstart.swarm.id,
-                    work_id="discount-feature",
-                    actor_id="agent",
-                    target_state=state,
-                )
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id=quickstart.swarm.id,
+                work_id="discount-feature",
+                actor_id="agent",
+                target_state="planned",
             )
+        )
+        plan = root / "docs" / "plans" / "percentage-discount.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text(
+            "# Percentage discount implementation plan\n\n"
+            "Extend the API, preserve total(), and run the existing regression test.\n",
+            encoding="utf-8",
+        )
+        workspace.add_artifact(
+            AddArtifactInput(
+                swarm_id=quickstart.swarm.id,
+                work_id="discount-feature",
+                actor_id="agent",
+                kind="implementation-plan",
+                uri="repo://docs/plans/percentage-discount.md",
+            )
+        )
+        workspace.satisfy_criterion(
+            WorkActorInput(
+                swarm_id=quickstart.swarm.id,
+                work_id="discount-feature",
+                actor_id="owner",
+            ),
+            "compatible",
+            stage="planned",
+        )
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id=quickstart.swarm.id,
+                work_id="discount-feature",
+                actor_id="agent",
+                target_state="implementing",
+            )
+        )
 
         (root / "calculator.py").write_text(
             "def total(values: list[int]) -> int:\n"

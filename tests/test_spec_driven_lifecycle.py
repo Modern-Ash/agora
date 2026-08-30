@@ -24,6 +24,9 @@ def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
     specification = tmp_path / "docs" / "specs" / "increment.md"
     specification.parent.mkdir(parents=True)
     specification.write_text("# Increment specification\n", encoding="utf-8")
+    plan = tmp_path / "docs" / "plans" / "increment.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# Increment implementation plan\n", encoding="utf-8")
     workspace = AgoraWorkspace(cwd=tmp_path)
     workspace.configure(
         ConfigureInput(
@@ -180,7 +183,7 @@ def test_spec_driven_tracks_criterion_progress_without_transferring_acceptance(
     assert specified.criterion_statuses == {"observable": ["specified"]}
     assert specified.satisfied_criteria == []
 
-    with pytest.raises(ValueError, match="cannot reach verified before: implemented"):
+    with pytest.raises(ValueError, match="cannot reach verified before: planned, implemented"):
         workspace.satisfy_criterion(
             WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
             criterion_id="observable",
@@ -219,6 +222,7 @@ def _walk_increment_to_completion(workspace: AgoraWorkspace) -> None:
     workspace.satisfy_criterion(
         WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
         criterion_id="idempotent",
+        stage="specified",
     )
     workspace.add_artifact(
         AddArtifactInput(
@@ -239,6 +243,20 @@ def _walk_increment_to_completion(workspace: AgoraWorkspace) -> None:
             swarm_id="delivery", work_id="increment", actor_id="dev", target_state="planned"
         )
     )
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="dev",
+            kind="implementation-plan",
+            uri="repo://docs/plans/increment.md",
+        )
+    )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
+        criterion_id="idempotent",
+        stage="planned",
+    )
     workspace.transition_work(
         TransitionWorkInput(
             swarm_id="delivery", work_id="increment", actor_id="dev", target_state="implementing"
@@ -248,6 +266,16 @@ def _walk_increment_to_completion(workspace: AgoraWorkspace) -> None:
         TransitionWorkInput(
             swarm_id="delivery", work_id="increment", actor_id="dev", target_state="verifying"
         )
+    )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="dev"),
+        criterion_id="idempotent",
+        stage="implemented",
+    )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="dev"),
+        criterion_id="idempotent",
+        stage="verified",
     )
     workspace.add_artifact(
         AddArtifactInput(
@@ -272,6 +300,11 @@ def _walk_increment_to_completion(workspace: AgoraWorkspace) -> None:
         AddApprovalInput(
             swarm_id="delivery", work_id="increment", actor_id="owner", role_id="spec-owner"
         )
+    )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
+        criterion_id="idempotent",
+        stage="accepted",
     )
     completed = workspace.transition_work(
         TransitionWorkInput(

@@ -15,8 +15,15 @@ in a gate. Clarifications and checklists remain non-binding even when a role may
 agora work clarify --swarm delivery --work payment-retry --by spec-owner
 ```
 
-The assigned actor's configured runtime returns at most five targeted questions. Agora appends them
-to `clarifications.md` using schema `agora/clarifications/v1`; unresolved answers remain empty. An
+The assigned actor's configured runtime returns at most five targeted questions. The reviewed
+prompt includes the active Method Pack id and version, current work state, reachable transitions,
+their roles and gates, current assignments, and `PROTOCOL.md`. It therefore asks Scrum questions
+about its declared delivery policy, Kanban questions about its declared flow policy, and
+Spec-driven questions about its declared specification lifecycle without hard-coding any of those
+methods in Core. Custom Method Packs receive the same treatment.
+
+Agora appends the questions to `clarifications.md` using schema
+`agora/clarifications/v1`; unresolved answers remain empty. An
 authenticated actor first uses `work clarify-prepare`, exports and signs the action authorization,
 then applies it with `agora action apply`.
 
@@ -29,7 +36,9 @@ command's documented JSON shape on standard output:
 ```
 
 The array may contain zero to five entries. Questions must be non-empty; answers are strings or
-`null`.
+`null`. Clarification provenance covers both work inputs and the active method context. Changing
+the work, Method Pack, transition policy, assignments, or protocol makes earlier questions stale
+in `agora work traceability` and `agora validate`.
 
 ## Maintain a non-binding checklist
 
