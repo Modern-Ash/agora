@@ -74,8 +74,6 @@ do not exist as one static agent file in this repository.
 - [Spec tooling and runtime resilience](guides/spec-tooling-and-runtime-resilience.md): clarify
   intent, maintain non-binding checklists, verify artifacts, generate Gherkin, configure runtime
   fallbacks, and render the aggregate board.
-- [AI-native SDLC controls](guides/ai-native-sdlc.md): govern intent, continuous evaluations,
-  structured reviews, runtime guardrails, idempotent triggers, control bands, and delivery metrics.
 - [Getting started](getting-started.md): follow the governed workflow from installation to completed
   work.
 - [Installation and customization](guides/installation-and-customization.md): configure user,
