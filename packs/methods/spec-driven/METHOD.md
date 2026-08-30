@@ -2,7 +2,7 @@
 schema: "agora/method/v1"
 id: "spec-driven"
 name: "Spec-Driven Development"
-version: "1.1.0"
+version: "1.2.0"
 dependencies: []
 required-roles: ["spec-owner", "developer"]
 work-states: ["drafting", "clarified", "planned", "implementing", "verifying", "completed"]

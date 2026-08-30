@@ -186,11 +186,12 @@ class GateSummary(SerializableDTO):
     required_evidence_types: tuple[str, ...]
     require_content_addressed_evidence: bool
     required_approval_roles: tuple[str, ...]
+    require_resolved_clarifications: bool
     require_clean_git: bool
     require_git_commit: bool
     blockers: tuple[GateBlockerSummary, ...] = ()
     satisfied: bool | None = None
-    schema: str = field(default="agora/application/gate-summary/v2", init=False)
+    schema: str = field(default="agora/application/gate-summary/v3", init=False)
 
 
 @dataclass(frozen=True)

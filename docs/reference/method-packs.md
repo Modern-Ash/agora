@@ -197,6 +197,7 @@ required-artifacts: ["verification-report"]
 required-criterion-stage: "accepted"
 require-successful-evidence: true
 required-approval-roles: ["owner"]
+require-resolved-clarifications: true
 required-evidence-types: ["automated-test-run", "code-review"]
 require-content-addressed-evidence: true
 require-clean-git: true
@@ -220,6 +221,12 @@ cannot skip its predecessors. When `criterion-stage-roles` names a stage, the ac
 those roles as well as `criterion.satisfy` authority. Omitting `--stage` remains the
 adoption-friendly shortcut, but the acting role must be authorized for every configured stage.
 Legacy packs without the mapping retain their existing action-based behavior.
+
+`require-resolved-clarifications: true` requires a clarification run whose recorded input digest
+matches the current work, Method Pack context, assignments, and bounded registered specification
+contents. The latest run must leave zero unanswered questions. Missing, legacy, stale, malformed,
+or unresolved clarification records fail the gate closed. The bundled Spec-Driven Method Pack uses
+this requirement on `drafting -> clarified`; other bundled methods leave it disabled.
 
 `required-evidence-types` requires a successful record for each named evidence type. The optional
 `require-content-addressed-evidence` additionally requires every selected successful reference to

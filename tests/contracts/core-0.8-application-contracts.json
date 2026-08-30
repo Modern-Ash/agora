@@ -127,6 +127,7 @@
           "require_content_addressed_evidence": false,
           "require_git_commit": false,
           "require_required_artifacts": true,
+          "require_resolved_clarifications": false,
           "require_successful_evidence": true,
           "required_approval_roles": [
             "product-owner"
@@ -135,7 +136,7 @@
           "required_criterion_stage": "accepted",
           "required_evidence_types": [],
           "satisfied": true,
-          "schema": "agora/application/gate-summary/v2"
+          "schema": "agora/application/gate-summary/v3"
         }
       ],
       "method": "scrum",

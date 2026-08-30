@@ -1,13 +1,15 @@
 # Spec tooling and runtime resilience
 
-Agora provides advisory specification tools without weakening Method Pack gates. Clarifications,
-checklists, consistency reports, and generated Gherkin never satisfy acceptance criteria, grant an
-approval, or transition work by themselves.
+Agora provides specification tools without allowing generated output to transition work by itself.
+Checklists, consistency reports, and generated Gherkin remain advisory. A Method Pack may make the
+latest clarification run a gate precondition with `require-resolved-clarifications`; the bundled
+Spec-Driven pack does so before `drafting -> clarified`.
 
 These commands are cross-method capabilities: they work in any Method Pack whose assigned role
-grants the corresponding action. They are optional by default. A project can make a generated
+grants the corresponding action. Except for clarification in the bundled Spec-Driven pack, they are
+optional by default. A project can make a generated
 `consistency-report` or `gherkin-feature` mandatory by declaring that artifact kind on the work or
-in a gate. Clarifications and checklists remain non-binding even when a role may create them.
+in a gate. Checklists remain non-binding even when a role may create them.
 
 ## Clarify intent
 
@@ -23,7 +25,10 @@ Spec-driven questions about its declared specification lifecycle without hard-co
 methods in Core. Custom Method Packs receive the same treatment.
 
 Agora appends the questions to `clarifications.md` using schema
-`agora/clarifications/v1`; unresolved answers remain empty. An
+`agora/clarifications/v1`; unresolved answers remain empty. Each run also records its input digest,
+question count, unanswered count, actor, and timestamp. Registered `repo://` specification contents
+are included in the bounded clarification context, so a Spec Owner can answer questions in the spec
+and rerun clarification. An
 authenticated actor first uses `work clarify-prepare`, exports and signs the action authorization,
 then applies it with `agora action apply`.
 
@@ -36,9 +41,10 @@ command's documented JSON shape on standard output:
 ```
 
 The array may contain zero to five entries. Questions must be non-empty; answers are strings or
-`null`. Clarification provenance covers both work inputs and the active method context. Changing
-the work, Method Pack, transition policy, assignments, or protocol makes earlier questions stale
-in `agora work traceability` and `agora validate`.
+`null`. Clarification provenance covers work inputs, registered specification contents, and the
+active method context. Changing any of those inputs makes the latest run stale. With
+`require-resolved-clarifications`, stale provenance or any unanswered question blocks the governed
+transition. `agora work traceability` and `agora validate` expose stale generated output.
 
 ## Maintain a non-binding checklist
 
