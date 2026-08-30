@@ -79,6 +79,12 @@ $agora-review Review payment-idempotency against its criteria, artifacts, and ev
 The skill tells Codex to read the project protocol and use the Agora CLI. Material state belongs in
 `.agora`, not only in the conversation.
 
+The generated `agora-specify` skill treats clarification as Method Pack-aware. It inspects the
+active lifecycle, roles, gates, assignments, and protocol before invoking `agora work clarify`,
+relays unresolved questions to the user, and never turns a runtime suggestion into a satisfied
+criterion, approval, evidence record, or state transition. The same portable instruction is
+projected for Claude and generic environments.
+
 When a Codex chat invokes Agora, the portable execution and status skills enable or preserve
 `AGORA_TRACE=compact` and relay the resulting `stderr` phases before summarizing the final JSON.
 This exposes engine progress in the conversation without parsing TTY animation or mixing it with
