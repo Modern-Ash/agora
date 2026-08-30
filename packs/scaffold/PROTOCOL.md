@@ -18,20 +18,22 @@ project: "{{PROJECT_NAME}}"
 8. Stop and request approval when a policy or gate cannot be satisfied.
 9. Use installed Tool Pack operations for governed external actions, retain their results, and use
    `agora tool result --run <id>` when captured provider output must be inspected.
-10. Read `.agora/STANDARDS.md` and validate commit messages before creating repository history.
-11. When an actor requires authentication, prepare, externally sign, and apply each covered
+10. In chat and non-TTY environments, run Agora with `AGORA_TRACE=compact` and relay its stderr
+   milestones. Never merge trace lines into the structured stdout result.
+11. Read `.agora/STANDARDS.md` and validate commit messages before creating repository history.
+12. When an actor requires authentication, prepare, externally sign, and apply each covered
     lifecycle mutation through its durable `ACTION.md` intent.
-12. For environment-aware Tool Runs, select a project environment and satisfy its role, approval,
+13. For environment-aware Tool Runs, select a project environment and satisfy its role, approval,
     and evidence policy before preparation and again before launch.
-13. When `.agora/coordination.md` selects an external lease, do not bypass the Agora mutation path;
+14. When `.agora/coordination.md` selects an external lease, do not bypass the Agora mutation path;
     local and distributed writer coordination are cumulative.
-14. During a running session, record concise material milestones through `agora session progress`.
+15. During a running session, record concise material milestones through `agora session progress`.
     Do not persist chain-of-thought, hidden reasoning, credentials, or raw provider output there.
-15. Treat clarifications, checklists, consistency reports, and generated Gherkin as advisory until
+16. Treat clarifications, checklists, consistency reports, and generated Gherkin as advisory until
     the active Method Pack's existing criteria, evidence, artifact, approval, and transition rules
     make an exact durable record binding. Runtime fallback changes execution backend only; it never
     changes actor identity or authority.
-16. Before relying on generated advisory output, inspect `agora work traceability` or validation
+17. Before relying on generated advisory output, inspect `agora work traceability` or validation
     warnings and regenerate records whose bound input SHA-256 no longer matches current work.
 
 The repository and its active branch are the shared source of truth. Chat history is not durable

@@ -15,6 +15,28 @@ flowchart LR
     J --> S
 ```
 
+## Engine visibility in terminals, chat, and CI
+
+The final command result remains on `stdout`. Enable a separate, line-oriented engine trace on
+`stderr` when a human or chat host needs to see the phases while Agora is running:
+
+```bash
+agora --trace compact run --swarm delivery --until-blocked
+agora --trace detailed tracker sync --tracker github --project owner/repository
+AGORA_TRACE=jsonl agora status
+```
+
+The modes are `off`, `compact`, `detailed`, and `jsonl`; a command-line value overrides
+`AGORA_TRACE`. `compact` is intended for conversation relay, `detailed` adds stable codes and the
+operation id, and `jsonl` emits `agora/application/engine-trace-event/v1`. Every event contains an
+operation id, monotonic sequence, phase, status, code, bounded summary, UTC timestamp, and string
+references. Trace output is flushed per event even when no TTY is attached.
+
+Trace events are an observation channel, not another ledger. They exclude provider output,
+credentials, prompts, and model reasoning, and they never replace `SESSION.md`, Tool Run results,
+work events, or the Activity Ledger. Agora-launched Codex and Claude sessions inherit
+`AGORA_TRACE=compact` unless the caller already chose another mode.
+
 ## Project status
 
 Run a compact project-wide summary from the project or with the global project selector:
@@ -58,6 +80,8 @@ agora delegation list --status accepted
 agora delegation list --status cancelled
 agora delegation status-changes --delegation specialist-task
 agora session list --status prepared
+agora tracker bindings
+agora tracker events
 ```
 
 Filters match persisted values exactly. An empty machine result is an empty JSON array, not an
@@ -134,7 +158,12 @@ It checks:
 - Actor documents, ids, kinds, capabilities, and referenced user actors.
 - Swarm identity, status, assignments, role compatibility, recursive cycles, and depth.
 - Work identity, owning swarm, lifecycle and operational states, criteria, companion registers, WIP,
-  interruption history, advisory records, generated-output provenance, and derived swarm state.
+  interruption history, revision continuity and snapshot digests, advisory records,
+  generated-output provenance, and derived swarm state.
+- Structured evidence ids, revision ownership, deduplication keys, test counts, tested commits,
+  registered artifact digests, and non-empty successful artifacts.
+- Issue-tracker binding ownership, normalized snapshot identity and digest, immutable reconciliation
+  event identity, and missing binding references.
 - Handoff identities, roles, actors, and optional work references.
 - Delegation parent and child records, attribution, lifecycle links, interruption sequence, and
   collected results.

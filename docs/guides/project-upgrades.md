@@ -44,6 +44,13 @@ installation. Install the reviewed neutral pack separately:
 agora pack install --kind tool --id code-review --scope project
 ```
 
+The `0.3.0` to `0.4.0` migration materializes revision `1` for existing work. An open work item gets
+an open revision ledger; terminal work gets a closed, content-addressed snapshot of `WORK.md`,
+`artifacts.md`, `evidence.md`, and `approvals.md`. Existing Method Pack permissions remain unchanged;
+the role already trusted to enter the Method's terminal state authorizes reopening. Actors that
+require detached signatures remain fail-closed until `work.reopen` gains a signed prepare/apply
+variant.
+
 Then amend project roles deliberately or install a newer reviewed Method Pack. An upgrade never
 grants new external authority silently.
 

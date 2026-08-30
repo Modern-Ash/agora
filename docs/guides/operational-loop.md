@@ -109,7 +109,13 @@ AGORA_ACTOR
 AGORA_EXECUTOR
 AGORA_SWARM
 AGORA_WORK
+AGORA_TRACE
 ```
+
+Agora sets `AGORA_TRACE=compact` for launched sessions unless the parent environment already chose
+`off`, `detailed`, or `jsonl`. Portable Codex, Claude, and generic instructions tell the chat host to
+relay these `stderr` lines as execution visibility. This environment value controls observation
+only; it does not grant authority or alter the Method Pack.
 
 The session lock is released before the external process starts. The actor can therefore invoke
 Agora to persist transitions, artifacts, evidence, approvals, delegations, or blocks while its
@@ -194,6 +200,20 @@ provider output in this view. The console contains only policy and lifecycle fac
 Full bounded process output remains in the session's `RESULT.md` for explicit audit. Interactive
 output is written to `stderr`; scripts, pipes, and IDE capture receive the final structured JSON on
 `stdout`, while a terminal receives the concise human result.
+
+For a stable non-interactive stream, including when Agora is invoked from a Codex or Claude chat,
+enable the engine trace explicitly:
+
+```bash
+agora --trace compact run --actor implementation-agent --until-blocked
+AGORA_TRACE=jsonl agora run --actor implementation-agent
+```
+
+`compact` emits one flushed line per phase. `detailed` adds the stable event code and operation id;
+`jsonl` emits `agora/application/engine-trace-event/v1`. The trace observes selection, session
+completion, tracker fetch/reconciliation, stop conditions, and command success or failure as those
+facts occur. It is separate from the animated TTY block and remains available when no terminal is
+attached.
 
 During a live session, the fixed console block includes one `Now:` line. It rotates slowly through
 the active lifecycle boundary, role authority, output limit, and the durable records Agora is

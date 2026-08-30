@@ -31,8 +31,8 @@ def test_new_projects_use_the_current_version_and_need_no_upgrade(
     configuration = workspace.initialize(InitInput(integration="generic"))
     result = workspace.upgrade(UpgradeInput())
 
-    assert configuration.version == "0.3.0"
-    assert read_markdown(root / ".agora" / "project.md").attributes["version"] == "0.3.0"
+    assert configuration.version == "0.4.0"
+    assert read_markdown(root / ".agora" / "project.md").attributes["version"] == "0.4.0"
     assert result.required is False
     assert result.applied is False
     assert not (root / ".agora" / "upgrades").exists()
@@ -60,7 +60,7 @@ def test_upgrades_0_2_without_installing_new_pack_authority(
     assert [change.path for change in plan.changes] == [".agora/project.md"]
     assert any("not installed implicitly" in warning for warning in plan.warnings)
     assert result.applied is True
-    assert read_markdown(project_path).attributes["version"] == "0.3.0"
+    assert read_markdown(project_path).attributes["version"] == "0.4.0"
     assert role_path.read_text(encoding="utf-8") == role_before
     assert not (root / ".agora" / "tools" / "code-review").exists()
     assert workspace.validate().ok
@@ -136,7 +136,7 @@ id: "legacy"
     result = workspace.upgrade(UpgradeInput(apply=True, id="upgrade-legacy"))
 
     assert result.applied is True
-    assert read_markdown(project_path).attributes["version"] == "0.3.0"
+    assert read_markdown(project_path).attributes["version"] == "0.4.0"
     work = read_markdown(work_path).attributes
     assert work["operational-status"] == "active"
     assert work["status-reason"] is None
@@ -234,7 +234,7 @@ def test_cli_previews_and_applies_an_upgrade(project: tuple[Path, AgoraWorkspace
     )
     assert '"applied": true' in output.getvalue()
     assert errors.getvalue() == ""
-    assert read_markdown(path).attributes["version"] == "0.3.0"
+    assert read_markdown(path).attributes["version"] == "0.4.0"
     assert workspace.validate().ok is True
 
     backup = root / ".agora" / "upgrades" / "upgrade-cli" / "backup" / ".agora" / "project.md"

@@ -8,6 +8,7 @@ and evidence references in Markdown and Git.
 
 | Adapter | Neutral contract | Operations | Default write authority |
 | --- | --- | --- | --- |
+| Core issue reconciliation | `IssueTrackerPort` | bind, read, compare, reopen local revision | None on GitHub |
 | `github-issues` | `work-management` | search, view, create, comment, close, reopen | Owner roles |
 | `github-pull-requests` | `code-review` | list, view, create, comment, checks, decisions, merge | Merge ungranted |
 | `github-actions` | `ci-cd` | runs, workflows, cancellation, deployments | Cancel/deploy ungranted |
@@ -53,6 +54,11 @@ agora validate
 
 Agora does not run `gh auth login`, refresh scopes, read tokens, or persist credentials.
 
+Core issue reconciliation reuses the reviewed `github-issues` executable and minimum-version
+declaration (`gh >= 2.45.0`) but does not require installing the adapter into project Tool Pack
+state. Tool Pack installation governs explicit issue operations; reconciliation is a read-only Core
+port and grants no GitHub write capability.
+
 ## Authority
 
 Bundled roles receive routine read and collaboration capabilities. The sensitive capabilities stay
@@ -73,6 +79,32 @@ separate:
 Grant an unassigned capability only through a reviewed project-local Method Pack amendment, refresh
 `PACKS.lock.md`, and combine it with work approval and evidence policy appropriate to the target.
 An authenticated `gh` profile never grants Agora authority by itself.
+
+## Reconcile a bound GitHub issue
+
+Bind the issue once, including the local actor whose Method Pack role Core must authorize for a
+future work reopen:
+
+```bash
+agora tracker bind --id github-change-42 \
+  --swarm delivery --work github-change \
+  --tracker github --project example/agora --issue 42 \
+  --reopen-by owner
+
+agora --trace compact sync github --repo example/agora
+agora tracker events
+```
+
+`gh issue view` returns native JSON that the adapter normalizes to the same contract used by Jira.
+Agora retains the numeric issue id, `login` author subject, display name, labels, milestone, comment
+count, provider update timestamp, and payload SHA-256. Repeating an unchanged payload is idempotent.
+If the previous normalized state was `closed` and the new state is `open`, Core can reopen terminal
+work as a new immutable revision after rechecking local authority. No GitHub comment, close, reopen,
+Pull Request, check, or deployment mutation occurs on this path.
+
+Use `agora tracker sync --tracker github --project example/agora` when an integration prefers the
+provider-neutral spelling. See [Cycle revalidation and issue trackers](cycle-revalidation.md) for
+revision and evidence semantics.
 
 ## Delivery path
 

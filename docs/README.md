@@ -74,14 +74,14 @@ do not exist as one static agent file in this repository.
 - [Spec tooling and runtime resilience](guides/spec-tooling-and-runtime-resilience.md): clarify
   intent, maintain non-binding checklists, verify artifacts, generate Gherkin, configure runtime
   fallbacks, and render the aggregate board.
-- [AI-native SDLC controls](guides/ai-native-sdlc.md): govern intent, continuous evaluations,
-  structured reviews, runtime guardrails, idempotent triggers, control bands, and delivery metrics.
 - [Getting started](getting-started.md): follow the governed workflow from installation to completed
   work.
 - [Installation and customization](guides/installation-and-customization.md): configure user,
   project, lifecycle, actor, template, and agent-environment scopes.
 - [Project upgrades](guides/project-upgrades.md): preview and apply protocol migrations without
   replacing local policy.
+- [Cycle revalidation and issue trackers](guides/cycle-revalidation.md): stream engine phases in
+  chat, reopen immutable work revisions, and reconcile GitHub or Jira through one Core contract.
 
 ## Governance and operations
 
@@ -138,13 +138,14 @@ do not exist as one static agent file in this repository.
 ## Ecosystem integrations
 
 - [GitHub ecosystem](guides/github-ecosystem.md): install and govern Issues, Pull Requests, Actions,
-  repository policy, releases, security alerts, Projects, and explicit snapshots.
+  repository policy, releases, security alerts, Projects, explicit snapshots, and Core issue
+  revalidation.
 - [CLI-first ecosystem adapters](guides/cli-first-adapters.md): prefer reviewed native CLIs while
   retaining MCP as an explicit alternative transport.
 - [Code-review integrations](guides/code-review-integrations.md): govern Pull Requests, checks,
   decisions, and opt-in merge authority.
 - [Work-management integrations](guides/work-management-integrations.md): connect issue trackers
-  through a provider-neutral operation contract.
+  through provider-neutral Tool Runs and one read-only GitHub/Jira reconciliation contract.
 - [CI/CD integrations](guides/ci-cd-integrations.md): inspect and trigger pipelines while governing
   cancellation and deployment.
 - [Knowledge-base integrations](guides/knowledge-base-integrations.md): separate documentation draft,

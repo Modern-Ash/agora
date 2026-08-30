@@ -1,11 +1,15 @@
+import json
 import os
 import threading
 import time
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, is_dataclass, replace
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, TextIO
 
+from agora.application.dto import EngineTraceEvent
 from agora.model import RunLoopEvent
 
 _DISABLED_VALUES = {"1", "true", "yes", "on"}
@@ -21,6 +25,127 @@ _ANSI = {
     "bold_yellow": "1;33",
     "bold_red": "1;31",
 }
+
+TRACE_MODES = ("off", "compact", "detailed", "jsonl")
+
+
+class EngineTrace:
+    """Emit safe Core progress to stderr, including when no TTY is available."""
+
+    def __init__(
+        self,
+        stream: TextIO,
+        mode: str,
+        *,
+        operation_id: str | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        if mode not in TRACE_MODES:
+            raise ValueError(f"Unsupported trace mode: {mode}")
+        self.stream = stream
+        self.mode = mode
+        self.operation_id = operation_id or f"cli-{uuid.uuid4().hex[:12]}"
+        self._now = now or (lambda: datetime.now(UTC))
+        self._sequence = 0
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != "off"
+
+    def emit(
+        self,
+        phase: str,
+        status: str,
+        code: str,
+        summary: str,
+        references: dict[str, str] | None = None,
+    ) -> EngineTraceEvent:
+        self._sequence += 1
+        event = EngineTraceEvent(
+            operation_id=self.operation_id,
+            sequence=self._sequence,
+            phase=phase,
+            status=status,
+            code=code,
+            summary=summary,
+            timestamp=self._now().astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            references=references or {},
+        )
+        if self.enabled:
+            self._render(event)
+        return event
+
+    def handle_run_event(self, event: RunLoopEvent) -> None:
+        if event.kind == "step-selected" and event.task is not None:
+            references = {
+                "step": f"{event.step}/{event.max_steps}",
+                "actor": event.task.actor or "unassigned",
+                "role": event.task.role or "unassigned",
+                "state": event.before_state or "unknown",
+            }
+            self.emit(
+                "run.select",
+                "running",
+                "run.step-selected",
+                "Selected the next governed action",
+                references,
+            )
+            return
+        if event.kind == "session-finished" and event.session is not None:
+            self.emit(
+                "run.session",
+                "succeeded" if event.session.status == "completed" else "failed",
+                f"session.{event.session.status}",
+                "Governed session reached a terminal result",
+                {
+                    "step": f"{event.step}/{event.max_steps}",
+                    "session": event.session.id,
+                    "transition": f"{event.before_state or '?'}->{event.after_state or '?'}",
+                },
+            )
+            return
+        if event.kind == "loop-stopped":
+            self.emit(
+                "run.stop",
+                "blocked" if event.stop_reason == "human-attention" else "succeeded",
+                f"run.{event.stop_reason or 'stopped'}",
+                "Governed run loop stopped",
+                {"step": f"{event.step}/{event.max_steps}"},
+            )
+
+    def _render(self, event: EngineTraceEvent) -> None:
+        if self.mode == "jsonl":
+            value = json.dumps(event.to_dict(), ensure_ascii=True, sort_keys=True)
+        else:
+            marker = {
+                "running": "...",
+                "succeeded": "OK ",
+                "blocked": "!! ",
+                "failed": "XX ",
+            }.get(event.status, "-- ")
+            details = " ".join(f"{key}={value}" for key, value in event.references.items())
+            value = (
+                f"AGORA {event.sequence:02d} {marker} {event.phase:<20} {event.summary}"
+                f"{(' | ' + details) if details else ''}"
+            )
+            if self.mode == "detailed":
+                value += f" | code={event.code} operation={event.operation_id}"
+        try:
+            self.stream.write(value + "\n")
+            self.stream.flush()
+        except (OSError, ValueError):
+            self.mode = "off"
+
+
+def configured_trace_mode(explicit: str | None) -> str:
+    if explicit is not None:
+        return explicit
+    configured = os.environ.get("AGORA_TRACE", "off").strip().lower()
+    if configured in {"1", "true", "yes", "on"}:
+        return "compact"
+    if configured not in TRACE_MODES:
+        raise ValueError(f"Unsupported AGORA_TRACE mode: {configured}")
+    return configured
 
 
 @dataclass(frozen=True)

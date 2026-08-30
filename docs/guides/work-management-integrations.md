@@ -5,6 +5,16 @@ trackers and backlog systems. The pack governs who may read, create, comment on,
 external work. It does not make Jira, Linear, or any external provider the owner of Agora lifecycle
 state.
 
+Agora exposes two complementary provider-neutral paths:
+
+- **Tool Runs** govern explicit external reads and writes through the operation contract below.
+- **Issue reconciliation** reads bound GitHub or Jira issues through one Core port, records
+  normalized snapshots, and can reopen terminal Agora work when the provider reports
+  `closed -> open`.
+
+The second path does not replace the first or grant `issue.write`/`issue.transition`. It is a
+read-only observation followed by an independently authorized local lifecycle mutation.
+
 ## Stable operation contract
 
 New projects receive `.agora/tools/work-management` with this interface:
@@ -43,6 +53,56 @@ workctl issue transition AGORA-42 --to "In Progress" --output json
 Agora passes every array element directly to the executable without a shell. The adapter translates
 these stable verbs into the selected provider CLI or API client and writes its result to standard
 output. A provider migration changes the adapter, not Method Pack permissions or Agora's kernel.
+
+## Bind and reconcile issue state
+
+Bind one external identity to one Agora work item and select the actor Core must authorize if the
+issue later reopens:
+
+```bash
+agora tracker bind --id github-agora-42 \
+  --swarm release --work release-candidate \
+  --tracker github --project example/agora --issue 42 \
+  --reopen-by product-owner
+
+agora tracker bind --id jira-agora-42 \
+  --swarm release --work release-candidate \
+  --tracker jira --project AGORA --issue AGORA-42 \
+  --reopen-by product-owner
+```
+
+The external identity is unique across bindings. The selected actor must be assigned to a role that
+is authorized for the Method Pack transition into its terminal state; discovering a provider event
+does not bypass that check.
+
+Synchronize with the provider convenience commands or the equivalent neutral command:
+
+```bash
+agora --trace compact sync github --repo example/agora
+agora --trace compact sync jira --project AGORA \
+  --closed-state Done --closed-state Resolved
+
+agora tracker sync --tracker github --project example/agora
+agora tracker bindings --tracker github --project example/agora
+agora tracker events
+```
+
+Both adapters return the same normalized fields: issue identity, title, `open`/`closed` state, URL,
+provider update timestamp, native author subject and display name, labels, milestone when supported,
+comment count, and canonical payload SHA-256. GitHub preserves the author `login`; Jira preserves
+the reporter `accountId`. Jira status names are mapped to `closed` by the repeatable
+`--closed-state` option; without it, `done`, `closed`, and `resolved` are used case-insensitively.
+
+The adapters use structured argument vectors and JSON only, cap each provider response at 1 MiB,
+and hide provider output on failure. They validate the bundled reviewed Tool Pack before fetching:
+GitHub requires `gh >= 2.45.0`, and Jira requires `acli >= 1.3.0`. Credentials remain in those
+native CLIs.
+
+The first snapshot produces `created`; later payloads produce `updated`, `closed`, `reopened`, or
+`unchanged`. Replaying the same provider payload does not duplicate its event or work revision. A
+`reopened` event creates a new immutable Agora work revision only if the bound work is currently at
+its Method Pack terminal state. Inspect the durable paths and migration behavior in
+[Cycle revalidation and issue trackers](cycle-revalidation.md).
 
 ## Native GitHub Issues adapter
 
@@ -219,11 +279,12 @@ inherits the caller's environment. Adding a new adapter means declaring its `cre
 
 ## Two sources of truth
 
-Agora owns actor identity, role assignment, lifecycle gates, work evidence, approvals, tool-run
-attribution, and its filesystem history. The external system owns its remote ticket data. A ticket
-transition does not implicitly transition Agora work, and an Agora work transition does not
-implicitly mutate a ticket. Agents must execute both governed actions when synchronization is part
-of the team's protocol.
+Agora owns actor identity, role assignment, lifecycle gates, work revisions, evidence, approvals,
+tool-run attribution, and its filesystem history. The external system owns its remote ticket data.
+A ticket transition does not generally transition Agora work, and an Agora work transition never
+implicitly mutates a ticket. The one explicit reconciliation rule is a normalized `closed -> open`
+fact for a bound issue: Core may reopen terminal work after rechecking the configured actor and
+Method Pack authority. Provider writes still require separate governed Tool Runs.
 
 This separation prevents a provider outage or vendor migration from making the local governance
 record unreadable. Git remains the review and synchronization layer for Agora's Markdown state.
