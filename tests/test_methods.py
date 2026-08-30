@@ -55,6 +55,23 @@ def test_loads_the_spec_driven_pack_with_its_clarification_gate() -> None:
     assert contract.gates["spec-clarified"].required_artifacts == ["spec"]
     assert contract.gates["spec-clarified"].required_criterion_stage == "specified"
 
+    implementation = next(
+        rule
+        for rule in contract.transitions
+        if rule.source == "planned" and rule.target == "implementing"
+    )
+    assert implementation.gate == "plan-approved"
+    assert contract.gates["plan-approved"].required_artifacts == ["implementation-plan"]
+    assert contract.gates["plan-approved"].required_criterion_stage == "planned"
+    assert contract.criterion_stages == [
+        "specified",
+        "planned",
+        "implemented",
+        "verified",
+        "accepted",
+    ]
+    assert contract.criterion_stage_roles["planned"] == ["spec-owner"]
+
     completion = next(rule for rule in contract.transitions if rule.target == "completed")
     assert completion.roles == ["spec-owner"]
     assert completion.gate == "completion"

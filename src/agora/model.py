@@ -2155,3 +2155,250 @@ class AddEnvironmentInput:
     required_approval_roles: list[str] = field(default_factory=list)
     require_successful_evidence: bool = False
     force: bool = False
+
+
+# AI-native SDLC records remain provider-neutral and Markdown-first.  They are
+# deliberately small contracts: external runners perform model evaluation,
+# webhooks deliver events, and monitoring systems provide metric values; Core
+# validates and persists the governance result.
+
+
+@dataclass(frozen=True)
+class CreateIntentInput:
+    id: str
+    author: str
+    problem: str
+    outcome: str
+    affected_systems: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    source: str | None = None
+
+
+@dataclass(frozen=True)
+class DecideIntentInput:
+    id: str
+    decision: Literal["accepted", "rejected"]
+    actor: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class IntentRecord:
+    id: str
+    status: Literal["draft", "accepted", "rejected"]
+    author: str
+    problem: str
+    outcome: str
+    affected_systems: list[str]
+    constraints: list[str]
+    open_questions: list[str]
+    source: str | None
+    created_at: str
+    decided_by: str | None
+    decided_at: str | None
+    decision_reason: str | None
+    path: str
+
+
+@dataclass(frozen=True)
+class AddEvaluationSuiteInput:
+    id: str
+    cases: list[str]
+    minimum_pass_rate: int = 100
+    trigger_paths: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RecordEvaluationRunInput:
+    id: str
+    suite_id: str
+    passed: int
+    total: int
+    evidence: list[str] = field(default_factory=list)
+    runtime: str | None = None
+
+
+@dataclass(frozen=True)
+class EvaluationSuiteRecord:
+    id: str
+    cases: list[str]
+    minimum_pass_rate: int
+    trigger_paths: list[str]
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class EvaluationRunRecord:
+    id: str
+    suite_id: str
+    passed: int
+    total: int
+    pass_rate: float
+    result: Literal["success", "failure"]
+    evidence: list[str]
+    runtime: str | None
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class AddReviewFindingInput:
+    id: str
+    swarm_id: str
+    work_id: str
+    pass_id: str
+    severity: Literal["low", "medium", "high", "critical"]
+    policy: str
+    summary: str
+    location: str | None = None
+
+
+@dataclass(frozen=True)
+class DecideReviewFindingInput:
+    id: str
+    decision: Literal["resolved", "waived"]
+    actor: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ReviewFindingRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    pass_id: str
+    severity: Literal["low", "medium", "high", "critical"]
+    status: Literal["open", "resolved", "waived"]
+    policy: str
+    summary: str
+    location: str | None
+    created_at: str
+    decided_by: str | None
+    decided_at: str | None
+    decision_reason: str | None
+    path: str
+
+
+@dataclass(frozen=True)
+class AddGuardrailInput:
+    id: str
+    protected_paths: list[str] = field(default_factory=list)
+    denied_commands: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GuardrailRecord:
+    id: str
+    protected_paths: list[str]
+    denied_commands: list[str]
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class GuardrailDecisionRecord:
+    action: Literal["file-edit", "command"]
+    target: str
+    allowed: bool
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class AddTriggerInput:
+    id: str
+    event_type: str
+    action: str
+    parameters: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class IngestTriggerEventInput:
+    id: str
+    event_type: str
+    dedupe_key: str
+    payload: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TriggerRecord:
+    id: str
+    event_type: str
+    action: str
+    parameters: dict[str, str]
+    enabled: bool
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class TriggerEventRecord:
+    id: str
+    event_type: str
+    dedupe_key: str
+    payload_sha256: str
+    matched_triggers: list[str]
+    actions: list[dict[str, object]]
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class AddControlBandInput:
+    id: str
+    metric: str
+    mean: float
+    standard_deviation: float
+    diagnose_sigma: float = 2.0
+    propose_sigma: float = 3.0
+
+
+@dataclass(frozen=True)
+class EvaluateControlBandInput:
+    band_id: str
+    id: str
+    value: float
+    author: str = "automation:control-band"
+
+
+@dataclass(frozen=True)
+class ControlBandRecord:
+    id: str
+    metric: str
+    mean: float
+    standard_deviation: float
+    diagnose_sigma: float
+    propose_sigma: float
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class ControlBandFindingRecord:
+    id: str
+    band_id: str
+    metric: str
+    value: float
+    z_score: float
+    level: Literal["normal", "diagnose", "propose"]
+    intent_id: str | None
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class SdlcMetricsRecord:
+    generated_at: str
+    work_items: int
+    completed_work_items: int
+    transition_count: int
+    rework_count: int
+    first_pass_rate: float | None
+    average_cycle_seconds: float | None
+    average_human_wait_seconds: float | None
+    evaluation_runs: int
+    evaluation_pass_rate: float | None
+    open_high_findings: int
+    intents: dict[str, int]
+    control_band_findings: dict[str, int]

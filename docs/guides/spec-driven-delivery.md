@@ -156,7 +156,8 @@ needed here because the Spec Owner is the actor making the clarification decisio
 
 ## Plan and implement against the spec
 
-The Developer owns the next three forward transitions:
+The Developer owns the planning and implementation transitions, while the Spec Owner explicitly
+confirms that every criterion is covered by the durable implementation plan:
 
 ```bash
 agora work transition --swarm webhook-retries --work retry-contract \
@@ -166,9 +167,20 @@ agora artifact add --swarm webhook-retries --work retry-contract \
   --kind implementation-plan --uri repo://docs/plans/webhook-retries.md \
   --by implementation-agent
 
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion retry-schedule --stage planned --by spec-owner
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion delivery-identity --stage planned --by spec-owner
+agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
+  --criterion terminal-behavior --stage planned --by spec-owner
+
 agora work transition --swarm webhook-retries --work retry-contract \
   --to implementing --by implementation-agent
 ```
+
+The `planned -> implementing` edge fails closed if the plan artifact is absent or a criterion has
+not reached `planned`. This keeps implementation from starting merely because a state label was
+advanced.
 
 Prepare durable model context before implementation:
 

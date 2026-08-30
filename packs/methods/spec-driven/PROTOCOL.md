@@ -5,6 +5,10 @@ The Developer plans, implements, and verifies against the accepted specification
 drafting until its criteria are satisfied and a `spec` artifact is registered — clarification is a
 gate, not a convention.
 
+Implementation cannot begin until an `implementation-plan` artifact is registered and the Spec
+Owner marks every criterion `planned`. Planning coverage is therefore a second gate, not an implied
+side effect of advancing the work state.
+
 Guided clarifications and non-binding checklists may improve the draft, while consistency reports
 and generated Gherkin may support verification. None of them satisfy a criterion or transition work
 without the existing gate and role actions.

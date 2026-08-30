@@ -126,6 +126,15 @@ form.
 .agora/swarms/<swarm>/work/<work>/budget-amendments/<amendment>/AMENDMENT.md
 .agora/tool-runs/<run>/RUN.md
 .agora/tool-runs/<run>/RESULT.md
+.agora/intents/<intent>/INTENT.md
+.agora/evaluations/suites/<suite>/SUITE.md
+.agora/evaluations/runs/<run>/RUN.md
+.agora/reviews/findings/<finding>/FINDING.md
+.agora/guardrails/<guardrail>.md
+.agora/triggers/rules/<trigger>.md
+.agora/triggers/events/<event>/EVENT.md
+.agora/control-bands/<band>/BAND.md
+.agora/control-bands/<band>/findings/<finding>/FINDING.md
 ```
 
 These are neither manuals nor disposable prompts. They are durable governed records shared through
