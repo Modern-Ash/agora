@@ -197,6 +197,7 @@ def test_clarification_is_driven_by_each_method_pack(
     initial_state: str,
 ) -> None:
     monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}")
     observed: dict[str, str] = {}
 
     def run(command, cwd, environment):
@@ -233,9 +234,7 @@ def test_clarification_is_driven_by_each_method_pack(
         )
     )
 
-    workspace.clarify_work(
-        WorkActorInput(swarm_id="delivery", work_id="feature", actor_id="owner")
-    )
+    workspace.clarify_work(WorkActorInput(swarm_id="delivery", work_id="feature", actor_id="owner"))
 
     prompt = observed["prompt"]
     assert f'"id": "{method}"' in prompt

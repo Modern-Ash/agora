@@ -5520,13 +5520,15 @@ class AgoraWorkspace:
         method_context = self._clarification_method_context(root, swarm, work)
         input_sha256 = self._canonical_sha256(method_context)
         prompt = (
-            "You are disambiguating governed work before its next lifecycle decision. Return only JSON "
+            "You are disambiguating governed work before its next lifecycle decision. "
+            "Return only JSON "
             "with a 'questions' array containing at most five objects. Each object must have a "
             "non-empty 'question' string and an 'answer' that is either a string or null. Ask only "
             "targeted questions that expose ambiguity material to the active Method Pack, its next "
             "allowed transitions, role responsibilities, gates, or acceptance criteria. Do not "
             "assume Scrum ceremonies, Kanban flow, specification phases, or any other methodology "
-            "unless the supplied Method Pack defines them. Propose an answer only when the provided "
+            "unless the supplied Method Pack defines them. Propose an answer only when the "
+            "provided "
             "context is sufficient.\n\n"
             f"Governed context: {json.dumps(method_context, ensure_ascii=False, sort_keys=True)}"
         )
@@ -5850,7 +5852,9 @@ class AgoraWorkspace:
         method_root = root / ".agora" / "methods" / swarm.method
         contract = load_method_contract(method_root)
         protocol_path = method_root / "PROTOCOL.md"
-        protocol = protocol_path.read_text(encoding="utf-8").strip() if protocol_path.is_file() else ""
+        protocol = (
+            protocol_path.read_text(encoding="utf-8").strip() if protocol_path.is_file() else ""
+        )
         transitions = [
             {
                 "target": transition.target,
@@ -5881,9 +5885,7 @@ class AgoraWorkspace:
         }
 
     @classmethod
-    def _clarification_input_sha256(
-        cls, root: Path, swarm: SwarmRecord, work: WorkRecord
-    ) -> str:
+    def _clarification_input_sha256(cls, root: Path, swarm: SwarmRecord, work: WorkRecord) -> str:
         return cls._canonical_sha256(cls._clarification_method_context(root, swarm, work))
 
     @classmethod
