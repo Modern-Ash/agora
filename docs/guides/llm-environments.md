@@ -79,6 +79,11 @@ $agora-review Review payment-idempotency against its criteria, artifacts, and ev
 The skill tells Codex to read the project protocol and use the Agora CLI. Material state belongs in
 `.agora`, not only in the conversation.
 
+When a Codex chat invokes Agora, the portable execution and status skills enable or preserve
+`AGORA_TRACE=compact` and relay the resulting `stderr` phases before summarizing the final JSON.
+This exposes engine progress in the conversation without parsing TTY animation or mixing it with
+machine-readable `stdout`.
+
 ## Claude example
 
 ```bash
@@ -108,6 +113,10 @@ The adapter materializes portable instructions as Claude command files:
 
 Agora only creates these files. Command discovery, invocation syntax, model access, permissions, and
 execution remain responsibilities of the installed Claude environment.
+
+The generated Claude execution and status commands follow the same trace rule as Codex: preserve a
+caller-selected `AGORA_TRACE` value, otherwise use `compact`, relay each Agora-owned phase, and keep
+the final structured result separate. The trace never requests or exposes Claude reasoning.
 
 ### Optional: a global Claude Code skill instead of per-project commands
 
@@ -289,11 +298,13 @@ agora start --id internal-run --actor ai-facilitator \
 ```
 
 The child process receives `AGORA_PROJECT`, `AGORA_SESSION`, `AGORA_CONTEXT`, `AGORA_ACTOR`,
-`AGORA_SWARM`, and, when selected, `AGORA_WORK`. The runner owns model authentication and should read
-`AGORA_CONTEXT` before acting. Agora records the command, resolved integration/provider/model, exit
-status, bounded output, and session events without binding the framework to a provider SDK. Session
-launches default to a 3,600-second timeout and 4 MiB output limit. Customize them with
-`--timeout-seconds` and `--max-output-bytes`; the selected values are durable and signed.
+`AGORA_SWARM`, `AGORA_TRACE`, and, when selected, `AGORA_WORK`. `AGORA_TRACE` defaults to `compact`
+for a launched session unless the caller already supplied `off`, `detailed`, or `jsonl`. The runner
+owns model authentication and should read `AGORA_CONTEXT` before acting. Agora records the command,
+resolved integration/provider/model, exit status, bounded output, and session events without binding
+the framework to a provider SDK. Session launches default to a 3,600-second timeout and 4 MiB output
+limit. Customize them with `--timeout-seconds` and `--max-output-bytes`; the selected values are
+durable and signed.
 
 When the actor was registered with `--require-authentication`, immediate `start` is rejected. Use
 `agora session prepare`, sign and apply that Lifecycle Action, then export the launch payload with

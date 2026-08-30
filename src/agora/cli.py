@@ -28,7 +28,15 @@ from agora.application.dto import (
     WorkItemDetail,
     WorkItemSummary,
 )
-from agora.console import ActivityContext, ConsoleActivity, ConsoleResult, is_human_terminal
+from agora.console import (
+    TRACE_MODES,
+    ActivityContext,
+    ConsoleActivity,
+    ConsoleResult,
+    EngineTrace,
+    configured_trace_mode,
+    is_human_terminal,
+)
 from agora.filesystem import agora_home
 from agora.git import is_git_repository
 from agora.model import (
@@ -55,6 +63,7 @@ from agora.model import (
     AssignActorInput,
     AuditPackUpdatesInput,
     AuditRegistryUpdatesInput,
+    BindIssueTrackerInput,
     ChangeDelegationStatusInput,
     ChangeWorkStatusInput,
     CheckChecklistItemInput,
@@ -101,6 +110,7 @@ from agora.model import (
     QuickstartInput,
     RefreshPackLockInput,
     RemovePackInput,
+    ReopenWorkInput,
     ResumeSessionInput,
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
@@ -113,6 +123,7 @@ from agora.model import (
     RunPreview,
     SetActorRuntimeInput,
     StartSessionInput,
+    SyncIssueTrackerInput,
     SyncOrganizationTrustInput,
     TransitionWorkInput,
     UpdateCatalogPackInput,
@@ -123,6 +134,7 @@ from agora.model import (
     WaiveGateInput,
     WorkActorInput,
 )
+from agora.tracker_adapters import GitHubIssueTrackerAdapter, JiraIssueTrackerAdapter
 from agora.wizard import Choice, Wizard
 from agora.workspace import AgoraWorkspace
 
@@ -144,7 +156,16 @@ def main(
     try:
         namespace = parser.parse_args(arguments)
         workspace = AgoraWorkspace(cwd=project or cwd)
-        with ConsoleActivity(error_output, _activity_context(workspace, namespace)) as activity:
+        trace = EngineTrace(error_output, configured_trace_mode(namespace.trace))
+        trace.emit(
+            "command.start",
+            "running",
+            "command.started",
+            "Agora accepted the command",
+            {"command": _command_name(namespace)},
+        )
+        activity_context = None if trace.enabled else _activity_context(workspace, namespace)
+        with ConsoleActivity(error_output, activity_context) as activity:
             if namespace.command == "setup" or (
                 namespace.command == "adopt" and not namespace.check
             ):
@@ -183,13 +204,24 @@ def main(
                     output_stream=error_output,
                 )
             elif namespace.command == "run" and namespace.until_blocked:
-                result = _dispatch(
-                    workspace,
-                    namespace,
-                    run_observer=activity.handle_run_event,
-                )
+                observer = trace.handle_run_event if trace.enabled else activity.handle_run_event
+                if trace.enabled:
+                    result = _dispatch(workspace, namespace, run_observer=observer, trace=trace)
+                else:
+                    result = _dispatch(workspace, namespace, run_observer=observer)
             else:
-                result = _dispatch(workspace, namespace)
+                result = (
+                    _dispatch(workspace, namespace, trace=trace)
+                    if trace.enabled
+                    else _dispatch(workspace, namespace)
+                )
+        trace.emit(
+            "command.finish",
+            "succeeded",
+            "command.completed",
+            "Agora completed the command",
+            {"command": _command_name(namespace)},
+        )
         if result is not None:
             _present_result(
                 output, namespace, result, workspace=workspace, input_stream=input_stream
@@ -200,6 +232,14 @@ def main(
             return 1
         return 0
     except (FileExistsError, FileNotFoundError, PermissionError, RuntimeError, ValueError) as error:
+        if "trace" in locals():
+            trace.emit(
+                "command.finish",
+                "failed",
+                "command.failed",
+                "Agora could not complete the command",
+                {"error": type(error).__name__},
+            )
         print(str(error), file=error_output)
         return 1
 
@@ -249,7 +289,9 @@ def _present_result(
 def _command_name(args: argparse.Namespace) -> str:
     parts = [args.command]
     parts.extend(
-        value for key, value in vars(args).items() if key.endswith("_command") and value is not None
+        value
+        for key, value in vars(args).items()
+        if key.endswith("_command") and isinstance(value, str)
     )
     return " ".join(parts)
 
@@ -347,6 +389,7 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "criterion_statuses": {
                 key: list(items) for key, items in value.criterion_statuses.items()
             },
+            "revision": workspace.show_work(value.swarm_id, value.id).revision,
         }
     if isinstance(value, ActivityEntry):
         root = workspace.project_root()
@@ -1936,6 +1979,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--project", help=argparse.SUPPRESS)
     parser.add_argument(
+        "--trace",
+        choices=TRACE_MODES,
+        help=(
+            "Stream safe engine progress to stderr, including from Codex or Claude when no TTY "
+            "is available (off, compact, detailed, or jsonl)"
+        ),
+    )
+    parser.add_argument(
         "--narrate",
         action="store_true",
         help=(
@@ -2089,6 +2140,45 @@ def _build_parser() -> argparse.ArgumentParser:
     environment_show = environment.add_parser("show", help="Show an environment policy")
     environment_show.add_argument("--id", required=True)
     environment.add_parser("list", help="List environment policies")
+    tracker = commands.add_parser(
+        "tracker", help="Manage provider-neutral issue tracker reconciliation"
+    ).add_subparsers(dest="tracker_command", required=True)
+    tracker_bind = tracker.add_parser("bind", help="Bind one external issue to Agora work")
+    tracker_bind.add_argument("--id", required=True)
+    tracker_bind.add_argument("--swarm", required=True)
+    tracker_bind.add_argument("--work", required=True)
+    tracker_bind.add_argument("--tracker", choices=("github", "jira"), required=True)
+    tracker_bind.add_argument("--project", required=True)
+    tracker_bind.add_argument("--issue", required=True)
+    tracker_bind.add_argument("--reopen-by", required=True)
+    tracker_sync = tracker.add_parser(
+        "sync", help="Reconcile bound issues through a reviewed native CLI adapter"
+    )
+    tracker_sync.add_argument("--tracker", choices=("github", "jira"), required=True)
+    tracker_sync.add_argument("--project", required=True)
+    tracker_sync.add_argument(
+        "--closed-state",
+        action="append",
+        default=[],
+        help="Jira status treated as closed; repeatable",
+    )
+    tracker_bindings = tracker.add_parser("bindings", help="List external issue bindings")
+    tracker_bindings.add_argument("--tracker", choices=("github", "jira"))
+    tracker_bindings.add_argument("--project")
+    tracker.add_parser("events", help="List immutable issue reconciliation events")
+    sync = commands.add_parser(
+        "sync", help="Reconcile a provider through the neutral issue tracker contract"
+    ).add_subparsers(dest="sync_provider", required=True)
+    sync_github = sync.add_parser("github", help="Synchronize bound GitHub issues")
+    sync_github.add_argument("--repo", required=True)
+    sync_jira = sync.add_parser("jira", help="Synchronize bound Jira work items")
+    sync_jira.add_argument("--project", required=True)
+    sync_jira.add_argument(
+        "--closed-state",
+        action="append",
+        default=[],
+        help="Jira status treated as closed; repeatable",
+    )
     lock = commands.add_parser("lock", help="Inspect local writer coordination").add_subparsers(
         dest="lock_command", required=True
     )
@@ -2800,7 +2890,10 @@ def _build_parser() -> argparse.ArgumentParser:
     work_list = work.add_parser("list", help="List work items")
     work_list.add_argument("--swarm")
     work_list.add_argument("--state")
-    work_list.add_argument("--operational-status", choices=("active", "blocked", "cancelled"))
+    work_list.add_argument(
+        "--operational-status",
+        choices=("active", "revalidation", "blocked", "failed", "cancelled"),
+    )
     traceability = work.add_parser(
         "traceability", help="Trace criteria through generated artifacts and evidence"
     )
@@ -2938,6 +3031,16 @@ def _build_parser() -> argparse.ArgumentParser:
         prepared_change.add_argument("--reason", required=True)
         prepared_change.add_argument("--id", required=True)
 
+    work_reopen = work.add_parser(
+        "reopen", help="Create a new immutable revision for completed work"
+    )
+    work_reopen.add_argument("--swarm", required=True)
+    work_reopen.add_argument("--work", required=True)
+    work_reopen.add_argument("--by", required=True)
+    work_reopen.add_argument("--reason", required=True)
+    work_reopen.add_argument("--source", default="manual")
+    work_reopen.add_argument("--source-id")
+
     work_changes = work.add_parser(
         "status-changes", help="List a work item's durable status history"
     )
@@ -3049,6 +3152,16 @@ def _build_parser() -> argparse.ArgumentParser:
     evidence_add.add_argument("--result", choices=("success", "failure"), required=True)
     evidence_add.add_argument("--by", required=True)
     evidence_add.add_argument("--artifact", action="append", default=[])
+    evidence_add.add_argument("--id")
+    evidence_add.add_argument("--phase")
+    evidence_add.add_argument("--tested-commit")
+    evidence_add.add_argument("--command-arg", action="append", default=[])
+    evidence_add.add_argument("--exit-code", type=int)
+    evidence_add.add_argument("--tests-total", type=int)
+    evidence_add.add_argument("--tests-passed", type=int)
+    evidence_add.add_argument("--tests-failed", type=int)
+    evidence_add.add_argument("--environment")
+    evidence_add.add_argument("--dedupe-key")
     evidence_prepare = evidence.add_parser("prepare", help="Prepare a signed evidence intent")
     evidence_prepare.add_argument("--id", required=True)
     evidence_prepare.add_argument("--swarm", required=True)
@@ -3153,8 +3266,59 @@ def _dispatch(
     args: argparse.Namespace,
     *,
     run_observer: Callable[[RunLoopEvent], None] | None = None,
+    trace: EngineTrace | None = None,
 ) -> Any:
     reads = AgoraReadService(workspace)
+    if args.command == "tracker" and args.tracker_command == "bind":
+        return workspace.bind_issue_tracker(
+            BindIssueTrackerInput(
+                id=args.id,
+                swarm_id=args.swarm,
+                work_id=args.work,
+                tracker=args.tracker,
+                project=args.project,
+                external_id=args.issue,
+                reopen_actor_id=args.reopen_by,
+            )
+        )
+    if args.command == "tracker" and args.tracker_command == "bindings":
+        return workspace.list_issue_tracker_bindings(args.tracker, args.project)
+    if args.command == "tracker" and args.tracker_command == "events":
+        return workspace.list_issue_tracker_events()
+    if (args.command == "tracker" and args.tracker_command == "sync") or (args.command == "sync"):
+        tracker = args.tracker if args.command == "tracker" else args.sync_provider
+        project = args.project if args.command == "tracker" or tracker == "jira" else args.repo
+        closed_states = args.closed_state if tracker == "jira" else []
+        trace and trace.emit(
+            "tracker.fetch",
+            "running",
+            "tracker.sync-started",
+            "Fetching normalized external issues",
+            {"tracker": tracker, "project": project},
+        )
+        adapter = (
+            GitHubIssueTrackerAdapter(workspace.project_root())
+            if tracker == "github"
+            else JiraIssueTrackerAdapter(
+                workspace.project_root(),
+                closed_states=closed_states or ("done", "closed", "resolved"),
+            )
+        )
+        result = workspace.sync_issue_tracker(
+            SyncIssueTrackerInput(tracker=tracker, project=project), adapter
+        )
+        trace and trace.emit(
+            "tracker.reconcile",
+            "succeeded",
+            "tracker.sync-completed",
+            "Reconciled bound external issues",
+            {
+                "bindings": str(result.bindings),
+                "changed": str(result.changed),
+                "reopened": str(result.reopened),
+            },
+        )
+        return result
     if args.command == "coordination" and args.coordination_command == "configure":
         return workspace.configure_coordination(
             ConfigureCoordinationInput(
@@ -4114,6 +4278,17 @@ def _dispatch(
             return workspace.list_checklists(args.swarm, args.work)
     if args.command == "work" and args.work_command == "traceability":
         return reads.work_traceability(args.swarm, args.work)
+    if args.command == "work" and args.work_command == "reopen":
+        return workspace.reopen_work(
+            ReopenWorkInput(
+                swarm_id=args.swarm,
+                work_id=args.work,
+                actor_id=args.by,
+                reason=args.reason,
+                source=args.source,
+                source_id=args.source_id,
+            )
+        )
     if args.command == "work" and args.work_command == "clarify":
         return workspace.clarify_work(
             WorkActorInput(swarm_id=args.swarm, work_id=args.work, actor_id=args.by),
@@ -4158,6 +4333,16 @@ def _dispatch(
                 type=args.type,
                 result=args.result,
                 artifact_refs=args.artifact,
+                evidence_id=args.id,
+                phase=args.phase,
+                tested_commit=args.tested_commit,
+                command=args.command_arg,
+                exit_code=args.exit_code,
+                tests_total=args.tests_total,
+                tests_passed=args.tests_passed,
+                tests_failed=args.tests_failed,
+                environment=args.environment,
+                dedupe_key=args.dedupe_key,
             )
         )
     if args.command == "evidence" and args.evidence_command == "prepare":

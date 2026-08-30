@@ -14,7 +14,7 @@ DelegationStatus = Literal[
     "rejected",
     "cancelled",
 ]
-WorkOperationalStatus = Literal["active", "blocked", "cancelled"]
+WorkOperationalStatus = Literal["active", "revalidation", "blocked", "failed", "cancelled"]
 ValidationSeverity = Literal["error", "warning"]
 
 ACTOR_KINDS: tuple[ActorKind, ...] = (
@@ -259,6 +259,17 @@ class EvidenceRecord:
     produced_by: str
     timestamp: str
     artifact_content_sha256: dict[str, str | None] = field(default_factory=dict)
+    id: str | None = None
+    phase: str | None = None
+    revision: int = 1
+    tested_commit: str | None = None
+    command: list[str] = field(default_factory=list)
+    exit_code: int | None = None
+    tests_total: int | None = None
+    tests_passed: int | None = None
+    tests_failed: int | None = None
+    environment: str | None = None
+    dedupe_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -348,6 +359,100 @@ class WorkRecord:
     delegation_id: str | None = None
     parent_work_ref: str | None = None
     criterion_statuses: dict[str, list[str]] = field(default_factory=dict)
+    revision: int = 1
+
+
+@dataclass(frozen=True)
+class WorkRevisionRecord:
+    swarm_id: str
+    work_id: str
+    revision: int
+    status: Literal["open", "closed"]
+    initial_state: str
+    opened_by: str
+    opened_at: str
+    path: str
+    source: str | None = None
+    source_id: str | None = None
+    reason: str | None = None
+    final_state: str | None = None
+    closed_by: str | None = None
+    closed_at: str | None = None
+    snapshot_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class BindIssueTrackerInput:
+    id: str
+    swarm_id: str
+    work_id: str
+    tracker: str
+    project: str
+    external_id: str
+    reopen_actor_id: str
+
+
+@dataclass(frozen=True)
+class IssueTrackerBindingRecord:
+    id: str
+    swarm_id: str
+    work_id: str
+    tracker: str
+    project: str
+    external_id: str
+    reopen_actor_id: str
+    created_at: str
+    path: str
+
+
+@dataclass(frozen=True)
+class ExternalIssueSnapshot:
+    tracker: str
+    project: str
+    external_id: str
+    title: str
+    state: Literal["open", "closed"]
+    url: str
+    updated_at: str
+    author_subject: str | None
+    author_display_name: str | None
+    labels: list[str] = field(default_factory=list)
+    milestone: str | None = None
+    comment_count: int = 0
+    payload_sha256: str = ""
+
+
+@dataclass(frozen=True)
+class IssueTrackerSyncEventRecord:
+    id: str
+    binding_id: str
+    tracker: str
+    project: str
+    external_id: str
+    previous_state: Literal["open", "closed"] | None
+    current_state: Literal["open", "closed"]
+    change: Literal["created", "updated", "closed", "reopened", "unchanged"]
+    payload_sha256: str
+    created_at: str
+    path: str
+    work_revision: int | None = None
+
+
+@dataclass(frozen=True)
+class SyncIssueTrackerInput:
+    tracker: str
+    project: str
+
+
+@dataclass(frozen=True)
+class IssueTrackerSyncResult:
+    tracker: str
+    project: str
+    bindings: int
+    changed: int
+    reopened: int
+    unchanged: int
+    events: list[IssueTrackerSyncEventRecord]
 
 
 @dataclass(frozen=True)
@@ -1722,6 +1827,13 @@ class ChangeWorkStatusInput(WorkActorInput):
 
 
 @dataclass(frozen=True)
+class ReopenWorkInput(WorkActorInput):
+    reason: str = ""
+    source: str = "manual"
+    source_id: str | None = None
+
+
+@dataclass(frozen=True)
 class ChangeDelegationStatusInput(DelegationActorInput):
     reason: str = ""
     id: str | None = None
@@ -1799,6 +1911,16 @@ class AddEvidenceInput(WorkActorInput):
     type: str = ""
     result: Literal["success", "failure"] = "failure"
     artifact_refs: list[str] = field(default_factory=list)
+    evidence_id: str | None = None
+    phase: str | None = None
+    tested_commit: str | None = None
+    command: list[str] = field(default_factory=list)
+    exit_code: int | None = None
+    tests_total: int | None = None
+    tests_passed: int | None = None
+    tests_failed: int | None = None
+    environment: str | None = None
+    dedupe_key: str | None = None
 
 
 @dataclass(frozen=True)

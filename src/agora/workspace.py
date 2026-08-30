@@ -93,6 +93,7 @@ from agora.identity import (
     verify_session_authorization,
     verify_tool_authorization,
 )
+from agora.issue_tracking import IssueTrackerPort, IssueTrackerService
 from agora.locking import WorkspaceLock, inspect_workspace_lock
 from agora.markdown import (
     MarkdownDocument,
@@ -139,6 +140,7 @@ from agora.model import (
     AssignActorInput,
     AuditPackUpdatesInput,
     AuditRegistryUpdatesInput,
+    BindIssueTrackerInput,
     BudgetAmendmentInput,
     BudgetAmendmentRecord,
     BudgetAmendmentResult,
@@ -162,6 +164,7 @@ from agora.model import (
     EnvironmentPolicyRecord,
     EventRecord,
     EvidenceRecord,
+    ExternalIssueSnapshot,
     GateBlockerRecord,
     GateDecisionInput,
     GateDecisionOptionRecord,
@@ -178,6 +181,9 @@ from agora.model import (
     InstallToolInput,
     Integration,
     InvokeToolInput,
+    IssueTrackerBindingRecord,
+    IssueTrackerSyncEventRecord,
+    IssueTrackerSyncResult,
     LaunchSessionInput,
     LaunchToolRunInput,
     LifecycleActionRecord,
@@ -240,6 +246,7 @@ from agora.model import (
     RegistryUpdateRecord,
     RegistryUpdateResult,
     RemovePackInput,
+    ReopenWorkInput,
     ResumeSessionInput,
     RevokeActorKeyInput,
     RevokeApprovalDelegationInput,
@@ -259,6 +266,7 @@ from agora.model import (
     StartSessionInput,
     StatusChangeRecord,
     SwarmRecord,
+    SyncIssueTrackerInput,
     SyncOrganizationTrustInput,
     ToolAdapterRecord,
     ToolAuthorizationRecord,
@@ -290,6 +298,7 @@ from agora.model import (
     WorkLifecycleAssessment,
     WorkOperationalStatus,
     WorkRecord,
+    WorkRevisionRecord,
     WorkspaceLockStatus,
     WorkspaceStatus,
 )
@@ -4552,9 +4561,26 @@ class AgoraWorkspace:
             path=str(path),
             budget_limits=budget_limits,
             parent_work_ref=parent_work_ref,
+            revision=1,
         )
         with filesystem_transaction():
             write_new(path / "WORK.md", self._render_work(work))
+            write_new(
+                path / "revisions" / "0001" / "REVISION.md",
+                self._render_work_revision(
+                    WorkRevisionRecord(
+                        swarm_id=swarm.id,
+                        work_id=work.id,
+                        revision=1,
+                        status="open",
+                        initial_state=work.state,
+                        opened_by=actor.reference,
+                        opened_at=self._timestamp(),
+                        path=str(path / "revisions" / "0001" / "REVISION.md"),
+                        source="work.create",
+                    )
+                ),
+            )
             write_new(
                 path / "artifacts.md",
                 render_markdown(
@@ -4714,6 +4740,107 @@ class AgoraWorkspace:
                 "actor that does not require signing"
             )
         return self._apply_create_patch_work(root, parent, child, context)
+
+    @_locked_mutation("project")
+    def reopen_work(self, data: ReopenWorkInput) -> WorkRecord:
+        """Create a new reviewable revision without rewriting the previous closure."""
+
+        root = self.project_root()
+        if not data.reason.strip():
+            raise ValueError("Work reopen reason cannot be empty")
+        if not data.source.strip():
+            raise ValueError("Work reopen source cannot be empty")
+        if data.source_id is not None and not data.source_id.strip():
+            raise ValueError("Work reopen source id cannot be empty")
+        swarm = self._load_swarm(root, data.swarm_id)
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        actor = self._require_actor_for_reopen(root, swarm, contract, data.actor_id)
+        work = self._load_work(swarm, data.work_id)
+        if actor.authentication_required:
+            raise PermissionError(
+                f"Actor {actor.reference} requires a signed lifecycle action; "
+                "signed work.reopen preparation is required"
+            )
+        if data.source_id is not None:
+            replay = self._revision_by_source(work, data.source, data.source_id)
+            if replay is not None:
+                if replay.reason != data.reason.strip():
+                    raise ValueError(
+                        "Work reopen source id was already used with a different reason"
+                    )
+                if replay.revision != work.revision:
+                    raise ValueError("Work reopen event belongs to an older revision")
+                return work
+        if work.state != contract.terminal_state:
+            raise ValueError(f"Only completed work can be reopened: {swarm.id}/{work.id}")
+        predecessors = [
+            rule.source for rule in contract.transitions if rule.target == contract.terminal_state
+        ]
+        if len(predecessors) != 1:
+            raise ValueError(
+                f"Method Pack {contract.id} must define exactly one transition into its terminal "
+                "state before work can be reopened"
+            )
+        with filesystem_transaction():
+            current_revision = self._load_or_materialize_revision(work, actor.reference)
+            if current_revision.status != "closed":
+                self._close_work_revision_writes(work, actor.reference)
+            previous_status = work.operational_status
+            work.revision += 1
+            work.state = predecessors[0]
+            work.operational_status = "revalidation"
+            work.status_reason = data.reason.strip()
+            work.status_by = actor.reference
+            work.status_at = self._timestamp()
+            work.satisfied_criteria = []
+            work.criterion_statuses = {
+                criterion_id: [] for criterion_id in work.acceptance_criteria
+            }
+            work.artifact_kinds = []
+            work.evidence_results = []
+            work.approval_roles = []
+            atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
+            atomic_write(Path(work.path) / "artifacts.md", self._empty_artifact_register())
+            atomic_write(Path(work.path) / "evidence.md", self._empty_evidence_register())
+            atomic_write(Path(work.path) / "approvals.md", self._empty_approval_register())
+            revision_path = self._work_revision_path(work, work.revision)
+            write_new(
+                revision_path,
+                self._render_work_revision(
+                    WorkRevisionRecord(
+                        swarm_id=swarm.id,
+                        work_id=work.id,
+                        revision=work.revision,
+                        status="open",
+                        initial_state=work.state,
+                        opened_by=actor.reference,
+                        opened_at=self._timestamp(),
+                        path=str(revision_path),
+                        source=data.source.strip(),
+                        source_id=data.source_id.strip() if data.source_id is not None else None,
+                        reason=data.reason.strip(),
+                    )
+                ),
+            )
+            change = self._record_status_change(
+                subject_type="work",
+                subject=f"{swarm.id}/{work.id}",
+                action="work.reopen",
+                previous_status=previous_status,
+                target_status="revalidation",
+                actor=actor.reference,
+                reason=data.reason.strip(),
+                root=Path(work.path) / "status-changes",
+                id_=None,
+            )
+            self._append_work_event(
+                work,
+                "work.reopened",
+                f"revision={work.revision} source={data.source.strip()} "
+                f"actor={actor.reference} change={change.id}",
+            )
+            self._refresh_swarm_status(root, swarm, changed_work=work)
+        return self._load_work(swarm, work.id)
 
     def _validate_create_patch_work(
         self, root: Path, data: CreatePatchWorkInput
@@ -5892,6 +6019,31 @@ class AgoraWorkspace:
             raise ValueError("Evidence type cannot be empty")
         if data.result not in {"success", "failure"}:
             raise ValueError(f"Unsupported evidence result: {data.result}")
+        if data.evidence_id is not None:
+            assert_slug(data.evidence_id, "Evidence id")
+        if data.phase is not None and not data.phase.strip():
+            raise ValueError("Evidence phase cannot be empty")
+        if (
+            data.tested_commit is not None
+            and re.fullmatch(r"[0-9a-f]{40}", data.tested_commit) is None
+        ):
+            raise ValueError("Evidence tested commit must be a full lowercase Git SHA")
+        if any(not item.strip() or "\n" in item or "\x00" in item for item in data.command):
+            raise ValueError("Evidence command must be a non-empty structured argument vector")
+        counts = (data.tests_total, data.tests_passed, data.tests_failed)
+        if any(value is not None and (isinstance(value, bool) or value < 0) for value in counts):
+            raise ValueError("Evidence test counts must be non-negative integers")
+        if data.tests_total is not None:
+            passed = data.tests_passed or 0
+            failed = data.tests_failed or 0
+            if passed + failed != data.tests_total:
+                raise ValueError("Evidence passed and failed tests must equal total tests")
+        if data.result == "success" and data.exit_code not in {None, 0}:
+            raise ValueError("Successful evidence cannot have a non-zero exit code")
+        if data.environment is not None and not data.environment.strip():
+            raise ValueError("Evidence environment cannot be empty")
+        if data.dedupe_key is not None and not data.dedupe_key.strip():
+            raise ValueError("Evidence dedupe key cannot be empty")
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "evidence.add")
         work = self._load_work(swarm, data.work_id)
@@ -5920,6 +6072,14 @@ class AgoraWorkspace:
             )
         for reference in references:
             self._assert_artifact_reference(root, reference)
+            if (
+                data.result == "success"
+                and reference.startswith("repo://")
+                and (root / reference.removeprefix("repo://")).stat().st_size == 0
+            ):
+                raise ValueError(
+                    f"Successful evidence cannot reference an empty artifact: {reference}"
+                )
         return swarm, actor, work
 
     def list_work_artifacts(self, swarm_id: str, work_id: str) -> list[ArtifactRecord]:
@@ -6260,12 +6420,28 @@ class AgoraWorkspace:
         work: WorkRecord,
         data: AddEvidenceInput,
     ) -> WorkRecord:
+        if data.dedupe_key is not None:
+            existing = next(
+                (
+                    item
+                    for item in self._work_structured_evidence_records(work)
+                    if item.dedupe_key == data.dedupe_key.strip()
+                ),
+                None,
+            )
+            if existing is not None:
+                if not self._evidence_matches_input(existing, data):
+                    raise ValueError(
+                        "Evidence dedupe key was already used with a different payload"
+                    )
+                return work
         self._record_evidence(
             work,
             data.type,
             data.result,
             data.artifact_refs,
             actor.reference,
+            data=data,
         )
         return self._load_work(swarm, data.work_id)
 
@@ -6276,9 +6452,13 @@ class AgoraWorkspace:
         result: str,
         artifact_refs: list[str],
         actor_reference: str,
+        *,
+        data: AddEvidenceInput | None = None,
     ) -> None:
         with filesystem_transaction():
-            self._record_evidence_writes(work, type_, result, artifact_refs, actor_reference)
+            self._record_evidence_writes(
+                work, type_, result, artifact_refs, actor_reference, data=data
+            )
 
     def _record_evidence_writes(
         self,
@@ -6287,6 +6467,8 @@ class AgoraWorkspace:
         result: str,
         artifact_refs: list[str],
         actor_reference: str,
+        *,
+        data: AddEvidenceInput | None = None,
     ) -> None:
         path = Path(work.path) / "evidence.md"
         pending = staged_contents(path)
@@ -6307,15 +6489,148 @@ class AgoraWorkspace:
             document.body = self._render_evidence_register(self._work_evidence_records(work))
         elif schema != "agora/evidence/v2":
             raise ValueError(f"Unsupported evidence schema: {schema}")
+        timestamp = self._timestamp()
         document.body = (
             f"{document.body.rstrip()}\n| {type_} | {result} | {references} | {digest_values} | "
-            f"{actor_reference} | {self._timestamp()} |"
+            f"{actor_reference} | {timestamp} |"
         )
         atomic_write(path, render_markdown(document))
+        evidence_data = data or AddEvidenceInput(
+            swarm_id=work.swarm_id,
+            work_id=work.id,
+            actor_id=actor_reference,
+            type=type_,
+            result=result,  # type: ignore[arg-type]
+            artifact_refs=artifact_refs,
+        )
+        evidence_root = Path(work.path) / "evidence"
+        sequence = len(list(evidence_root.glob("*/EVIDENCE.md"))) + 1
+        evidence_id = evidence_data.evidence_id or f"evidence-{sequence:06d}"
+        assert_slug(evidence_id, "Evidence id")
+        record = EvidenceRecord(
+            id=evidence_id,
+            type=type_,
+            result=result,
+            artifact_references=list(artifact_refs),
+            artifact_content_sha256={
+                reference: artifact_digests.get(reference) for reference in artifact_refs
+            },
+            produced_by=actor_reference,
+            timestamp=timestamp,
+            phase=evidence_data.phase,
+            revision=work.revision,
+            tested_commit=evidence_data.tested_commit,
+            command=list(evidence_data.command),
+            exit_code=evidence_data.exit_code,
+            tests_total=evidence_data.tests_total,
+            tests_passed=evidence_data.tests_passed,
+            tests_failed=evidence_data.tests_failed,
+            environment=evidence_data.environment,
+            dedupe_key=evidence_data.dedupe_key,
+        )
+        write_new(
+            evidence_root / evidence_id / "EVIDENCE.md",
+            self._render_structured_evidence(record),
+        )
         self._append_work_event(
             work,
             "evidence.added",
-            f"type={type_} result={result} actor={actor_reference}",
+            f"id={evidence_id} type={type_} result={result} revision={work.revision} "
+            f"actor={actor_reference}",
+        )
+
+    @staticmethod
+    def _render_structured_evidence(record: EvidenceRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/evidence-entry/v3",
+                    "id": record.id,
+                    "type": record.type,
+                    "phase": record.phase,
+                    "result": record.result,
+                    "revision": record.revision,
+                    "artifact-references": record.artifact_references,
+                    "artifact-content-sha256": record.artifact_content_sha256,
+                    "produced-by": record.produced_by,
+                    "timestamp": record.timestamp,
+                    "tested-commit": record.tested_commit,
+                    "command": record.command,
+                    "exit-code": record.exit_code,
+                    "tests-total": record.tests_total,
+                    "tests-passed": record.tests_passed,
+                    "tests-failed": record.tests_failed,
+                    "environment": record.environment,
+                    "dedupe-key": record.dedupe_key,
+                },
+                body=(
+                    f"# Evidence {record.id}\n\n"
+                    "This append-only record captures a governed verification fact. Provider "
+                    "output and credentials are intentionally excluded."
+                ),
+            )
+        )
+
+    @classmethod
+    def _load_structured_evidence(cls, path: Path) -> EvidenceRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/evidence-entry/v3", path)
+        revision = _optional_integer_attribute(document.attributes, "revision")
+        if revision is None or revision < 1:
+            raise ValueError(f"Evidence revision must be a positive integer: {path}")
+        result = string_attribute(document.attributes, "result")
+        if result not in {"success", "failure"}:
+            raise ValueError(f"Unsupported evidence result: {result}")
+        command = document.attributes.get("command", [])
+        if not isinstance(command, list) or any(not isinstance(item, str) for item in command):
+            raise ValueError(f"Evidence command must be a string array: {path}")
+        digests = document.attributes.get("artifact-content-sha256", {})
+        if not isinstance(digests, dict) or any(
+            not isinstance(key, str) or (value is not None and not isinstance(value, str))
+            for key, value in digests.items()
+        ):
+            raise ValueError(f"Evidence artifact digests must be a string map: {path}")
+        return EvidenceRecord(
+            id=string_attribute(document.attributes, "id"),
+            type=string_attribute(document.attributes, "type"),
+            phase=optional_string_attribute(document.attributes, "phase"),
+            result=result,
+            revision=revision,
+            artifact_references=strings_attribute(document.attributes, "artifact-references"),
+            artifact_content_sha256=dict(digests),
+            produced_by=string_attribute(document.attributes, "produced-by"),
+            timestamp=string_attribute(document.attributes, "timestamp"),
+            tested_commit=optional_string_attribute(document.attributes, "tested-commit"),
+            command=list(command),
+            exit_code=_optional_integer_attribute(document.attributes, "exit-code"),
+            tests_total=_optional_integer_attribute(document.attributes, "tests-total"),
+            tests_passed=_optional_integer_attribute(document.attributes, "tests-passed"),
+            tests_failed=_optional_integer_attribute(document.attributes, "tests-failed"),
+            environment=optional_string_attribute(document.attributes, "environment"),
+            dedupe_key=optional_string_attribute(document.attributes, "dedupe-key"),
+        )
+
+    @classmethod
+    def _work_structured_evidence_records(cls, work: WorkRecord) -> list[EvidenceRecord]:
+        return [
+            cls._load_structured_evidence(path)
+            for path in sorted((Path(work.path) / "evidence").glob("*/EVIDENCE.md"))
+        ]
+
+    @staticmethod
+    def _evidence_matches_input(record: EvidenceRecord, data: AddEvidenceInput) -> bool:
+        return (
+            record.type == data.type
+            and record.result == data.result
+            and record.artifact_references == data.artifact_refs
+            and record.phase == data.phase
+            and record.tested_commit == data.tested_commit
+            and record.command == data.command
+            and record.exit_code == data.exit_code
+            and record.tests_total == data.tests_total
+            and record.tests_passed == data.tests_passed
+            and record.tests_failed == data.tests_failed
+            and record.environment == data.environment
         )
 
     @staticmethod
@@ -8791,6 +9106,22 @@ class AgoraWorkspace:
         target_state: str,
     ) -> WorkRecord:
         previous = work.state
+        if work.operational_status == "revalidation":
+            self._record_status_change(
+                subject_type="work",
+                subject=f"{swarm.id}/{work.id}",
+                action="work.revalidate",
+                previous_status="revalidation",
+                target_status="active",
+                actor=actor.reference,
+                reason="Revalidation lifecycle resumed",
+                root=Path(work.path) / "status-changes",
+                id_=None,
+            )
+            work.operational_status = "active"
+            work.status_reason = None
+            work.status_by = None
+            work.status_at = None
         work.state = target_state
         atomic_write(Path(work.path) / "WORK.md", self._render_work(work))
         self._append_work_event(
@@ -8798,6 +9129,9 @@ class AgoraWorkspace:
             "work.transitioned",
             f"from={previous} to={target_state} actor={actor.reference}",
         )
+        contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+        if target_state == contract.terminal_state:
+            self._close_work_revision_writes(work, actor.reference)
         self._refresh_swarm_status(root, swarm, changed_work=work)
         return work
 
@@ -10345,6 +10679,9 @@ class AgoraWorkspace:
         environment = {
             **os.environ,
             "AGORA_PROJECT": str(root),
+            # Chat-launched Codex and Claude sessions do not normally have a TTY. Keep
+            # engine progress visible there while preserving command results on stdout.
+            "AGORA_TRACE": os.environ.get("AGORA_TRACE", "compact"),
             "AGORA_SESSION": str(session_path / "SESSION.md"),
             "AGORA_SESSION_ID": running.id,
             "AGORA_PROGRESS": str(session_path / "PROGRESS.md"),
@@ -11781,6 +12118,63 @@ class AgoraWorkspace:
             suffix += 1
         return candidate
 
+    def _issue_tracker_service(self) -> IssueTrackerService:
+        return IssueTrackerService(self.project_root(), now=self._now)
+
+    def bind_issue_tracker(self, data: BindIssueTrackerInput) -> IssueTrackerBindingRecord:
+        root = self.project_root()
+        tracker_resource = root / ".agora" / "issue-trackers"
+        # Tracker mutations always acquire tracker then project, matching sync/reopen order.
+        with WorkspaceLock(tracker_resource, "issue_tracker_bind"):
+            with self._mutation_lock((root,), "bind_issue_tracker"):
+                swarm = self._load_swarm(root, data.swarm_id)
+                self._load_work(swarm, data.work_id)
+                contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+                self._require_actor_for_reopen(root, swarm, contract, data.reopen_actor_id)
+                return self._issue_tracker_service().bind(data)
+
+    def list_issue_tracker_bindings(
+        self, tracker: str | None = None, project: str | None = None
+    ) -> list[IssueTrackerBindingRecord]:
+        return self._issue_tracker_service().list_bindings(tracker=tracker, project=project)
+
+    def list_issue_tracker_events(self) -> list[IssueTrackerSyncEventRecord]:
+        return self._issue_tracker_service().list_events()
+
+    def sync_issue_tracker(
+        self, data: SyncIssueTrackerInput, adapter: IssueTrackerPort
+    ) -> IssueTrackerSyncResult:
+        root = self.project_root()
+        service = self._issue_tracker_service()
+
+        def reopen(
+            binding: IssueTrackerBindingRecord,
+            _snapshot: object,
+            source_id: str,
+        ) -> int:
+            swarm = self._load_swarm(root, binding.swarm_id)
+            work = self._load_work(swarm, binding.work_id)
+            contract = load_method_contract(root / ".agora" / "methods" / swarm.method)
+            if work.state != contract.terminal_state:
+                return work.revision
+            reopened = self.reopen_work(
+                ReopenWorkInput(
+                    swarm_id=binding.swarm_id,
+                    work_id=binding.work_id,
+                    actor_id=binding.reopen_actor_id,
+                    reason=(
+                        f"External issue {binding.external_id} was reopened in {binding.tracker}"
+                    ),
+                    source=f"issue-tracker:{binding.tracker}",
+                    source_id=source_id,
+                )
+            )
+            return reopened.revision
+
+        tracker_resource = root / ".agora" / "issue-trackers"
+        with WorkspaceLock(tracker_resource, "issue_tracker_sync"):
+            return service.sync(data, adapter, reopen=reopen)
+
     def list_events(
         self,
         *,
@@ -11865,6 +12259,11 @@ class AgoraWorkspace:
             "pack-histories": 0,
             "pack-locks": 0,
             "pack-removals": 0,
+            "work-revisions": 0,
+            "evidence-entries": 0,
+            "issue-tracker-bindings": 0,
+            "issue-tracker-snapshots": 0,
+            "issue-tracker-events": 0,
         }
         issues: list[ValidationIssue] = []
 
@@ -12875,10 +13274,12 @@ class AgoraWorkspace:
                     Path(work.path),
                     subject_type="work",
                     subject=f"{swarm.id}/{work.id}",
-                    statuses={"active", "blocked", "cancelled"},
+                    statuses={"active", "revalidation", "blocked", "failed", "cancelled"},
                     transitions={
                         ("active", "blocked"): "work.block",
                         ("blocked", "active"): "work.resume",
+                        ("active", "revalidation"): "work.reopen",
+                        ("revalidation", "active"): "work.revalidate",
                         ("active", "cancelled"): "work.cancel",
                         ("blocked", "cancelled"): "work.cancel",
                     },
@@ -12969,6 +13370,215 @@ class AgoraWorkspace:
                             "Evidence references unregistered work artifacts: "
                             + ", ".join(missing_references),
                         )
+                    if result == "success":
+                        for reference in references:
+                            if not reference.startswith("repo://"):
+                                continue
+                            artifact_file = root / reference.removeprefix("repo://")
+                            if artifact_file.is_file() and artifact_file.stat().st_size == 0:
+                                issue(
+                                    "evidence.artifact-empty",
+                                    artifact_file,
+                                    "Successful evidence references an empty artifact",
+                                )
+                revision_paths = sorted((Path(work.path) / "revisions").glob("*/REVISION.md"))
+                revisions: list[WorkRevisionRecord] = []
+                for revision_path in revision_paths:
+                    revision = inspect(
+                        "work-revisions",
+                        "work-revision.invalid",
+                        revision_path,
+                        lambda revision_path=revision_path: self._load_work_revision(revision_path),
+                    )
+                    if not isinstance(revision, WorkRevisionRecord):
+                        continue
+                    revisions.append(revision)
+                    expected_directory = f"{revision.revision:04d}"
+                    if revision_path.parent.name != expected_directory:
+                        issue(
+                            "work-revision.location-mismatch",
+                            revision_path,
+                            "Work revision number does not match its directory",
+                        )
+                    if revision.swarm_id != swarm.id or revision.work_id != work.id:
+                        issue(
+                            "work-revision.owner-mismatch",
+                            revision_path,
+                            "Work revision does not belong to its filesystem owner",
+                        )
+                    resolve_actor(revision.opened_by, revision_path)
+                    if revision.closed_by is not None:
+                        resolve_actor(revision.closed_by, revision_path)
+                    if revision.status == "closed":
+                        if (
+                            revision.final_state is None
+                            or revision.closed_by is None
+                            or revision.closed_at is None
+                            or revision.snapshot_sha256 is None
+                        ):
+                            issue(
+                                "work-revision.closure-incomplete",
+                                revision_path,
+                                "Closed work revision lacks closure attribution or snapshot",
+                            )
+                        snapshot_root = revision_path.parent / "snapshot"
+                        snapshot_parts: list[str] = []
+                        for name in ("WORK.md", "artifacts.md", "evidence.md", "approvals.md"):
+                            snapshot_path = snapshot_root / name
+                            if not snapshot_path.is_file():
+                                issue(
+                                    "work-revision.snapshot-missing",
+                                    snapshot_path,
+                                    f"Closed work revision snapshot is missing {name}",
+                                )
+                                continue
+                            snapshot_parts.append(
+                                f"{name}\0{snapshot_path.read_text(encoding='utf-8')}"
+                            )
+                        if len(snapshot_parts) == 4 and revision.snapshot_sha256 is not None:
+                            snapshot_sha256 = hashlib.sha256(
+                                "\0".join(snapshot_parts).encode("utf-8")
+                            ).hexdigest()
+                            if snapshot_sha256 != revision.snapshot_sha256:
+                                issue(
+                                    "work-revision.snapshot-mismatch",
+                                    revision_path,
+                                    "Closed work revision snapshot digest does not match",
+                                )
+                    elif any(
+                        value is not None
+                        for value in (
+                            revision.final_state,
+                            revision.closed_by,
+                            revision.closed_at,
+                            revision.snapshot_sha256,
+                        )
+                    ):
+                        issue(
+                            "work-revision.open-has-closure",
+                            revision_path,
+                            "Open work revision contains closure fields",
+                        )
+                if not revisions:
+                    issue(
+                        "work-revision.missing",
+                        Path(work.path) / "revisions",
+                        "Legacy work has no revision ledger; reopen will materialize it",
+                        "warning",
+                    )
+                else:
+                    numbers = [item.revision for item in revisions]
+                    if numbers != list(range(1, work.revision + 1)):
+                        issue(
+                            "work-revision.history-gap",
+                            Path(work.path) / "revisions",
+                            "Work revision history must be contiguous and match WORK.md",
+                        )
+                    for revision in revisions[:-1]:
+                        if revision.status != "closed":
+                            issue(
+                                "work-revision.previous-open",
+                                Path(revision.path),
+                                "Only the current work revision may remain open",
+                            )
+                    if revisions and revisions[-1].revision == work.revision:
+                        terminal = contract is not None and work.state == contract.terminal_state
+                        expected_revision_status = "closed" if terminal else "open"
+                        if revisions[-1].status != expected_revision_status:
+                            issue(
+                                "work-revision.status-mismatch",
+                                Path(revisions[-1].path),
+                                f"Current revision must be {expected_revision_status} for "
+                                f"work state {work.state}",
+                            )
+
+                evidence_ids: set[str] = set()
+                evidence_dedupe_keys: set[str] = set()
+                for entry_path in sorted((Path(work.path) / "evidence").glob("*/EVIDENCE.md")):
+                    entry = inspect(
+                        "evidence-entries",
+                        "evidence-entry.invalid",
+                        entry_path,
+                        lambda entry_path=entry_path: self._load_structured_evidence(entry_path),
+                    )
+                    if not isinstance(entry, EvidenceRecord):
+                        continue
+                    if entry.id != entry_path.parent.name or entry.id in evidence_ids:
+                        issue(
+                            "evidence-entry.identity-mismatch",
+                            entry_path,
+                            "Evidence id is duplicated or does not match its directory",
+                        )
+                    if entry.id is not None:
+                        evidence_ids.add(entry.id)
+                    if entry.revision > work.revision:
+                        issue(
+                            "evidence-entry.revision-invalid",
+                            entry_path,
+                            "Evidence references a future work revision",
+                        )
+                    resolve_actor(entry.produced_by, entry_path)
+                    if entry.dedupe_key is not None:
+                        if entry.dedupe_key in evidence_dedupe_keys:
+                            issue(
+                                "evidence-entry.dedupe-conflict",
+                                entry_path,
+                                f"Evidence dedupe key is not unique: {entry.dedupe_key}",
+                            )
+                        evidence_dedupe_keys.add(entry.dedupe_key)
+                    if (
+                        entry.tested_commit is not None
+                        and re.fullmatch(r"[0-9a-f]{40}", entry.tested_commit) is None
+                    ):
+                        issue(
+                            "evidence-entry.commit-invalid",
+                            entry_path,
+                            "Tested commit must be a full lowercase Git SHA",
+                        )
+                    counts = (entry.tests_total, entry.tests_passed, entry.tests_failed)
+                    if any(value is not None and value < 0 for value in counts):
+                        issue(
+                            "evidence-entry.count-invalid",
+                            entry_path,
+                            "Evidence test counts cannot be negative",
+                        )
+                    if all(value is not None for value in counts) and (
+                        entry.tests_passed + entry.tests_failed != entry.tests_total  # type: ignore[operator]
+                    ):
+                        issue(
+                            "evidence-entry.count-mismatch",
+                            entry_path,
+                            "Passed and failed tests do not equal the total",
+                        )
+                    if entry.result == "success" and entry.exit_code not in {None, 0}:
+                        issue(
+                            "evidence-entry.exit-mismatch",
+                            entry_path,
+                            "Successful evidence has a non-zero exit code",
+                        )
+                    for reference in entry.artifact_references:
+                        if not reference.startswith("repo://"):
+                            continue
+                        artifact_file = root / reference.removeprefix("repo://")
+                        if (
+                            entry.result == "success"
+                            and artifact_file.is_file()
+                            and artifact_file.stat().st_size == 0
+                        ):
+                            issue(
+                                "evidence-entry.artifact-empty",
+                                artifact_file,
+                                "Successful verification cannot rely on an empty artifact",
+                            )
+                        expected_digest = entry.artifact_content_sha256.get(reference)
+                        if artifact_file.is_file() and expected_digest is not None:
+                            actual_digest = hashlib.sha256(artifact_file.read_bytes()).hexdigest()
+                            if actual_digest != expected_digest:
+                                issue(
+                                    "evidence-entry.artifact-changed",
+                                    artifact_file,
+                                    "Evidence artifact content changed after it was recorded",
+                                )
                 amendments: list[BudgetAmendmentRecord] = []
                 for amendment_path in sorted(
                     (Path(work.path) / "budget-amendments").glob("*/AMENDMENT.md")
@@ -13463,6 +14073,95 @@ class AgoraWorkspace:
                         path,
                         f"Local parent work does not link to child {reference}",
                     )
+
+        issue_tracker_service = self._issue_tracker_service()
+        try:
+            issue_bindings = issue_tracker_service.list_bindings()
+        except Exception as error:
+            issue(
+                "issue-tracker.binding-invalid",
+                root / ".agora" / "issue-trackers" / "bindings",
+                str(error),
+            )
+            issue_bindings = []
+        checked["issue-tracker-bindings"] = len(issue_bindings)
+        binding_ids: set[str] = set()
+        for binding in issue_bindings:
+            binding_path = Path(binding.path)
+            if binding.id != binding_path.parent.name or binding.id in binding_ids:
+                issue(
+                    "issue-tracker.binding-identity-mismatch",
+                    binding_path,
+                    "Issue tracker binding id is duplicated or does not match its directory",
+                )
+            binding_ids.add(binding.id)
+            if (binding.swarm_id, binding.work_id) not in work_records:
+                issue(
+                    "issue-tracker.work-missing",
+                    binding_path,
+                    f"Binding references missing work: {binding.swarm_id}/{binding.work_id}",
+                )
+            else:
+                binding_swarm = swarms.get(binding.swarm_id)
+                if binding_swarm is not None:
+                    try:
+                        contract = methods.get(binding_swarm.method)
+                        if contract is None:
+                            raise ValueError(f"Method Pack is unavailable: {binding_swarm.method}")
+                        self._require_actor_for_reopen(
+                            root,
+                            binding_swarm,
+                            contract,
+                            binding.reopen_actor_id,
+                        )
+                    except (FileNotFoundError, PermissionError, ValueError) as error:
+                        issue("issue-tracker.reopen-actor-invalid", binding_path, str(error))
+            snapshot_path = (
+                root / ".agora" / "issue-trackers" / "snapshots" / binding.id / "SNAPSHOT.md"
+            )
+            if snapshot_path.is_file():
+                snapshot = inspect(
+                    "issue-tracker-snapshots",
+                    "issue-tracker.snapshot-invalid",
+                    snapshot_path,
+                    lambda binding_id=binding.id: issue_tracker_service.snapshot_for_binding(
+                        binding_id
+                    ),
+                )
+                if isinstance(snapshot, ExternalIssueSnapshot) and (
+                    snapshot.tracker,
+                    snapshot.project,
+                    snapshot.external_id,
+                ) != (binding.tracker, binding.project, binding.external_id):
+                    issue(
+                        "issue-tracker.snapshot-identity-mismatch",
+                        snapshot_path,
+                        "Issue tracker snapshot does not match its binding",
+                    )
+        try:
+            tracker_events = issue_tracker_service.list_events()
+        except Exception as error:
+            issue(
+                "issue-tracker.event-invalid",
+                root / ".agora" / "issue-trackers" / "events",
+                str(error),
+            )
+            tracker_events = []
+        checked["issue-tracker-events"] = len(tracker_events)
+        for event in tracker_events:
+            event_path = Path(event.path)
+            if event.id != event_path.parent.name:
+                issue(
+                    "issue-tracker.event-identity-mismatch",
+                    event_path,
+                    "Issue tracker event id does not match its directory",
+                )
+            if event.binding_id not in binding_ids:
+                issue(
+                    "issue-tracker.event-binding-missing",
+                    event_path,
+                    f"Issue tracker event references missing binding: {event.binding_id}",
+                )
 
         try:
             maximum = (
@@ -15300,6 +15999,43 @@ class AgoraWorkspace:
             raise PermissionError(f"Actor {actor.reference} is not allowed to perform {action}")
         return actor
 
+    def _require_actor_for_reopen(
+        self,
+        root: Path,
+        swarm: SwarmRecord,
+        contract: MethodContract,
+        actor_id: str,
+    ) -> ActorRecord:
+        """Authorize reversal with roles already trusted to enter the terminal state."""
+        actor = self._find_actor(root, actor_id)
+        self._assert_represented_swarm_operational(root, actor)
+        terminal_roles = {
+            role
+            for transition in contract.transitions
+            if transition.target == contract.terminal_state
+            for role in transition.roles
+        }
+        actor_roles = {
+            role for role, reference in swarm.assignments.items() if reference == actor.reference
+        }
+        if not actor_roles:
+            raise ValueError(f"Actor {actor.reference} is not assigned to swarm {swarm.id}")
+        if not actor_roles & terminal_roles:
+            candidates = sorted(
+                {
+                    reference
+                    for role, reference in swarm.assignments.items()
+                    if role in terminal_roles
+                }
+            )
+            guidance = (
+                f" Authorized terminal actors: {', '.join(candidates)}." if candidates else ""
+            )
+            raise PermissionError(
+                f"Actor {actor.reference} cannot reopen work for Method {contract.id}.{guidance}"
+            )
+        return actor
+
     @staticmethod
     def _role_allows_action(root: Path, method: str, role_id: str, action: str) -> bool:
         role = read_markdown(root / ".agora" / "methods" / method / "roles" / f"{role_id}.md")
@@ -15458,7 +16194,7 @@ class AgoraWorkspace:
         ]
 
     def _assert_work_mutable(self, root: Path, swarm: SwarmRecord, work: WorkRecord) -> None:
-        if work.operational_status != "active":
+        if work.operational_status not in {"active", "revalidation"}:
             raise ValueError(
                 f"Work {swarm.id}/{work.id} is {work.operational_status}; resume it before "
                 "performing work mutations"
@@ -15905,6 +16641,7 @@ class AgoraWorkspace:
                 if "criterion-statuses" in document.attributes
                 else {}
             ),
+            revision=_optional_integer_attribute(document.attributes, "revision") or 1,
         )
 
     def _render_work(self, work: WorkRecord) -> str:
@@ -15923,6 +16660,7 @@ class AgoraWorkspace:
             "swarm": work.swarm_id,
             "title": work.title,
             "state": work.state,
+            "revision": work.revision,
             "operational-status": work.operational_status,
             "status-reason": work.status_reason,
             "status-by": work.status_by,
@@ -15949,6 +16687,184 @@ class AgoraWorkspace:
                 ),
             )
         )
+
+    @staticmethod
+    def _empty_artifact_register() -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={"schema": "agora/artifacts/v2", "artifact-kinds": []},
+                body=(
+                    "# Artifacts\n\n"
+                    "| Kind | URI | Content SHA-256 | Produced by | Timestamp |\n"
+                    "| --- | --- | --- | --- | --- |"
+                ),
+            )
+        )
+
+    @staticmethod
+    def _empty_evidence_register() -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={"schema": "agora/evidence/v2", "results": []},
+                body=(
+                    "# Evidence\n\n"
+                    "| Type | Result | Artifact references | Content SHA-256 | "
+                    "Produced by | Timestamp |\n"
+                    "| --- | --- | --- | --- | --- | --- |"
+                ),
+            )
+        )
+
+    @staticmethod
+    def _empty_approval_register() -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={"schema": "agora/approvals/v1", "approval-roles": []},
+                body=(
+                    "# Approvals\n\n| Role | Approved by | Note | Timestamp |\n"
+                    "| --- | --- | --- | --- |"
+                ),
+            )
+        )
+
+    @staticmethod
+    def _work_revision_path(work: WorkRecord, revision: int) -> Path:
+        return Path(work.path) / "revisions" / f"{revision:04d}" / "REVISION.md"
+
+    @classmethod
+    def _render_work_revision(cls, revision: WorkRevisionRecord) -> str:
+        return render_markdown(
+            MarkdownDocument(
+                attributes={
+                    "schema": "agora/work-revision/v1",
+                    "swarm": revision.swarm_id,
+                    "work": revision.work_id,
+                    "revision": revision.revision,
+                    "status": revision.status,
+                    "initial-state": revision.initial_state,
+                    "final-state": revision.final_state,
+                    "opened-by": revision.opened_by,
+                    "opened-at": revision.opened_at,
+                    "closed-by": revision.closed_by,
+                    "closed-at": revision.closed_at,
+                    "source": revision.source,
+                    "source-id": revision.source_id,
+                    "snapshot-sha256": revision.snapshot_sha256,
+                },
+                body=(
+                    f"# Work revision {revision.revision}\n\n## Reason\n\n"
+                    f"{revision.reason or 'Initial work revision.'}"
+                ),
+            )
+        )
+
+    @classmethod
+    def _load_work_revision(cls, path: Path) -> WorkRevisionRecord:
+        document = read_markdown(path)
+        _assert_schema(document, "agora/work-revision/v1", path)
+        number = _optional_integer_attribute(document.attributes, "revision")
+        if number is None or number < 1:
+            raise ValueError(f"Work revision must be a positive integer: {path}")
+        status = string_attribute(document.attributes, "status")
+        if status not in {"open", "closed"}:
+            raise ValueError(f"Unsupported work revision status: {status}")
+        return WorkRevisionRecord(
+            swarm_id=string_attribute(document.attributes, "swarm"),
+            work_id=string_attribute(document.attributes, "work"),
+            revision=number,
+            status=status,  # type: ignore[arg-type]
+            initial_state=string_attribute(document.attributes, "initial-state"),
+            opened_by=string_attribute(document.attributes, "opened-by"),
+            opened_at=string_attribute(document.attributes, "opened-at"),
+            source=optional_string_attribute(document.attributes, "source"),
+            source_id=optional_string_attribute(document.attributes, "source-id"),
+            reason=_extract_section(document.body, "Reason"),
+            final_state=optional_string_attribute(document.attributes, "final-state"),
+            closed_by=optional_string_attribute(document.attributes, "closed-by"),
+            closed_at=optional_string_attribute(document.attributes, "closed-at"),
+            snapshot_sha256=optional_string_attribute(document.attributes, "snapshot-sha256"),
+            path=str(path),
+        )
+
+    def _revision_by_source(
+        self, work: WorkRecord, source: str, source_id: str
+    ) -> WorkRevisionRecord | None:
+        for path in sorted((Path(work.path) / "revisions").glob("*/REVISION.md")):
+            revision = self._load_work_revision(path)
+            if revision.source == source.strip() and revision.source_id == source_id.strip():
+                return revision
+        return None
+
+    def _load_or_materialize_revision(
+        self, work: WorkRecord, actor_reference: str
+    ) -> WorkRevisionRecord:
+        path = self._work_revision_path(work, work.revision)
+        if path.is_file() or staged_contents(path) is not None:
+            pending = staged_contents(path)
+            if pending is not None:
+                temporary = parse_markdown(pending)
+                status = string_attribute(temporary.attributes, "status")
+                return WorkRevisionRecord(
+                    swarm_id=work.swarm_id,
+                    work_id=work.id,
+                    revision=work.revision,
+                    status="closed" if status == "closed" else "open",
+                    initial_state=string_attribute(temporary.attributes, "initial-state"),
+                    opened_by=string_attribute(temporary.attributes, "opened-by"),
+                    opened_at=string_attribute(temporary.attributes, "opened-at"),
+                    path=str(path),
+                    source=optional_string_attribute(temporary.attributes, "source"),
+                    source_id=optional_string_attribute(temporary.attributes, "source-id"),
+                    reason=_extract_section(temporary.body, "Reason"),
+                    final_state=optional_string_attribute(temporary.attributes, "final-state"),
+                    closed_by=optional_string_attribute(temporary.attributes, "closed-by"),
+                    closed_at=optional_string_attribute(temporary.attributes, "closed-at"),
+                    snapshot_sha256=optional_string_attribute(
+                        temporary.attributes, "snapshot-sha256"
+                    ),
+                )
+            return self._load_work_revision(path)
+        revision = WorkRevisionRecord(
+            swarm_id=work.swarm_id,
+            work_id=work.id,
+            revision=work.revision,
+            status="open",
+            initial_state=work.state,
+            opened_by=actor_reference,
+            opened_at=self._timestamp(),
+            path=str(path),
+            source="legacy",
+            reason="Materialized from a legacy work record.",
+        )
+        write_new(path, self._render_work_revision(revision))
+        return revision
+
+    @staticmethod
+    def _staged_or_disk_contents(path: Path) -> str:
+        pending = staged_contents(path)
+        return pending if pending is not None else path.read_text(encoding="utf-8")
+
+    def _close_work_revision_writes(self, work: WorkRecord, actor_reference: str) -> None:
+        current = self._load_or_materialize_revision(work, actor_reference)
+        if current.status == "closed":
+            return
+        revision_root = self._work_revision_path(work, work.revision).parent
+        snapshot_root = revision_root / "snapshot"
+        snapshot_contents: list[str] = []
+        for name in ("WORK.md", "artifacts.md", "evidence.md", "approvals.md"):
+            contents = self._staged_or_disk_contents(Path(work.path) / name)
+            snapshot_contents.append(f"{name}\0{contents}")
+            write_new(snapshot_root / name, contents)
+        digest = hashlib.sha256("\0".join(snapshot_contents).encode("utf-8")).hexdigest()
+        closed = replace(
+            current,
+            status="closed",
+            final_state=work.state,
+            closed_by=actor_reference,
+            closed_at=self._timestamp(),
+            snapshot_sha256=digest,
+        )
+        atomic_write(Path(current.path), self._render_work_revision(closed))
 
     @staticmethod
     def _render_usage(record: UsageRecord) -> str:
@@ -16306,9 +17222,17 @@ class AgoraWorkspace:
             path = work_root / name
             if not path.is_file():
                 raise FileNotFoundError(f"Work policy document is missing: {path}")
+            contents = path.read_bytes()
+            if name == "WORK.md":
+                # Revision is additive bookkeeping. State and material projections already
+                # invalidate prepared decisions on reopen, so excluding this field preserves the
+                # established Core 0.8 authorization contract without weakening freshness.
+                document = read_markdown(path)
+                document.attributes.pop("revision", None)
+                contents = render_markdown(document).encode("utf-8")
             digest.update(name.encode("ascii"))
             digest.update(b"\0")
-            digest.update(path.read_bytes())
+            digest.update(contents)
             digest.update(b"\0")
         for path in sorted((work_root / "waivers").glob("*/WAIVER.md")):
             digest.update(b"waiver\0")
@@ -17408,6 +18332,8 @@ class AgoraWorkspace:
             "1. Read every available file listed above before acting.\n"
             "2. Perform only actions allowed to the assigned role and active transition.\n"
             "3. Use the Agora CLI to persist state, artifacts, evidence, and material outcomes.\n"
+            "   Agora engine progress is emitted line-by-line on stderr; keep `AGORA_TRACE` "
+            "enabled so chat hosts can relay each governed step.\n"
             "4. Do not treat unrecorded conversation history as durable project state.\n"
             "5. Stop when policy, permissions, or a gate cannot be satisfied.\n"
             "6. Act as the executor named above; do not claim ownership or human approval on "
@@ -18701,7 +19627,7 @@ def _tool_result_section(body: str, heading: str, next_heading: str | None, path
 
 
 def _work_operational_status(value: object) -> WorkOperationalStatus:
-    if value not in {"active", "blocked", "cancelled"}:
+    if value not in {"active", "revalidation", "blocked", "failed", "cancelled"}:
         raise ValueError(f"Unsupported work operational status: {value}")
     return value  # type: ignore[return-value]
 

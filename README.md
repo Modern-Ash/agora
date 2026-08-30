@@ -367,6 +367,18 @@ operation, work preconditions, and materialized session context.
 The [operational loop guide](docs/guides/operational-loop.md) covers stopping, resuming, human
 handoffs, and durable failure recovery.
 
+When Agora is driven from Codex, Claude Code, CI, or another non-TTY host, enable its independent
+engine trace to see progress without corrupting the structured result:
+
+```bash
+agora --trace compact run --until-blocked --max-steps 10
+AGORA_TRACE=jsonl agora status
+```
+
+Trace phases are flushed to `stderr`; final JSON remains on `stdout`. Agora-launched agent sessions
+default to `AGORA_TRACE=compact`, so chat integrations can relay lifecycle phases while keeping
+provider reasoning and raw output out of the observation stream.
+
 ## Ecosystem integrations
 
 Agora separates stable capabilities from provider-specific translation:
@@ -376,6 +388,10 @@ Agora separates stable capabilities from provider-specific translation:
   and portfolio management.
 - Reviewed CLI adapters currently cover the GitHub and GitLab delivery ecosystems, Jira,
   Confluence, Terraform, and read-only AWS and Google Cloud inventory.
+- A provider-neutral Core issue port binds and explicitly reconciles GitHub and Jira through the
+  same normalized snapshot contract. A `closed -> open` fact can create a new authorized local work
+  revision; the synchronization itself remains read-only on the provider. Reopen currently fails
+  closed for actors that require signed lifecycle actions until its prepare/apply contract exists.
 - Native CLIs are preferred when they are installed, version-compatible, and non-interactive. MCP
   remains an explicit alternative transport rather than an implicit dependency.
 
@@ -421,7 +437,8 @@ credential custody to the execution environment:
 - Authenticated changes are prepared, signed externally, verified, and revalidated before apply.
 - Tool permissions are bounded by actor capability, role, Method Pack policy, evidence, and explicit
   approvals.
-- Tool Sync is read-only and explicit; Agora performs no background reconciliation.
+- Tool Sync and issue reconciliation are read-only and explicit; Agora performs no background
+  polling or provider mutation through either path.
 - Containers or external runners provide filesystem, network, syscall, and resource isolation.
 
 Read [Actor authentication](docs/guides/actor-authentication.md),
@@ -492,6 +509,7 @@ Operate and extend it:
 - [Operations and validation](docs/guides/operations-and-validation.md)
 - [AI-native SDLC controls](docs/guides/ai-native-sdlc.md)
 - [Project upgrades](docs/guides/project-upgrades.md)
+- [Cycle revalidation and issue trackers](docs/guides/cycle-revalidation.md)
 - [Method Pack reference](docs/reference/method-packs.md)
 - [Tool Pack reference](docs/reference/tool-packs.md)
 - [Pack registries and trust](docs/guides/pack-registries.md)

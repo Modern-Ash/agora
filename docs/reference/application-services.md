@@ -9,6 +9,27 @@ All response and query DTOs are frozen dataclasses. `to_dict()` returns JSON-com
 mappings. Every payload carries a `schema` field; a schema version changes when the shape or meaning
 is incompatible.
 
+## Engine observation contract
+
+`EngineTraceEvent` exposes `agora/application/engine-trace-event/v1` for safe, incremental
+observation of one Core operation:
+
+| Field | Meaning |
+| --- | --- |
+| `operation_id` | Stable correlation id for one command execution |
+| `sequence` | Monotonic event order within that operation |
+| `phase` | Provider-neutral engine phase such as `run.select` or `tracker.reconcile` |
+| `status` | `running`, `succeeded`, `blocked`, or `failed` observation state |
+| `code` | Stable machine-oriented event code |
+| `summary` | Bounded human-readable fact |
+| `timestamp` | UTC event time |
+| `references` | String-only durable ids and bounded context |
+
+The CLI renders this DTO through `--trace compact`, `detailed`, or `jsonl` on `stderr`. It is an
+ephemeral observation contract, not a mutation result or source of truth. Implementations must not
+place provider output, prompts, credentials, environment secrets, or model reasoning in it. Durable
+audit remains in the existing Markdown records and Activity Ledger.
+
 ## Read operations
 
 | Operation | Result schema |

@@ -5,6 +5,10 @@ description: "Execute a permitted transition step for an assigned Agora role"
 
 # Execute governed work
 
+When a chat host launches Agora, set `AGORA_TRACE=compact` (or use the global
+`agora --trace compact ...` option) and relay each line from stderr so the user can see Core's
+governed phases without mixing them into JSON output.
+
 Use `agora next --actor "$AGORA_ACTOR"` to derive the current action from durable Method Pack state.
 When launched through `agora run`, read the context at `AGORA_CONTEXT` before changing the project.
 Record at least one governed transition, artifact, evidence, approval, block, or delegation outcome

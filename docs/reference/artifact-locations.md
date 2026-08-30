@@ -109,7 +109,13 @@ form.
 .agora/swarms/<swarm>/work/<work>/gherkin/<criterion>.feature
 .agora/swarms/<swarm>/work/<work>/artifacts.md
 .agora/swarms/<swarm>/work/<work>/evidence.md
+.agora/swarms/<swarm>/work/<work>/evidence/<evidence>/EVIDENCE.md
 .agora/swarms/<swarm>/work/<work>/approvals.md
+.agora/swarms/<swarm>/work/<work>/revisions/<revision>/REVISION.md
+.agora/swarms/<swarm>/work/<work>/revisions/<revision>/snapshot/{WORK,artifacts,evidence,approvals}.md
+.agora/issue-trackers/bindings/<binding>/BINDING.md
+.agora/issue-trackers/snapshots/<binding>/SNAPSHOT.md
+.agora/issue-trackers/events/<event>/EVENT.md
 .agora/actions/<action>/ACTION.md
 .agora/delegations/<delegation>/DELEGATION.md
 .agora/sessions/<session>/SESSION.md
@@ -130,6 +136,11 @@ Consistency and Gherkin files are generated advisory work products. Their artifa
 files retain canonical input hashes when provenance is available, allowing `agora work traceability`
 and `agora validate` to detect stale output. Missing hashes on legacy records are warnings rather
 than parse failures.
+
+`evidence.md` and the material registers are the current-revision projections. Structured
+`evidence/*/EVIDENCE.md` entries and closed `revisions/*` snapshots are append-only history.
+Issue-tracker bindings and normalized snapshots remain provider-neutral; provider CLI output and
+credentials are not stored in these records.
 
 `RUN.md` exists after preparation. `RESULT.md` exists only after launch reaches a terminal outcome.
 Use `agora tool result --run <run>` to read their validated typed view; do not treat ad hoc terminal

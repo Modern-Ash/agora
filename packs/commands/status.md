@@ -5,6 +5,9 @@ description: "Inspect and validate durable Agora project state"
 
 # Inspect Agora state
 
+When invoked from chat or another non-TTY host, set `AGORA_TRACE=compact` and relay Agora's stderr
+lines; keep stdout intact for the structured result.
+
 Use `agora status`, `agora next`, `agora inbox`, and the domain `list` commands before selecting work
 or reporting project state.
 Use `agora event list` for attributed history and `agora validate` before relying on cross-record

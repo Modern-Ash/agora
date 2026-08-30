@@ -115,10 +115,19 @@ Local decomposition creates child work under the same swarm and Method Pack. The
 or cancellation requires every direct child to be terminal or explicitly cancelled. Cross-swarm
 child ownership uses a Delegation instead.
 
-Work also has an orthogonal operational status: `active`, `blocked`, or `cancelled`. Blocking
-preserves method state while suspending mutations. Resumption restores activity without traversing a
-method edge. Cancellation is terminal for the item but does not claim that its Method Pack gate was
-satisfied.
+Work also has an orthogonal operational status: `active`, `revalidation`, `blocked`, `failed`, or
+`cancelled`. `revalidation` means a previously terminal work item has returned to the unique state
+immediately before the Method Pack terminal state and must establish fresh current materials.
+Blocking preserves method state while suspending mutations. Resumption restores activity without
+traversing a method edge. Cancellation is terminal for the item but does not claim that its Method
+Pack gate was satisfied.
+
+A **Work Revision** is the immutable cycle boundary for one work item. Revision `1` is created with
+the work. Reopening terminal work closes its current `REVISION.md` with content-addressed snapshots
+of `WORK.md`, `artifacts.md`, `evidence.md`, and `approvals.md`, increments the revision, clears only
+the current material projections, and opens a new revision in `revalidation`. Historical structured
+evidence and closed snapshots are never rewritten. The actor authorized for the Method Pack edge
+into the terminal state authorizes reopening; adapters cannot invent that authority.
 
 A **Status Change** is a nested, attributed `STATUS.md` record. Its monotonic sequence, action,
 source, target, actor, timestamp, and reason preserve interruption history independently of folder
@@ -236,6 +245,14 @@ schemes without downloading the remote object. Evidence records the digest obser
 artifact relationship. A Method Pack may allow address-only informational evidence or require
 content-addressed evidence for an audit-grade gate.
 
+Each new evidence result also has an immutable **Evidence Entry**. It binds a stable evidence id,
+work revision, type, phase, result, artifact references and observed digests, producer, timestamp,
+optional tested Git commit, structured command argument vector, exit code, test counts,
+environment, and deduplication key. `evidence.md` remains the current-revision projection used by
+existing gates. Successful evidence must reference at least one registered artifact; Core rejects
+inconsistent counts, a nonzero successful exit code, dedupe-key reuse with a different payload, and
+changed or empty successful artifacts.
+
 A **Gate Decision** applies one attributed role decision to the gate active for the work item's
 current state. An approved decision creates the existing positive approval record. A rejected
 decision does not masquerade as approval: it remains a durable `gate.rejected` work event and
@@ -289,6 +306,19 @@ A **Tool Sync** is a launched Tool Run constrained to an operation with `risk: "
 the current bounded external result under `.agora/tool-runs` and never reconciles or mutates remote
 state implicitly. Provider names do not appear in the sync rule; installed adapters supply the
 translation.
+
+An **Issue Tracker Binding** is a separate Core record that connects one provider/project/issue
+identity to one Agora work item and a reopen actor. An **External Issue Snapshot** is the normalized,
+content-addressed observation returned by a reviewed adapter. An **Issue Tracker Sync Event** records
+the detected `created`, `updated`, `closed`, `reopened`, or `unchanged` fact and the work revision
+created by reconciliation when applicable. Bindings are unique by external identity; event keys and
+payload digests make replay idempotent.
+
+GitHub and Jira share this exact Core contract. Their adapters keep provider differences at the
+edge—repository and numeric issue id versus Jira project/key, `login` versus `accountId`, and Jira's
+configured closed-state mapping. Only a normalized `closed -> open` change may request a reopen, and
+Core rechecks terminal state, Method Pack topology, actor assignment, and authority before mutation.
+This reconciliation reads the provider but never comments on, closes, or otherwise writes to it.
 
 A **Coordination Policy** keeps local operating-system locking as the baseline and may require an
 external lease CLI for project mutations across hosts. The policy stores a stable resource id and

@@ -1,13 +1,21 @@
+import hashlib
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from agora.filesystem import assert_slug, atomic_write, packs_root
-from agora.markdown import MarkdownDocument, read_markdown, render_markdown, string_attribute
+from agora.markdown import (
+    MarkdownDocument,
+    parse_markdown,
+    read_markdown,
+    render_markdown,
+    string_attribute,
+)
+from agora.methods import load_method_contract
 from agora.model import Integration, ProjectConfiguration, UpgradeChange, UpgradeResult
 
-CURRENT_PROJECT_VERSION = "0.3.0"
+CURRENT_PROJECT_VERSION = "0.4.0"
 VERSION_PATTERN = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)")
 
 
@@ -48,7 +56,7 @@ def plan_upgrade(root: Path, project: ProjectConfiguration) -> UpgradeResult:
             changes=[],
             warnings=[],
         )
-    if project.version not in {"0.1.0", "0.2.0"}:
+    if project.version not in {"0.1.0", "0.2.0", "0.3.0"}:
         raise ValueError(
             f"No supported migration path from {project.version} to {CURRENT_PROJECT_VERSION}"
         )
@@ -317,8 +325,52 @@ def _migration_to_current(
         review_mutations, review_warnings = _migrate_0_2_0_to_0_3_0(
             root, project, update_project_version=False
         )
-        return [*mutations, *review_mutations], [*warnings, *review_warnings]
-    return _migrate_0_2_0_to_0_3_0(root, project, update_project_version=True)
+        revision_mutations, revision_warnings = _migrate_0_3_0_to_0_4_0(
+            root,
+            project,
+            update_project_version=False,
+            prior_mutations=[*mutations, *review_mutations],
+        )
+        return (
+            _coalesce_mutations([*mutations, *review_mutations, *revision_mutations]),
+            [*warnings, *review_warnings, *revision_warnings],
+        )
+    if project.version == "0.2.0":
+        mutations, warnings = _migrate_0_2_0_to_0_3_0(root, project, update_project_version=True)
+        revision_mutations, revision_warnings = _migrate_0_3_0_to_0_4_0(
+            root,
+            project,
+            update_project_version=False,
+            prior_mutations=mutations,
+        )
+        return _coalesce_mutations([*mutations, *revision_mutations]), [
+            *warnings,
+            *revision_warnings,
+        ]
+    return _migrate_0_3_0_to_0_4_0(root, project, update_project_version=True)
+
+
+def _coalesce_mutations(mutations: list[_Mutation]) -> list[_Mutation]:
+    """Keep one ordered final write and backup entry per durable path."""
+    positions: dict[Path, int] = {}
+    result: list[_Mutation] = []
+    for mutation in mutations:
+        position = positions.get(mutation.path)
+        if position is None:
+            positions[mutation.path] = len(result)
+            result.append(mutation)
+            continue
+        prior = result[position]
+        result[position] = _Mutation(
+            path=mutation.path,
+            contents=mutation.contents,
+            change=UpgradeChange(
+                mutation.change.action,
+                mutation.change.path,
+                f"{prior.change.detail}; {mutation.change.detail}",
+            ),
+        )
+    return result
 
 
 def _migrate_0_2_0_to_0_3_0(
@@ -347,6 +399,137 @@ def _migrate_0_2_0_to_0_3_0(
             "Set the project protocol version",
         )
 
+    return mutations, warnings
+
+
+def _migrate_0_3_0_to_0_4_0(
+    root: Path,
+    project: ProjectConfiguration,
+    *,
+    update_project_version: bool,
+    prior_mutations: list[_Mutation] | None = None,
+) -> tuple[list[_Mutation], list[str]]:
+    """Materialize the additive revision ledger without changing local Method authority."""
+    mutations: list[_Mutation] = []
+    warnings = [
+        "Existing Method Pack roles are preserved; actors trusted for the terminal transition "
+        "also authorize tracker-driven revalidation."
+    ]
+    pending = {item.path: item.contents for item in prior_mutations or []}
+    if update_project_version:
+        project_path = root / ".agora" / "project.md"
+        project_document = read_markdown(project_path)
+        project_document.attributes["version"] = CURRENT_PROJECT_VERSION
+        _add_update(
+            mutations,
+            root,
+            project_path,
+            render_markdown(project_document),
+            "Set the project protocol version",
+        )
+
+    for work_path in sorted((root / ".agora" / "swarms").glob("*/work/*/WORK.md")):
+        work_document = (
+            read_markdown(work_path)
+            if work_path not in pending
+            else parse_markdown(pending[work_path])
+        )
+        if "revision" in work_document.attributes:
+            continue
+        work_document.attributes["revision"] = 1
+        work_contents = render_markdown(work_document)
+        _add_update(
+            mutations,
+            root,
+            work_path,
+            work_contents,
+            "Materialize the initial work revision number",
+        )
+
+        swarm_path = work_path.parents[2] / "SWARM.md"
+        material_paths = [
+            work_path.parent / name for name in ("artifacts.md", "evidence.md", "approvals.md")
+        ]
+        if not swarm_path.is_file() or not all(path.is_file() for path in material_paths):
+            warnings.append(
+                f"Could not materialize a revision ledger for {work_path.relative_to(root)} "
+                "because its swarm or material registers are incomplete."
+            )
+            continue
+        swarm_document = read_markdown(swarm_path)
+        assignments = swarm_document.attributes.get("assignments", {})
+        actor = (
+            next(
+                (
+                    value
+                    for _, value in sorted(assignments.items())
+                    if isinstance(value, str) and value and value != "unassigned"
+                ),
+                None,
+            )
+            if isinstance(assignments, dict)
+            else None
+        )
+        if actor is None:
+            warnings.append(
+                f"Could not attribute the initial revision for {work_path.relative_to(root)}; "
+                "assign a swarm role before reopening this work."
+            )
+            continue
+        method = string_attribute(swarm_document.attributes, "method")
+        contract = load_method_contract(root / ".agora" / "methods" / method)
+        state = string_attribute(work_document.attributes, "state")
+        terminal = state == contract.terminal_state
+        opened_at = work_document.attributes.get("status-at")
+        if not isinstance(opened_at, str) or not opened_at:
+            opened_at = "1970-01-01T00:00:00Z"
+        revision_path = work_path.parent / "revisions" / "0001" / "REVISION.md"
+        snapshot_sha256: str | None = None
+        if terminal:
+            snapshot_values = {
+                "WORK.md": work_contents,
+                **{path.name: path.read_text(encoding="utf-8") for path in material_paths},
+            }
+            snapshot_sha256 = hashlib.sha256(
+                "\0".join(
+                    f"{name}\0{snapshot_values[name]}"
+                    for name in ("WORK.md", "artifacts.md", "evidence.md", "approvals.md")
+                ).encode("utf-8")
+            ).hexdigest()
+            for name, contents in snapshot_values.items():
+                _add_create(
+                    mutations,
+                    root,
+                    revision_path.parent / "snapshot" / name,
+                    contents,
+                    "Preserve the closed initial work revision snapshot",
+                )
+        revision_document = MarkdownDocument(
+            attributes={
+                "schema": "agora/work-revision/v1",
+                "swarm": string_attribute(work_document.attributes, "swarm"),
+                "work": string_attribute(work_document.attributes, "id"),
+                "revision": 1,
+                "status": "closed" if terminal else "open",
+                "initial-state": state,
+                "final-state": state if terminal else None,
+                "opened-by": actor,
+                "opened-at": opened_at,
+                "closed-by": actor if terminal else None,
+                "closed-at": opened_at if terminal else None,
+                "source": "upgrade:0.4.0",
+                "source-id": None,
+                "snapshot-sha256": snapshot_sha256,
+            },
+            body="# Work revision 1\n\n## Reason\n\nMaterialized by the 0.4.0 upgrade.",
+        )
+        _add_create(
+            mutations,
+            root,
+            revision_path,
+            render_markdown(revision_document),
+            "Create the append-only initial work revision ledger",
+        )
     return mutations, warnings
 
 

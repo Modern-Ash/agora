@@ -50,6 +50,26 @@ class SerializableDTO:
 
 
 @dataclass(frozen=True)
+class EngineTraceEvent(SerializableDTO):
+    """A safe, provider-neutral fact emitted while one Core operation executes.
+
+    Trace events are an observation contract, not a second source of truth.  They deliberately
+    contain concise lifecycle facts and stable references only; provider output, credentials, and
+    model reasoning belong to their existing bounded result records.
+    """
+
+    operation_id: str
+    sequence: int
+    phase: str
+    status: str
+    code: str
+    summary: str
+    timestamp: str
+    references: Mapping[str, str] = field(default_factory=dict)
+    schema: str = field(default="agora/application/engine-trace-event/v1", init=False)
+
+
+@dataclass(frozen=True)
 class ProjectOverview(SerializableDTO):
     project: str
     version: str

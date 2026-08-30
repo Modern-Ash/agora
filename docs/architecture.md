@@ -85,6 +85,10 @@ Tool Packs and structured external operations. `src/agora/markdown.py` implement
 JSON-compatible front matter used by the protocol. `src/agora/upgrades.py` plans ordered project
 migrations, preserves customization boundaries, backs up changed files, and writes durable upgrade
 manifests.
+`src/agora/issue_tracking.py` owns provider-neutral issue bindings, normalized snapshots,
+idempotent reconciliation events, and lifecycle revalidation. Provider modules in
+`src/agora/tracker_adapters.py` only translate reviewed native CLI responses into that Core model;
+they do not decide whether work is reopened.
 `src/agora/filesystem.py` supplies atomic single-document replacement and a nested transaction
 context for compound Markdown mutations. The transaction stages writes in memory, snapshots
 pre-existing files, commits them in insertion order, and restores applied files and newly created
@@ -142,6 +146,13 @@ filesystem isolation; an external writer can still race during the commit window
 Agora CLI maps arguments, standard input and output, terminal-oriented errors, and process exit
 codes to versioned Core requests and results. Agents and automation may continue to use it without
 making CLI syntax a dependency of Studio or a source of domain policy.
+
+The CLI also exposes an observation adapter for
+`agora/application/engine-trace-event/v1`. `--trace compact`, `detailed`, and `jsonl` write ordered,
+flushed events to `stderr`, including without a TTY; the command result remains isolated on
+`stdout`. Trace events are bounded lifecycle facts with durable references, not persisted state,
+provider logs, prompts, credentials, or model reasoning. Other interfaces may observe the same Core
+phases without copying CLI rendering rules.
 
 ### Studio and Studio API
 
@@ -255,6 +266,8 @@ Compound mutations distinguish three guarantees:
 | Work creation | Stage the work document, companion registers, event streams, and Activity Ledger; roll back every applied write if commit fails |
 | Adopted work lifecycle mutations | Stage domain record, work event, and Activity together; restore content and mode and remove new files on failure |
 | Gate decisions and budget amendments | Revalidate the governed read-set immediately before one transaction and return its exact Activity record |
+| Work reopen | Close the prior revision snapshot, reset current projections, open the next revision, append status/event records, and refresh the swarm in one transaction |
+| Issue reconciliation | Fetch outside mutation state, then persist normalized snapshot plus immutable event together; acquire tracker coordination before project mutation when a reopen is required |
 | Actor identity and handoffs | Stage identity/assignment records, history, events, and Activity together |
 | Sessions and Tool Runs | Commit prepare, running, and terminal states separately; never hold a filesystem transaction while external code runs |
 | Specialized pack, registry, and upgrade changes | Use their reviewed staging and rollback mechanisms before publishing the new composition |
@@ -318,6 +331,9 @@ selected runtime only for recognized quota or rate-limit failures; an ordinary r
 preserved and not silently retried elsewhere. Without `--launch`, the command only prepares files.
 With `--launch`, it delegates to `codex`, `claude`, or an explicit runner and exports `AGORA_PROJECT`,
 `AGORA_SESSION`, `AGORA_CONTEXT`, `AGORA_ACTOR`, `AGORA_SWARM`, and optional `AGORA_WORK` variables.
+It also exports `AGORA_TRACE=compact` unless the caller selected another mode. This lets a chat host
+relay Agora-owned phases while the child session is non-interactive, without changing the Method
+Pack or runner contract.
 The external runtime remains responsible for model authentication and execution. Codex and Claude
 use non-interactive native commands by default. `agora next` derives ordered actions from Method Pack
 transitions, while bounded `agora run --until-blocked` recomputes durable state after every session
@@ -362,6 +378,33 @@ The observability pack applies the same adapter boundary to health signals and i
 resolution distinct from evidence that recovery actually occurred.
 The code-review pack separates review reads, review writing, review decisions, and merge authority.
 Its GitHub Pull Requests adapter uses `gh`; no bundled role receives `review.merge`.
+
+Issue-tracker reconciliation is a second, deliberately narrower Core boundary alongside Tool Runs.
+An explicit binding connects one Agora work item to one `(tracker, project, external issue)`
+identity and names the actor responsible for a possible reopen. A reviewed GitHub or Jira adapter
+fetches only bound issues and returns the same normalized snapshot shape. Core compares the prior
+snapshot, writes an immutable reconciliation event, and is the only layer allowed to turn a
+`closed -> open` provider fact into a new work revision. Fetching is read-only: this path cannot
+comment on, close, or otherwise mutate the provider.
+
+```mermaid
+flowchart LR
+    GH[GitHub gh] --> GA[GitHub adapter]
+    J[Jira acli] --> JA[Jira adapter]
+    GA --> N[Normalized issue snapshot]
+    JA --> N
+    N --> C[Core reconciliation]
+    C --> B[Binding and immutable event]
+    C -->|closed to open| R[Authorized work revision]
+```
+
+Native provider identity is retained in normalized form: GitHub authors use `login`, while Jira
+authors use `accountId`; display names are informational. Synchronization never stores credentials
+or raw provider output. It records state, labels, milestone, author identity, comment count,
+provider timestamp, and a canonical payload digest. Pull requests, checks, deployments, automatic
+comments, and issue closure are outside this first reconciliation contract. An actor that requires
+detached authentication also fails closed on reopen until a signed `work.reopen` prepare/apply
+contract is introduced.
 
 Tool Run preparation, transition to `running`, and result finalization are separate short
 transactions. The external executable runs after the project lock is released. Finalization writes
