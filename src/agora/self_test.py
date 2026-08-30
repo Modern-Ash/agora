@@ -172,6 +172,26 @@ def _run_case(root: Path, method_id: str, actor_kind: str) -> dict[str, object]:
             uri=artifact_uri,
         )
     )
+    gate_artifacts = sorted(
+        {
+            kind
+            for gate in contract.gates.values()
+            for kind in (gate.required_artifacts or [])
+            if kind != "spec"
+        }
+    )
+    for kind in gate_artifacts:
+        path = project / "self-test" / f"{kind}.md"
+        path.write_text(f"# Verified {kind} self-test artifact\n", encoding="utf-8")
+        workspace.add_artifact(
+            AddArtifactInput(
+                swarm_id=swarm.id,
+                work_id=work.id,
+                actor_id=actor_id,
+                kind=kind,
+                uri=f"repo://self-test/{kind}.md",
+            )
+        )
     workspace.add_evidence(
         AddEvidenceInput(
             swarm_id=swarm.id,

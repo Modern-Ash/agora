@@ -279,6 +279,11 @@ Teams can author and install a custom Method Pack for another process without ch
 kernel. Start with the [Method Pack reference](docs/reference/method-packs.md) and the
 [custom lifecycle sample](samples/custom-lifecycle/README.md).
 
+For continuous agent operation, Agora also stores reviewed intent, evaluation outcomes, structured
+review findings, deterministic guardrails, idempotent event routing, production control-band
+findings, and derived delivery metrics. See the
+[AI-native SDLC controls guide](docs/guides/ai-native-sdlc.md).
+
 ## Choose an agent environment
 
 ```bash
@@ -323,6 +328,8 @@ For specification tooling, `agora work clarify`, `work checklist`, `work verify-
 `agora work traceability` to detect generated output made stale by changed criteria or artifacts,
 and `agora status --board` for a one-frame aggregate view. See the
 [spec-tooling and runtime resilience guide](docs/guides/spec-tooling-and-runtime-resilience.md).
+Clarification is Method Pack-aware: Core supplies the active lifecycle, protocol, gates, roles, and
+assignments to the configured runtime without privileging Scrum, Kanban, or Spec-driven behavior.
 
 ## Run the daily loop
 
@@ -502,6 +509,7 @@ Understand the model:
 Operate and extend it:
 
 - [Operations and validation](docs/guides/operations-and-validation.md)
+- [AI-native SDLC controls](docs/guides/ai-native-sdlc.md)
 - [Project upgrades](docs/guides/project-upgrades.md)
 - [Cycle revalidation and issue trackers](docs/guides/cycle-revalidation.md)
 - [Method Pack reference](docs/reference/method-packs.md)

@@ -50,11 +50,16 @@ from agora.model import (
     AddApprovalInput,
     AddArtifactInput,
     AddChecklistInput,
+    AddControlBandInput,
     AddEnvironmentInput,
+    AddEvaluationSuiteInput,
     AddEvidenceInput,
+    AddGuardrailInput,
     AddOrganizationTrustRootInput,
     AddRegistryTrustKeyInput,
+    AddReviewFindingInput,
     AddTransparencyTrustKeyInput,
+    AddTriggerInput,
     AddUsageInput,
     AdoptionInput,
     AdoptionReport,
@@ -70,12 +75,17 @@ from agora.model import (
     ConfigureCoordinationInput,
     ConfigureInput,
     CreateDelegationInput,
+    CreateIntentInput,
     CreateSwarmInput,
     CreateWorkInput,
+    DecideIntentInput,
+    DecideReviewFindingInput,
     DecomposeWorkInput,
     DelegateApprovalInput,
     DelegationActorInput,
+    EvaluateControlBandInput,
     HandoffActorInput,
+    IngestTriggerEventInput,
     InitInput,
     InstallCatalogPackInput,
     InstallMethodInput,
@@ -108,6 +118,7 @@ from agora.model import (
     PrepareWorkTransitionInput,
     ProjectConfiguration,
     QuickstartInput,
+    RecordEvaluationRunInput,
     RefreshPackLockInput,
     RemovePackInput,
     ReopenWorkInput,
@@ -3258,6 +3269,121 @@ def _build_parser() -> argparse.ArgumentParser:
     delegation_list.add_argument("--swarm", required=True)
     delegation_list.add_argument("--work", required=True)
     delegation_list.add_argument("--status", choices=("active", "used", "revoked"))
+
+    intent = commands.add_parser(
+        "intent", help="Capture and decide versioned product intent"
+    ).add_subparsers(dest="intent_command", required=True)
+    intent_add = intent.add_parser("add", help="Create a draft intent")
+    intent_add.add_argument("--id", required=True)
+    intent_add.add_argument("--author", required=True)
+    intent_add.add_argument("--problem", required=True)
+    intent_add.add_argument("--outcome", required=True)
+    intent_add.add_argument("--affected-system", action="append", default=[])
+    intent_add.add_argument("--constraint", action="append", default=[])
+    intent_add.add_argument("--open-question", action="append", default=[])
+    intent_add.add_argument("--source")
+    intent_list = intent.add_parser("list", help="List durable intents")
+    intent_list.add_argument("--status", choices=("draft", "accepted", "rejected"))
+    intent_decide = intent.add_parser("decide", help="Accept or reject a draft intent")
+    intent_decide.add_argument("--id", required=True)
+    intent_decide.add_argument("--decision", choices=("accepted", "rejected"), required=True)
+    intent_decide.add_argument("--by", required=True)
+    intent_decide.add_argument("--reason", required=True)
+
+    evaluation = commands.add_parser(
+        "eval", help="Manage continuous agent evaluation contracts"
+    ).add_subparsers(dest="eval_command", required=True)
+    eval_suite = evaluation.add_parser("suite-add", help="Register an evaluation suite")
+    eval_suite.add_argument("--id", required=True)
+    eval_suite.add_argument("--case", action="append", default=[])
+    eval_suite.add_argument("--minimum-pass-rate", type=int, default=100)
+    eval_suite.add_argument("--trigger-path", action="append", default=[])
+    eval_run = evaluation.add_parser("run-record", help="Record one external evaluation run")
+    eval_run.add_argument("--id", required=True)
+    eval_run.add_argument("--suite", required=True)
+    eval_run.add_argument("--passed", type=int, required=True)
+    eval_run.add_argument("--total", type=int, required=True)
+    eval_run.add_argument("--evidence", action="append", default=[])
+    eval_run.add_argument("--runtime")
+    evaluation.add_parser("suites", help="List evaluation suites")
+    eval_runs = evaluation.add_parser("runs", help="List evaluation runs")
+    eval_runs.add_argument("--suite")
+    eval_impacted = evaluation.add_parser("impacted", help="List suites selected by changed path")
+    eval_impacted.add_argument("--path", action="append", required=True)
+
+    review = commands.add_parser(
+        "review", help="Manage structured agentic review findings"
+    ).add_subparsers(dest="review_command", required=True)
+    review_add = review.add_parser("finding-add", help="Register one review finding")
+    review_add.add_argument("--id", required=True)
+    review_add.add_argument("--swarm", required=True)
+    review_add.add_argument("--work", required=True)
+    review_add.add_argument("--pass", dest="pass_id", required=True)
+    review_add.add_argument(
+        "--severity", choices=("low", "medium", "high", "critical"), required=True
+    )
+    review_add.add_argument("--policy", required=True)
+    review_add.add_argument("--summary", required=True)
+    review_add.add_argument("--location")
+    review_list = review.add_parser("findings", help="List structured review findings")
+    review_list.add_argument("--swarm")
+    review_list.add_argument("--work")
+    review_decide = review.add_parser(
+        "finding-decide", help="Resolve or explicitly waive a review finding"
+    )
+    review_decide.add_argument("--id", required=True)
+    review_decide.add_argument("--decision", choices=("resolved", "waived"), required=True)
+    review_decide.add_argument("--by", required=True)
+    review_decide.add_argument("--reason", required=True)
+
+    guardrail = commands.add_parser(
+        "guardrail", help="Expose deterministic checks to external runtime hooks"
+    ).add_subparsers(dest="guardrail_command", required=True)
+    guardrail_add = guardrail.add_parser("add", help="Register a deterministic guardrail")
+    guardrail_add.add_argument("--id", required=True)
+    guardrail_add.add_argument("--protect-path", action="append", default=[])
+    guardrail_add.add_argument("--deny-command", action="append", default=[])
+    guardrail.add_parser("list", help="List guardrails")
+    guardrail_check = guardrail.add_parser("check", help="Check one proposed runtime action")
+    guardrail_check.add_argument("--action", choices=("file-edit", "command"), required=True)
+    guardrail_check.add_argument("--target", required=True)
+
+    trigger = commands.add_parser(
+        "trigger", help="Route idempotent SDLC events to governed action intents"
+    ).add_subparsers(dest="trigger_command", required=True)
+    trigger_add = trigger.add_parser("add", help="Register an event trigger")
+    trigger_add.add_argument("--id", required=True)
+    trigger_add.add_argument("--event", required=True)
+    trigger_add.add_argument("--action", required=True)
+    trigger_add.add_argument("--parameter", action="append", default=[])
+    trigger.add_parser("list", help="List event triggers")
+    trigger_ingest = trigger.add_parser("ingest", help="Persist and route one idempotent event")
+    trigger_ingest.add_argument("--id", required=True)
+    trigger_ingest.add_argument("--event", required=True)
+    trigger_ingest.add_argument("--dedupe-key", required=True)
+    trigger_ingest.add_argument("--payload", action="append", default=[])
+    trigger.add_parser("events", help="List ingested trigger events")
+
+    control_band = commands.add_parser(
+        "control-band", help="Manage deterministic production control bands"
+    ).add_subparsers(dest="control_band_command", required=True)
+    band_add = control_band.add_parser("add", help="Register a control band")
+    band_add.add_argument("--id", required=True)
+    band_add.add_argument("--metric", required=True)
+    band_add.add_argument("--mean", type=float, required=True)
+    band_add.add_argument("--standard-deviation", type=float, required=True)
+    band_add.add_argument("--diagnose-sigma", type=float, default=2.0)
+    band_add.add_argument("--propose-sigma", type=float, default=3.0)
+    control_band.add_parser("list", help="List control bands")
+    band_evaluate = control_band.add_parser(
+        "evaluate", help="Evaluate a value and propose intent on a severe breach"
+    )
+    band_evaluate.add_argument("--band", required=True)
+    band_evaluate.add_argument("--id", required=True)
+    band_evaluate.add_argument("--value", type=float, required=True)
+    band_evaluate.add_argument("--author", default="automation:control-band")
+
+    commands.add_parser("metrics", help="Derive aggregate AI-native SDLC metrics")
     return parser
 
 
@@ -3408,6 +3534,140 @@ def _dispatch(
         return _render_status_board(reads) if args.board else reads.project_overview()
     if args.command == "validate":
         return workspace.validate()
+    if args.command == "intent" and args.intent_command == "add":
+        return workspace.create_intent(
+            CreateIntentInput(
+                id=args.id,
+                author=args.author,
+                problem=args.problem,
+                outcome=args.outcome,
+                affected_systems=args.affected_system,
+                constraints=args.constraint,
+                open_questions=args.open_question,
+                source=args.source,
+            )
+        )
+    if args.command == "intent" and args.intent_command == "list":
+        return workspace.list_intents(args.status)
+    if args.command == "intent" and args.intent_command == "decide":
+        return workspace.decide_intent(
+            DecideIntentInput(
+                id=args.id,
+                decision=args.decision,
+                actor=args.by,
+                reason=args.reason,
+            )
+        )
+    if args.command == "eval" and args.eval_command == "suite-add":
+        return workspace.add_evaluation_suite(
+            AddEvaluationSuiteInput(
+                id=args.id,
+                cases=args.case,
+                minimum_pass_rate=args.minimum_pass_rate,
+                trigger_paths=args.trigger_path,
+            )
+        )
+    if args.command == "eval" and args.eval_command == "run-record":
+        run = workspace.record_evaluation_run(
+            RecordEvaluationRunInput(
+                id=args.id,
+                suite_id=args.suite,
+                passed=args.passed,
+                total=args.total,
+                evidence=args.evidence,
+                runtime=args.runtime,
+            )
+        )
+        return {"ok": run.result == "success", "run": run}
+    if args.command == "eval" and args.eval_command == "suites":
+        return workspace.list_evaluation_suites()
+    if args.command == "eval" and args.eval_command == "runs":
+        return workspace.list_evaluation_runs(args.suite)
+    if args.command == "eval" and args.eval_command == "impacted":
+        return workspace.impacted_evaluation_suites(args.path)
+    if args.command == "review" and args.review_command == "finding-add":
+        return workspace.add_review_finding(
+            AddReviewFindingInput(
+                id=args.id,
+                swarm_id=args.swarm,
+                work_id=args.work,
+                pass_id=args.pass_id,
+                severity=args.severity,
+                policy=args.policy,
+                summary=args.summary,
+                location=args.location,
+            )
+        )
+    if args.command == "review" and args.review_command == "findings":
+        return workspace.list_review_findings(args.swarm, args.work)
+    if args.command == "review" and args.review_command == "finding-decide":
+        return workspace.decide_review_finding(
+            DecideReviewFindingInput(
+                id=args.id,
+                decision=args.decision,
+                actor=args.by,
+                reason=args.reason,
+            )
+        )
+    if args.command == "guardrail" and args.guardrail_command == "add":
+        return workspace.add_guardrail(
+            AddGuardrailInput(
+                id=args.id,
+                protected_paths=args.protect_path,
+                denied_commands=args.deny_command,
+            )
+        )
+    if args.command == "guardrail" and args.guardrail_command == "list":
+        return workspace.list_guardrails()
+    if args.command == "guardrail" and args.guardrail_command == "check":
+        decision = workspace.check_guardrails(args.action, args.target)
+        return {"ok": decision.allowed, "decision": decision}
+    if args.command == "trigger" and args.trigger_command == "add":
+        return workspace.add_trigger(
+            AddTriggerInput(
+                id=args.id,
+                event_type=args.event,
+                action=args.action,
+                parameters=_parse_inputs(args.parameter),
+            )
+        )
+    if args.command == "trigger" and args.trigger_command == "list":
+        return workspace.list_triggers()
+    if args.command == "trigger" and args.trigger_command == "ingest":
+        return workspace.ingest_trigger_event(
+            IngestTriggerEventInput(
+                id=args.id,
+                event_type=args.event,
+                dedupe_key=args.dedupe_key,
+                payload=_parse_inputs(args.payload),
+            )
+        )
+    if args.command == "trigger" and args.trigger_command == "events":
+        return workspace.list_trigger_events()
+    if args.command == "control-band" and args.control_band_command == "add":
+        return workspace.add_control_band(
+            AddControlBandInput(
+                id=args.id,
+                metric=args.metric,
+                mean=args.mean,
+                standard_deviation=args.standard_deviation,
+                diagnose_sigma=args.diagnose_sigma,
+                propose_sigma=args.propose_sigma,
+            )
+        )
+    if args.command == "control-band" and args.control_band_command == "list":
+        return workspace.list_control_bands()
+    if args.command == "control-band" and args.control_band_command == "evaluate":
+        return workspace.evaluate_control_band(
+            EvaluateControlBandInput(
+                band_id=args.band,
+                id=args.id,
+                value=args.value,
+                author=args.author,
+            )
+        )
+    if args.command == "metrics":
+        return workspace.sdlc_metrics()
     if args.command == "next":
         return workspace.next_actions(
             actor_id=args.actor,

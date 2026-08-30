@@ -204,6 +204,12 @@ or legacy provenance as non-failing warnings. Gherkin regeneration updates exist
 without duplicating artifact rows; consistency inputs are bounded to 256 KiB and exclude earlier
 consistency reports.
 
+Clarification was subsequently generalized across Method Packs. Its runtime prompt is compiled from
+the active method's identity, version, protocol, current-state transitions, gates, roles, and
+assignments rather than assuming a pre-drafting Spec-driven phase. That same method context is part
+of the provenance digest, so a policy or assignment change invalidates advice produced under the
+previous context. Core still knows no privileged Scrum, Kanban, or Spec-driven semantics.
+
 ## Future work
 
 - Whether checklist items (item 2) should be promotable to acceptance criteria via an explicit
