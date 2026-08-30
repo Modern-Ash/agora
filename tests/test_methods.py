@@ -51,6 +51,7 @@ def test_loads_the_spec_driven_pack_with_its_clarification_gate() -> None:
     assert clarify.roles == ["spec-owner"]
     assert clarify.gate == "spec-clarified"
     assert contract.gates["spec-clarified"].required_approval_roles == []
+    assert contract.gates["spec-clarified"].require_resolved_clarifications is True
     assert contract.gates["spec-clarified"].require_required_artifacts is True
     assert contract.gates["spec-clarified"].required_artifacts == ["spec"]
     assert contract.gates["spec-clarified"].required_criterion_stage == "specified"

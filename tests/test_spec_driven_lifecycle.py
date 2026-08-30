@@ -1,3 +1,5 @@
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -27,7 +29,11 @@ def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
     plan = tmp_path / "docs" / "plans" / "increment.md"
     plan.parent.mkdir(parents=True)
     plan.write_text("# Increment implementation plan\n", encoding="utf-8")
-    workspace = AgoraWorkspace(cwd=tmp_path)
+
+    def run(command, cwd, environment):
+        return subprocess.CompletedProcess(command, 0, json.dumps({"questions": []}), "")
+
+    workspace = AgoraWorkspace(cwd=tmp_path, tool_runner=run)
     workspace.configure(
         ConfigureInput(
             integration="generic",
@@ -38,6 +44,13 @@ def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
     )
     workspace.initialize(InitInput())
     return workspace
+
+
+def _clarify(workspace: AgoraWorkspace) -> None:
+    workspace.clarify_work(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
+        runner="/bin/true",
+    )
 
 
 def _form_swarm(workspace: AgoraWorkspace) -> None:
@@ -114,9 +127,92 @@ def test_spec_driven_blocks_clarification_until_criteria_and_spec_artifact_exist
             uri="repo://docs/specs/increment.md",
         )
     )
+    with pytest.raises(ValueError, match="clarification-not-run"):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="increment",
+                actor_id="owner",
+                target_state="clarified",
+            )
+        )
+    _clarify(workspace)
     clarified = workspace.transition_work(
         TransitionWorkInput(
             swarm_id="delivery", work_id="increment", actor_id="owner", target_state="clarified"
+        )
+    )
+    assert clarified.state == "clarified"
+
+
+def test_spec_driven_blocks_unanswered_and_stale_clarifications(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _workspace(tmp_path, monkeypatch)
+    _form_swarm(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="increment",
+            title="Add idempotency",
+            actor_id="owner",
+            acceptance_criteria=[("idempotent", "Retries are safe")],
+            required_artifacts=["spec"],
+        )
+    )
+    workspace.satisfy_criterion(
+        WorkActorInput(swarm_id="delivery", work_id="increment", actor_id="owner"),
+        criterion_id="idempotent",
+    )
+    workspace.add_artifact(
+        AddArtifactInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="owner",
+            kind="spec",
+            uri="repo://docs/specs/increment.md",
+        )
+    )
+
+    def unresolved(command, cwd, environment):
+        payload = {"questions": [{"question": "What is the retry limit?", "answer": None}]}
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    workspace._tool_runner = unresolved
+    _clarify(workspace)
+    with pytest.raises(ValueError, match="unanswered-clarifications:1"):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="increment",
+                actor_id="owner",
+                target_state="clarified",
+            )
+        )
+
+    workspace._tool_runner = lambda command, cwd, environment: subprocess.CompletedProcess(
+        command, 0, json.dumps({"questions": []}), ""
+    )
+    _clarify(workspace)
+    specification = tmp_path / "docs" / "specs" / "increment.md"
+    specification.write_text("# Revised increment specification\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="clarification-inputs-stale"):
+        workspace.transition_work(
+            TransitionWorkInput(
+                swarm_id="delivery",
+                work_id="increment",
+                actor_id="owner",
+                target_state="clarified",
+            )
+        )
+
+    _clarify(workspace)
+    clarified = workspace.transition_work(
+        TransitionWorkInput(
+            swarm_id="delivery",
+            work_id="increment",
+            actor_id="owner",
+            target_state="clarified",
         )
     )
     assert clarified.state == "clarified"
@@ -148,6 +244,8 @@ def test_spec_clarification_defers_later_required_artifacts(tmp_path: Path, monk
             uri="repo://docs/specs/increment.md",
         )
     )
+
+    _clarify(workspace)
 
     clarified = workspace.transition_work(
         TransitionWorkInput(
@@ -199,6 +297,7 @@ def test_spec_driven_tracks_criterion_progress_without_transferring_acceptance(
             uri="repo://docs/specs/increment.md",
         )
     )
+    _clarify(workspace)
     clarified = workspace.transition_work(
         TransitionWorkInput(
             swarm_id="delivery", work_id="increment", actor_id="owner", target_state="clarified"
@@ -233,6 +332,7 @@ def _walk_increment_to_completion(workspace: AgoraWorkspace) -> None:
             uri="repo://docs/specs/increment.md",
         )
     )
+    _clarify(workspace)
     workspace.transition_work(
         TransitionWorkInput(
             swarm_id="delivery", work_id="increment", actor_id="owner", target_state="clarified"

@@ -5519,6 +5519,7 @@ class AgoraWorkspace:
     ) -> dict[str, object]:
         method_context = self._clarification_method_context(root, swarm, work)
         input_sha256 = self._canonical_sha256(method_context)
+        run_at = self._timestamp()
         prompt = (
             "You are disambiguating governed work before its next lifecycle decision. "
             "Return only JSON "
@@ -5566,7 +5567,7 @@ class AgoraWorkspace:
                     "schema": "agora/clarifications/v1",
                     "swarm": swarm.id,
                     "work": work.id,
-                    "created-at": self._timestamp(),
+                    "created-at": run_at,
                 },
                 body=(
                     f"# Clarifications for {work.id}\n\n"
@@ -5574,12 +5575,21 @@ class AgoraWorkspace:
                     "| --- | --- | --- | --- | --- |"
                 ),
             )
+        document.attributes.update(
+            {
+                "last-run-input-sha256": input_sha256,
+                "last-run-question-count": len(questions),
+                "last-run-unanswered-count": sum(1 for item in questions if item.answer is None),
+                "last-run-by": actor.reference,
+                "last-run-at": run_at,
+            }
+        )
         for item in questions:
             question = self._markdown_table_cell(item.question)
             answer = self._markdown_table_cell(item.answer or "")
             document.body = (
                 f"{document.body.rstrip()}\n| {question} | {answer} | {actor.reference} | "
-                f"{self._timestamp()} | {input_sha256} |"
+                f"{run_at} | {input_sha256} |"
             )
         atomic_write(path, render_markdown(document)) if path.exists() else write_new(
             path, render_markdown(document)
@@ -5845,9 +5855,9 @@ class AgoraWorkspace:
         ).encode("utf-8")
         return hashlib.sha256(serialized).hexdigest()
 
-    @staticmethod
+    @classmethod
     def _clarification_method_context(
-        root: Path, swarm: SwarmRecord, work: WorkRecord
+        cls, root: Path, swarm: SwarmRecord, work: WorkRecord
     ) -> dict[str, object]:
         method_root = root / ".agora" / "methods" / swarm.method
         contract = load_method_contract(method_root)
@@ -5864,6 +5874,20 @@ class AgoraWorkspace:
             for transition in contract.transitions
             if transition.source == work.state
         ]
+        specifications: list[dict[str, str]] = []
+        remaining_content = 256 * 1024
+        for kind, uri in cls._work_artifact_rows(work):
+            if kind != "spec" or not uri.startswith("repo://"):
+                continue
+            cls._assert_artifact_reference(root, uri)
+            contents = (root / uri.removeprefix("repo://")).read_text(
+                encoding="utf-8", errors="replace"
+            )
+            bounded = contents[:remaining_content]
+            specifications.append({"uri": uri, "content": bounded})
+            remaining_content -= len(bounded)
+            if remaining_content == 0:
+                break
         return {
             "kind": "clarification",
             "method": {
@@ -5881,6 +5905,7 @@ class AgoraWorkspace:
                 "description": work.description,
                 "acceptance-criteria": work.acceptance_criteria,
                 "required-artifacts": work.required_artifacts,
+                "specifications": specifications,
             },
         }
 
@@ -9235,15 +9260,35 @@ class AgoraWorkspace:
             if (Path(work.path) / "clarifications.md").is_file()
             else []
         )
+        clarification_document = (
+            read_markdown(Path(work.path) / "clarifications.md")
+            if clarification_rows or (Path(work.path) / "clarifications.md").is_file()
+            else None
+        )
+        last_clarification_sha256 = (
+            optional_string_attribute(clarification_document.attributes, "last-run-input-sha256")
+            if clarification_document is not None
+            else None
+        )
+        last_unanswered_count = (
+            _optional_integer_attribute(
+                clarification_document.attributes, "last-run-unanswered-count"
+            )
+            if clarification_document is not None
+            else None
+        )
         clarifications = {
             "questions": len(clarification_rows),
             "current-input-sha256": clarification_hash,
             "recorded-input-sha256": sorted(
                 {row["input-sha256"] for row in clarification_rows if row["input-sha256"]}
             ),
+            "last-run-input-sha256": last_clarification_sha256,
+            "last-run-unanswered-count": last_unanswered_count,
         }
-        clarifications["stale"] = any(
-            digest != clarification_hash for digest in clarifications["recorded-input-sha256"]
+        clarifications["stale"] = (
+            last_clarification_sha256 is not None
+            and last_clarification_sha256 != clarification_hash
         )
 
         gherkin_records: list[dict[str, object]] = []
@@ -13828,22 +13873,22 @@ class AgoraWorkspace:
                         current_hash = self._clarification_input_sha256(root, swarm, work)
                         for row in clarification_rows:
                             resolve_actor(row["actor"], clarifications_path)
-                            recorded_hash = row["input-sha256"]
-                            if recorded_hash and recorded_hash != current_hash:
-                                issue(
-                                    "clarifications.stale",
-                                    clarifications_path,
-                                    "Clarifications were generated from superseded work inputs",
-                                    "warning",
-                                )
-                                break
-                        if clarification_rows and not any(
-                            row["input-sha256"] for row in clarification_rows
-                        ):
+                        clarification_document = read_markdown(clarifications_path)
+                        recorded_hash = optional_string_attribute(
+                            clarification_document.attributes, "last-run-input-sha256"
+                        )
+                        if recorded_hash and recorded_hash != current_hash:
+                            issue(
+                                "clarifications.stale",
+                                clarifications_path,
+                                "The latest clarification run used superseded work inputs",
+                                "warning",
+                            )
+                        if recorded_hash is None:
                             issue(
                                 "clarifications.provenance-missing",
                                 clarifications_path,
-                                "Clarifications predate input provenance tracking",
+                                "Clarifications predate run-level input provenance tracking",
                                 "warning",
                             )
                 try:
@@ -18954,6 +18999,7 @@ class AgoraWorkspace:
                 assessment["missing_evidence_types"],
                 assessment["missing_content_digests"],
                 assessment["git_issues"],
+                assessment["clarification_issues"],
             )
         ):
             raise ValueError(
@@ -18965,7 +19011,8 @@ class AgoraWorkspace:
                 f"missing-evidence-types=[{', '.join(assessment['missing_evidence_types'])}], "
                 f"missing-content-digests=[{', '.join(assessment['missing_content_digests'])}], "
                 f"missing-approvals=[{', '.join(assessment['missing_approvals'])}], "
-                f"git=[{', '.join(assessment['git_issues'])}]"
+                f"git=[{', '.join(assessment['git_issues'])}], "
+                f"clarifications=[{', '.join(assessment['clarification_issues'])}]"
             )
 
     def _work_gate_assessment(
@@ -19006,6 +19053,11 @@ class AgoraWorkspace:
             for role in gate.required_approval_roles
             if role not in work.approval_roles and role not in waived_approvals
         ]
+        clarification_issues = (
+            self._clarification_gate_issues(root, work)
+            if gate.require_resolved_clarifications
+            else []
+        )
         successful_evidence_types = {
             type_ for type_, result, _ in self._work_evidence_rows(work) if result == "success"
         }
@@ -19067,7 +19119,67 @@ class AgoraWorkspace:
             "missing_content_digests": missing_content_digests,
             "missing_approvals": missing_approvals,
             "git_issues": git_issues,
+            "clarification_issues": clarification_issues,
         }
+
+    def _clarification_gate_issues(self, root: Path, work: WorkRecord) -> list[str]:
+        path = Path(work.path) / "clarifications.md"
+        if not path.is_file():
+            return ["clarification-not-run"]
+        try:
+            document = read_markdown(path)
+            _assert_schema(document, "agora/clarifications/v1", path)
+            if (
+                string_attribute(document.attributes, "swarm") != work.swarm_id
+                or string_attribute(document.attributes, "work") != work.id
+            ):
+                return ["clarification-record-mismatch"]
+            recorded_sha256 = optional_string_attribute(
+                document.attributes, "last-run-input-sha256"
+            )
+            unanswered = _optional_integer_attribute(
+                document.attributes, "last-run-unanswered-count"
+            )
+            question_count = _optional_integer_attribute(
+                document.attributes, "last-run-question-count"
+            )
+            last_run_by = optional_string_attribute(document.attributes, "last-run-by")
+            last_run_at = optional_string_attribute(document.attributes, "last-run-at")
+            if (
+                recorded_sha256 is not None
+                and re.fullmatch(r"[0-9a-f]{64}", recorded_sha256) is None
+            ):
+                raise ValueError("Clarification input digest must be SHA-256")
+            if unanswered is not None and unanswered < 0:
+                raise ValueError("Clarification unanswered count cannot be negative")
+            if question_count is not None and question_count < 0:
+                raise ValueError("Clarification question count cannot be negative")
+            if (
+                unanswered is not None
+                and question_count is not None
+                and unanswered > question_count
+            ):
+                raise ValueError("Clarification unanswered count exceeds question count")
+        except ValueError:
+            return ["clarification-record-invalid"]
+
+        issues: list[str] = []
+        if (
+            recorded_sha256 is None
+            or unanswered is None
+            or question_count is None
+            or last_run_by is None
+            or last_run_at is None
+        ):
+            issues.append("clarification-run-provenance-missing")
+        else:
+            swarm = self._load_swarm(root, work.swarm_id)
+            current_sha256 = self._clarification_input_sha256(root, swarm, work)
+            if recorded_sha256 != current_sha256:
+                issues.append("clarification-inputs-stale")
+            if unanswered:
+                issues.append(f"unanswered-clarifications:{unanswered}")
+        return issues
 
     @staticmethod
     def _gate_blocker_records(assessment: dict[str, Any]) -> list[GateBlockerRecord]:
@@ -19122,6 +19234,12 @@ class AgoraWorkspace:
             "approval",
             "Required approval roles are missing",
             list(assessment["missing_approvals"]),
+        )
+        add(
+            "gate.clarifications-unresolved",
+            "clarification",
+            "A current clarification run must leave no unanswered questions",
+            list(assessment["clarification_issues"]),
         )
         add(
             "gate.git-preconditions-failed",

@@ -1,8 +1,9 @@
 # Spec-driven delivery with humans and AI agents
 
 This guide runs a complete change through Agora's bundled Spec-Driven Method Pack. The pack makes
-the specification a durable gate: work cannot be planned until its questions are resolved, its
-clarification criteria are satisfied, and a `spec` artifact is registered.
+the specification a durable gate: work cannot be planned until a current clarification run leaves
+no unanswered questions, its clarification criteria are satisfied, and a `spec` artifact is
+registered.
 
 ## Scenario
 
@@ -47,8 +48,9 @@ stateDiagram-v2
     completed --> [*]
 ```
 
-The clarification and completion edges are separate gates. Clarification requires all criteria and
-the `spec` artifact. The gate declares that stage-specific requirement explicitly, so implementation
+The clarification and completion edges are separate gates. Clarification requires all criteria,
+the `spec` artifact, and a current clarification run with zero unanswered questions. The gate
+declares that stage-specific requirement explicitly, so implementation
 plans and verification reports may be declared on the work from the beginning without blocking
 clarification. Completion requires the work's full artifact contract, successful evidence, and Spec
 Owner approval.
@@ -132,12 +134,17 @@ content still does not satisfy a criterion, approve work, or run an executable t
 description, criteria, or relevant artifacts change, `traceability` and `agora validate` identify
 stale generated output for explicit regeneration.
 
-Write the actual specification in the product repository, then register it. Agora stores its URI
-and governance state; it does not hide the specification inside chat history.
+Write the actual specification in the product repository, answer the generated questions there,
+then register it. Agora stores its URI and governance state; it does not hide the specification
+inside chat history.
 
 ```bash
 agora artifact add --swarm webhook-retries --work retry-contract \
   --kind spec --uri repo://docs/specs/webhook-retries.md --by spec-owner
+
+# Repeat specification edits and clarification until the latest run returns
+# no unanswered questions.
+agora work clarify --swarm webhook-retries --work retry-contract --by spec-owner
 
 agora work criterion-satisfy --swarm webhook-retries --work retry-contract \
   --criterion retry-schedule --stage specified --by spec-owner
@@ -150,9 +157,10 @@ agora work transition --swarm webhook-retries --work retry-contract \
   --to clarified --by spec-owner
 ```
 
-The transition fails if even one criterion or the `spec` artifact is missing. Later required
-artifacts are deferred by the clarification gate and enforced at completion. No separate approval is
-needed here because the Spec Owner is the actor making the clarification decision.
+The transition fails if even one criterion or the `spec` artifact is missing, clarification was not
+run, its inputs became stale, or its latest run left an unanswered question. Later required
+artifacts are deferred by the clarification gate and enforced at completion. No separate approval
+is needed here because the Spec Owner is the actor making the clarification decision.
 
 ## Plan and implement against the spec
 

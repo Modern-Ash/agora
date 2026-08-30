@@ -210,6 +210,11 @@ def _load_gates(root: Path) -> dict[str, GatePolicy]:
             required_approval_roles=_string_list(
                 document.attributes, "required-approval-roles", default=[]
             ),
+            require_resolved_clarifications=_boolean(
+                document.attributes,
+                "require-resolved-clarifications",
+                default=False,
+            ),
         )
     return gates
 

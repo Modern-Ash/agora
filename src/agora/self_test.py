@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -90,7 +92,11 @@ def _forward_transition(contract, state: str):
 def _run_case(root: Path, method_id: str, actor_kind: str) -> dict[str, object]:
     project = root / f"{method_id}-{actor_kind}"
     project.mkdir()
-    workspace = AgoraWorkspace(cwd=project)
+
+    def run_advisory(command, cwd, environment):
+        return subprocess.CompletedProcess(command, 0, json.dumps({"questions": []}), "")
+
+    workspace = AgoraWorkspace(cwd=project, tool_runner=run_advisory)
     workspace.initialize(InitInput(integration="generic", default_method=method_id))
     contract = load_method_contract(project / ".agora" / "methods" / method_id)
     capabilities = _role_capabilities(project, method_id, contract.required_roles)
@@ -215,6 +221,8 @@ def _run_case(root: Path, method_id: str, actor_kind: str) -> dict[str, object]:
                 note="Self-test approval",
             )
         )
+    if any(gate.require_resolved_clarifications for gate in contract.gates.values()):
+        workspace.clarify_work(work_actor, runner="/bin/true")
 
     while work.state != contract.terminal_state:
         transition = _forward_transition(contract, work.state)

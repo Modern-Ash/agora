@@ -324,9 +324,11 @@ agora actor runtime --actor delivery-agent \
 ```
 
 For specification tooling, `agora work clarify`, `work checklist`, `work verify-consistency`, and
-`work gherkin` create advisory Markdown, evidence, and artifacts without changing gate state. Use
-`agora work traceability` to detect generated output made stale by changed criteria or artifacts,
-and `agora status --board` for a one-frame aggregate view. See the
+`work gherkin` create Markdown, evidence, and artifacts without transitioning work by themselves.
+The bundled Spec-Driven Method Pack requires the latest clarification run to cover current inputs
+and leave no unanswered questions before `drafting -> clarified`; other methods can opt into the
+same gate policy. Use `agora work traceability` to detect generated output made stale by changed
+criteria or artifacts, and `agora status --board` for a one-frame aggregate view. See the
 [spec-tooling and runtime resilience guide](docs/guides/spec-tooling-and-runtime-resilience.md).
 Clarification is Method Pack-aware: Core supplies the active lifecycle, protocol, gates, roles, and
 assignments to the configured runtime without privileging Scrum, Kanban, or Spec-driven behavior.

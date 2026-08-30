@@ -717,6 +717,7 @@ class AgoraReadService:
             required_evidence_types=gate.required_evidence_types,
             require_content_addressed_evidence=gate.require_content_addressed_evidence,
             required_approval_roles=gate.required_approval_roles,
+            require_resolved_clarifications=gate.require_resolved_clarifications,
             require_clean_git=gate.require_clean_git,
             require_git_commit=gate.require_git_commit,
             blockers=blockers,

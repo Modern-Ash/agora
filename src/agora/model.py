@@ -94,6 +94,7 @@ class GatePolicy:
     required_criterion_stage: str | None = None
     require_successful_evidence: bool = True
     required_approval_roles: list[str] = field(default_factory=list)
+    require_resolved_clarifications: bool = False
     require_clean_git: bool = False
     require_git_commit: bool = False
     required_evidence_types: list[str] = field(default_factory=list)
