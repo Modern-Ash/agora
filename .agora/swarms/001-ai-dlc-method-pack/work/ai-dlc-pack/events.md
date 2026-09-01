@@ -22,3 +22,26 @@
 - 2026-09-01T23:22:13.632556Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:owner stage=planned
 - 2026-09-01T23:22:23.324405Z | work.transitioned | from=clarified to=planned actor=project:agent
 - 2026-09-01T23:22:30.837512Z | work.transitioned | from=planned to=implementing actor=project:agent
+- 2026-09-01T23:52:32.261815Z | artifact.added | kind=verification-report uri=packs/methods/ai-dlc/METHOD.md actor=project:agent
+- 2026-09-01T23:52:32.489945Z | evidence.added | id=evidence-000001 type=verify-all result=success revision=1 actor=project:agent
+- 2026-09-01T23:52:47.434325Z | work.criterion-stage-marked | criterion=ac-pack-valid actor=project:agent stage=implemented
+- 2026-09-01T23:52:47.657195Z | work.criterion-stage-marked | criterion=ac-roles-conform actor=project:agent stage=implemented
+- 2026-09-01T23:52:47.868076Z | work.criterion-stage-marked | criterion=ac-lifecycle-test actor=project:agent stage=implemented
+- 2026-09-01T23:52:48.085427Z | work.criterion-stage-marked | criterion=ac-sample-runs actor=project:agent stage=implemented
+- 2026-09-01T23:52:48.300185Z | work.criterion-stage-marked | criterion=ac-gates-enforced actor=project:agent stage=implemented
+- 2026-09-01T23:52:48.518959Z | work.criterion-stage-marked | criterion=ac-docs actor=project:agent stage=implemented
+- 2026-09-01T23:52:48.735755Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:agent stage=implemented
+- 2026-09-01T23:52:48.957940Z | work.criterion-stage-marked | criterion=ac-pack-valid actor=project:agent stage=verified
+- 2026-09-01T23:52:49.175487Z | work.criterion-stage-marked | criterion=ac-roles-conform actor=project:agent stage=verified
+- 2026-09-01T23:52:49.385189Z | work.criterion-stage-marked | criterion=ac-lifecycle-test actor=project:agent stage=verified
+- 2026-09-01T23:52:49.600193Z | work.criterion-stage-marked | criterion=ac-sample-runs actor=project:agent stage=verified
+- 2026-09-01T23:52:49.823342Z | work.criterion-stage-marked | criterion=ac-gates-enforced actor=project:agent stage=verified
+- 2026-09-01T23:52:50.048259Z | work.criterion-stage-marked | criterion=ac-docs actor=project:agent stage=verified
+- 2026-09-01T23:52:50.264413Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:agent stage=verified
+- 2026-09-01T23:52:55.234733Z | work.criterion-stage-marked | criterion=ac-pack-valid actor=project:owner stage=accepted
+- 2026-09-01T23:52:55.460674Z | work.criterion-stage-marked | criterion=ac-roles-conform actor=project:owner stage=accepted
+- 2026-09-01T23:52:55.681528Z | work.criterion-stage-marked | criterion=ac-lifecycle-test actor=project:owner stage=accepted
+- 2026-09-01T23:52:55.908226Z | work.criterion-stage-marked | criterion=ac-sample-runs actor=project:owner stage=accepted
+- 2026-09-01T23:52:56.119606Z | work.criterion-stage-marked | criterion=ac-gates-enforced actor=project:owner stage=accepted
+- 2026-09-01T23:52:56.338032Z | work.criterion-stage-marked | criterion=ac-docs actor=project:owner stage=accepted
+- 2026-09-01T23:52:56.552820Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:owner stage=accepted
