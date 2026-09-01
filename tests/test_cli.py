@@ -15,6 +15,8 @@ from agora.model import (
     CreateWorkInput,
     InitInput,
     ToolRuntimeProbe,
+    ValidationIssue,
+    ValidationReport,
 )
 from agora.workspace import AgoraWorkspace
 
@@ -864,6 +866,40 @@ def test_queries_status_and_returns_a_failure_code_for_invalid_state(
     assert '"ok": false' in invalid_output.getvalue()
     assert '"code": "document.invalid"' in invalid_output.getvalue()
     assert errors.getvalue() == ""
+
+
+def test_validate_summary_groups_repeated_issues_and_bounds_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    report = ValidationReport(
+        ok=False,
+        project="grouped",
+        checked={"evidence": 4},
+        issues=[
+            ValidationIssue(
+                severity="error",
+                code="evidence-entry.artifact-changed",
+                path=f"reports/f{index}.md",
+                message="Evidence artifact content changed after it was recorded",
+            )
+            for index in range(4)
+        ],
+    )
+    monkeypatch.setattr(AgoraWorkspace, "validate", lambda self: report)
+    output = io.StringIO()
+
+    assert main(["validate", "--summary"], cwd=tmp_path, stdout=output) == 1
+
+    value = json.loads(output.getvalue())
+    assert value["issue_count"] == 4
+    assert len(value["issues"]) == 1
+    assert value["issues"][0]["count"] == 4
+    assert value["issues"][0]["paths"] == [
+        "reports/f0.md",
+        "reports/f1.md",
+        "reports/f2.md",
+    ]
+    assert value["issues"][0]["paths_truncated"] is True
 
 
 def test_creates_and_lists_a_granular_gate_waiver_from_the_cli(tmp_path: Path, monkeypatch) -> None:

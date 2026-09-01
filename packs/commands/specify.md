@@ -14,6 +14,9 @@ Prefer `AGORA_CONTEXT`. For existing work, start with
 `show` and `readiness` queries. Read only remaining relevant policy and repository context. Create
 unambiguous criteria and required artifact kinds; keep what and why separate from implementation
 until planning is permitted.
+Reuse the compact inspection `snapshot_token` on subsequent reads. If a separate specification
+session is needed, start `balanced` with a 128 KiB transcript and raise the profile only when the
+ambiguity itself requires deep analysis.
 
 Before treating the work as unambiguous, inspect its current Method Pack state, outgoing
 transitions, gates, assigned roles, and `PROTOCOL.md`. If the next gate declares

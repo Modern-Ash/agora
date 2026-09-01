@@ -1,6 +1,8 @@
 import io
 import json
+import shlex
 import subprocess
+import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +12,7 @@ from conftest import swarm_dir
 
 from agora.cli import main
 from agora.filesystem import FilesystemTransactionFailure
+from agora.markdown import read_markdown, render_markdown
 from agora.model import (
     AddActorInput,
     AddApprovalInput,
@@ -863,8 +866,10 @@ def test_prepares_and_launches_a_session_with_actor_runtime_override(
     assert calls[0][0] == ["/bin/true", "--session-runner"]
     assert calls[0][1] == root
     assert calls[0][2]["AGORA_ACTOR"] == "project:facilitator"
+    assert calls[0][2]["AGORA_EXECUTION_PROFILE"] == "balanced"
     context = Path(session.context_path).read_text()
     assert "Model: `governance-model`" in context
+    assert "Execution profile: `balanced`" in context
     assert "Roles: `scrum-master`" in context
     assert "session.completed" in (root / ".agora" / "events.md").read_text()
     summary = root / ".agora" / "sessions" / "governance-session" / "SUMMARY.md"
@@ -878,6 +883,147 @@ def test_prepares_and_launches_a_session_with_actor_runtime_override(
     ]
     assert activity[-1].actor == "project:facilitator"
     assert activity[-1].source.endswith("/SUMMARY.md")
+
+
+def test_session_context_is_work_bounded_and_retries_use_only_the_prior_summary(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="bounded-context",
+            title="Bound autonomous context",
+            actor_id="owner",
+        )
+    )
+    failing = AgoraWorkspace(
+        cwd=root, now=lambda: TIMESTAMP, launcher=lambda command, cwd, environment: 1
+    )
+    with pytest.raises(RuntimeError):
+        failing.start_session(
+            StartSessionInput(
+                id="bounded-context-attempt",
+                actor_id="developer",
+                swarm_id="delivery",
+                work_id="bounded-context",
+                runner="/bin/false",
+                launch=True,
+            )
+        )
+
+    retry = AgoraWorkspace(
+        cwd=root, now=lambda: TIMESTAMP, launcher=lambda command, cwd, environment: 0
+    ).resume_session(
+        ResumeSessionInput(
+            session_id="bounded-context-attempt",
+            replacement_id="bounded-context-retry",
+        )
+    )
+
+    context = Path(retry.context_path).read_text(encoding="utf-8")
+    assert retry.retry_of == "bounded-context-attempt"
+    assert "- `.agora/activity.md`" not in context
+    assert "/events.md`" not in context
+    assert "bounded-context-attempt/SUMMARY.md" in context
+    assert "bounded-context-attempt/RESULT.md" not in context
+    assert "--snapshot-token" in context
+
+
+def test_codex_session_compacts_transcript_and_records_reported_tokens(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    workspace.create_work(
+        CreateWorkInput(
+            swarm_id="delivery",
+            id="metered-session",
+            title="Meter an autonomous session",
+            actor_id="owner",
+        )
+    )
+    workspace.set_actor_runtime(
+        SetActorRuntimeInput(
+            actor_id="developer",
+            integration="codex",
+            provider="openai",
+            model="configured-by-codex",
+        )
+    )
+    fake_codex = root / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        'print("durable final summary")\n'
+        'sys.stderr.write("trace\\n" * 60000 + "tokens used\\n12,345\\n")\n',
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    session = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP).start_session(
+        StartSessionInput(
+            id="metered-session-run",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="metered-session",
+            runner=str(fake_codex),
+            launch=True,
+            max_transcript_bytes=64 * 1024,
+        )
+    )
+
+    result_path = Path(session.path) / "RESULT.md"
+    result = result_path.read_text(encoding="utf-8")
+    usage = workspace.list_usage("delivery", "metered-session")
+    assert result_path.stat().st_size <= 64 * 1024
+    assert session.max_transcript_bytes == 64 * 1024
+    assert "transcript-limit-bytes: 65536" in result
+    assert "transcript-truncated: true" in result
+    assert "tokens used\n    12,345" in result
+    assert len(usage) == 1
+    assert usage[0].id == "session-metered-session-run"
+    assert usage[0].amounts == {"tokens": 12345}
+    assert usage[0].session_id == "metered-session-run"
+    assert usage[0].evidence_refs == ["repo://.agora/sessions/metered-session-run/SUMMARY.md"]
+    AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP).start_session(
+        StartSessionInput(
+            id="spoofed-metered-session",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="metered-session",
+            runner=shlex.join(
+                [
+                    sys.executable,
+                    "-c",
+                    'import sys; sys.stderr.write("tokens used\\n999999\\n")',
+                ]
+            ),
+            launch=True,
+        )
+    )
+    assert len(workspace.list_usage("delivery", "metered-session")) == 1
+    usage_document = read_markdown(Path(usage[0].path))
+    usage_document.attributes["amounts"] = {"tokens": 12344}
+    Path(usage[0].path).write_text(render_markdown(usage_document), encoding="utf-8")
+    assert any(issue.code == "usage.session-invalid" for issue in workspace.validate().issues)
+
+
+def test_rejects_session_transcript_bounds_outside_safe_range(
+    project: tuple[Path, AgoraWorkspace],
+) -> None:
+    _, workspace = project
+    _prepare_scrum_team(workspace)
+
+    with pytest.raises(ValueError, match="Session transcript must be between"):
+        workspace.start_session(
+            StartSessionInput(
+                id="tiny-transcript",
+                actor_id="developer",
+                swarm_id="delivery",
+                max_transcript_bytes=(64 * 1024) - 1,
+            )
+        )
 
 
 def test_claude_integration_passes_a_non_interactive_permission_mode(
@@ -920,6 +1066,8 @@ def test_claude_integration_passes_a_non_interactive_permission_mode(
     # its first approval request and fails identically on every retry.
     assert "--permission-mode" in command
     assert command[command.index("--permission-mode") + 1] == "bypassPermissions"
+    assert command[command.index("--effort") + 1] == "medium"
+    assert "--no-session-persistence" in command
     assert "--model" not in command  # "configured-by-*" models omit --model
 
 

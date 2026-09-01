@@ -89,6 +89,12 @@ to read the path exported as `AGORA_CONTEXT`, follow the installed operational M
 outcome, and stop at unavailable authority. Concrete model selection is forwarded only when Agora's
 model value is not delegated to the native CLI configuration.
 
+Use `--execution-profile efficient`, `balanced`, or `complex` to express provider-neutral effort.
+The adapters translate that profile to their native effort flag and disable native session
+persistence because Agora owns the bounded durable session record. `balanced` is the default;
+mechanical inspection and bookkeeping should use `efficient`, while complex implementation or
+review must be selected deliberately.
+
 Use a local or internal runner without changing the kernel:
 
 ```bash

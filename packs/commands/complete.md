@@ -16,4 +16,8 @@ for cross-record integrity. On gate failure, report missing items and leave work
 result is evidence, not automatic parent acceptance. Report state, confirmed checks, missing items,
 and next action.
 
+Reuse the compact inspection `snapshot_token` before the transition. If completion is launched as a
+separate session, use `--execution-profile efficient --max-transcript-bytes 65536`; increase the
+profile only when the terminal gate requires substantive review rather than record bookkeeping.
+
 Completion target: `$ARGUMENTS`

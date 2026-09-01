@@ -38,6 +38,21 @@ def test_reports_the_active_owner_and_releases_the_operating_system_lock(
     assert status.operation == "test-operation"
 
 
+def test_shared_readers_coexist_and_still_exclude_a_writer(tmp_path: Path, monkeypatch) -> None:
+    resource = tmp_path / "project"
+    resource.mkdir()
+    monkeypatch.setenv("AGORA_LOCK_HOME", str(tmp_path / "locks"))
+
+    with WorkspaceLock(resource, "reader-one", shared=True):
+        with WorkspaceLock(resource, "reader-two", shared=True):
+            with pytest.raises(WorkspaceLockedError):
+                with WorkspaceLock(resource, "writer"):
+                    pass
+
+    with WorkspaceLock(resource, "writer"):
+        pass
+
+
 def test_serializes_initialization_and_project_mutations(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "project"
     root.mkdir()

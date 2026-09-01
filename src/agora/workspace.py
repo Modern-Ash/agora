@@ -113,9 +113,13 @@ from agora.model import (
     DEFAULT_GATE_DECISION_TTL_SECONDS,
     DEFAULT_SESSION_MAX_OUTPUT_BYTES,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
+    DEFAULT_SESSION_TRANSCRIPT_BYTES,
+    EXECUTION_PROFILES,
     INTEGRATIONS,
     MAX_SESSION_MAX_OUTPUT_BYTES,
     MAX_SESSION_TIMEOUT_SECONDS,
+    MAX_SESSION_TRANSCRIPT_BYTES,
+    MIN_SESSION_TRANSCRIPT_BYTES,
     ActivityRecord,
     ActorKeyRecord,
     ActorRecord,
@@ -177,6 +181,7 @@ from agora.model import (
     EvaluationSuiteRecord,
     EventRecord,
     EvidenceRecord,
+    ExecutionProfile,
     ExternalIssueSnapshot,
     GateBlockerRecord,
     GateDecisionInput,
@@ -6834,6 +6839,7 @@ class AgoraWorkspace:
             created_at=self._timestamp(),
             path=str(path),
             action_id=action_id,
+            session_id=data.session_id,
         )
         write_new(path, self._render_usage(record))
         self._append_work_event(
@@ -8411,6 +8417,14 @@ class AgoraWorkspace:
                 ),
                 max_output_bytes=int(
                     record.parameters.get("max-output-bytes", str(DEFAULT_SESSION_MAX_OUTPUT_BYTES))
+                ),
+                max_transcript_bytes=int(
+                    record.parameters.get(
+                        "max-transcript-bytes", str(DEFAULT_SESSION_TRANSCRIPT_BYTES)
+                    )
+                ),
+                execution_profile=self._execution_profile(
+                    record.parameters.get("execution-profile", "balanced")
                 ),
             )
             context = self._validate_session_preparation(root, session)
@@ -10459,6 +10473,8 @@ class AgoraWorkspace:
                 "runner": data.session.runner or "",
                 "timeout-seconds": str(data.session.timeout_seconds),
                 "max-output-bytes": str(data.session.max_output_bytes),
+                "max-transcript-bytes": str(data.session.max_transcript_bytes),
+                "execution-profile": data.session.execution_profile,
             },
         )
 
@@ -10499,15 +10515,39 @@ class AgoraWorkspace:
         work = self._load_work(swarm, data.work_id) if data.work_id is not None else None
         if work is not None:
             self._assert_work_mutable(root, swarm, work)
+        retry_summary_path: Path | None = None
+        if data.retry_of is not None:
+            assert_slug(data.retry_of, "Retry source session id")
+            previous = self._load_session(root / ".agora" / "sessions" / data.retry_of)
+            if previous.status != "failed":
+                raise ValueError(f"Retry source Session must be failed: {previous.id}")
+            if (
+                previous.actor != actor.reference
+                or previous.swarm_id != swarm.id
+                or previous.work_id != (work.id if work is not None else None)
+            ):
+                raise ValueError(f"Retry source Session scope does not match: {previous.id}")
+            retry_summary_path = Path(previous.path) / "SUMMARY.md"
+            if not retry_summary_path.is_file():
+                raise FileNotFoundError(
+                    f"Retry source Session summary is missing: {retry_summary_path}"
+                )
 
         self._assert_session_execution_boundaries(
             data.timeout_seconds,
             data.max_output_bytes,
+            data.max_transcript_bytes,
         )
+        self._execution_profile(data.execution_profile)
         integration, provider, model = self._resolve_actor_runtime(
             root, executor, project, data.runner
         )
-        command = self._runtime_command(integration, data.runner, model)
+        command = self._runtime_command(
+            integration,
+            data.runner,
+            model,
+            execution_profile=data.execution_profile,
+        )
         runtime_available = bool(command and shutil.which(command[0]))
         if data.launch and not command:
             raise ValueError("A generic integration requires --runner when --launch is used")
@@ -10532,6 +10572,8 @@ class AgoraWorkspace:
             integration,
             provider,
             model,
+            data.execution_profile,
+            retry_summary_path,
         )
         return (
             project,
@@ -10599,6 +10641,7 @@ class AgoraWorkspace:
             integration=integration,
             provider=provider,
             model=model,
+            execution_profile=data.execution_profile,
             status="prepared",
             path=str(session_path),
             context_path=str(context_path),
@@ -10607,8 +10650,10 @@ class AgoraWorkspace:
             created_at=self._timestamp(),
             timeout_seconds=data.timeout_seconds,
             max_output_bytes=data.max_output_bytes,
+            max_transcript_bytes=data.max_transcript_bytes,
             context_sha256=hashlib.sha256(context_contents.encode()).hexdigest(),
             preparation_action_id=preparation_action_id,
+            retry_of=data.retry_of,
         )
         write_new(context_path, context_contents, data.force)
         write_new(session_path / "SESSION.md", self._render_session(record), data.force)
@@ -10791,6 +10836,7 @@ class AgoraWorkspace:
             "AGORA_SESSION_ID": running.id,
             "AGORA_PROGRESS": str(session_path / "PROGRESS.md"),
             "AGORA_CONTEXT": running.context_path,
+            "AGORA_EXECUTION_PROFILE": running.execution_profile,
             "AGORA_ACTOR": actor.reference,
             "AGORA_EXECUTOR": executor.reference,
             "AGORA_SWARM": swarm.id,
@@ -10834,6 +10880,7 @@ class AgoraWorkspace:
                 "termination_reason": termination_reason,
             }
         )
+        measured_tokens = self._session_token_usage(running, stdout, stderr)
         with self._mutation_lock((root,), "finish_session"):
             current = self._load_session(session_path)
             if current.status != "running":
@@ -10850,8 +10897,25 @@ class AgoraWorkspace:
                         finished,
                         completed_at=completed_at,
                         result_sha256=result_sha256,
+                        tokens_used=measured_tokens,
                     ),
                 )
+                if work is not None and measured_tokens is not None:
+                    self._apply_add_usage(
+                        work,
+                        executor,
+                        AddUsageInput(
+                            id=f"session-{running.id}",
+                            swarm_id=swarm.id,
+                            work_id=work.id,
+                            actor_id=executor.reference,
+                            amounts={"tokens": measured_tokens},
+                            evidence_refs=[f"repo://.agora/sessions/{running.id}/SUMMARY.md"],
+                            session_id=running.id,
+                        ),
+                        {"tokens": measured_tokens},
+                        None,
+                    )
                 append_entry(
                     root / ".agora" / "events.md",
                     (
@@ -11865,6 +11929,8 @@ class AgoraWorkspace:
                         signature=data.signature,
                         timeout_seconds=data.timeout_seconds,
                         max_output_bytes=data.max_output_bytes,
+                        max_transcript_bytes=data.max_transcript_bytes,
+                        execution_profile=data.execution_profile,
                     )
                 )
         if data.signature is not None:
@@ -11883,6 +11949,10 @@ class AgoraWorkspace:
                 launch=not data.prepare_only,
                 timeout_seconds=data.timeout_seconds or DEFAULT_SESSION_TIMEOUT_SECONDS,
                 max_output_bytes=data.max_output_bytes or DEFAULT_SESSION_MAX_OUTPUT_BYTES,
+                max_transcript_bytes=(
+                    data.max_transcript_bytes or DEFAULT_SESSION_TRANSCRIPT_BYTES
+                ),
+                execution_profile=data.execution_profile or "balanced",
             )
         )
 
@@ -11913,6 +11983,9 @@ class AgoraWorkspace:
             if runtime_applicable
             else "not-applicable",
             model=(executor.model or project.model) if runtime_applicable else "not-applicable",
+            execution_profile=(data.execution_profile or "balanced")
+            if runtime_applicable
+            else None,
             authentication_required=actor.authentication_required,
             runtime_source=("override" if data.runner is not None else "configured")
             if runtime_applicable
@@ -11921,6 +11994,9 @@ class AgoraWorkspace:
             if runtime_applicable
             else None,
             max_output_bytes=(data.max_output_bytes or DEFAULT_SESSION_MAX_OUTPUT_BYTES)
+            if runtime_applicable
+            else None,
+            max_transcript_bytes=(data.max_transcript_bytes or DEFAULT_SESSION_TRANSCRIPT_BYTES)
             if runtime_applicable
             else None,
             executor=executor.reference,
@@ -12166,6 +12242,9 @@ class AgoraWorkspace:
                 launch=not data.prepare_only,
                 timeout_seconds=data.timeout_seconds or previous.timeout_seconds,
                 max_output_bytes=data.max_output_bytes or previous.max_output_bytes,
+                max_transcript_bytes=(data.max_transcript_bytes or previous.max_transcript_bytes),
+                execution_profile=data.execution_profile or previous.execution_profile,
+                retry_of=previous.id,
             )
         )
 
@@ -12173,6 +12252,7 @@ class AgoraWorkspace:
     def _assert_session_execution_boundaries(
         timeout_seconds: int,
         max_output_bytes: int,
+        max_transcript_bytes: int,
     ) -> None:
         if (
             isinstance(timeout_seconds, bool)
@@ -12189,6 +12269,17 @@ class AgoraWorkspace:
         ):
             raise ValueError(
                 f"Session maximum output must be between 1 and {MAX_SESSION_MAX_OUTPUT_BYTES} bytes"
+            )
+        if (
+            isinstance(max_transcript_bytes, bool)
+            or not isinstance(max_transcript_bytes, int)
+            or not MIN_SESSION_TRANSCRIPT_BYTES
+            <= max_transcript_bytes
+            <= MAX_SESSION_TRANSCRIPT_BYTES
+        ):
+            raise ValueError(
+                "Session transcript must be between "
+                f"{MIN_SESSION_TRANSCRIPT_BYTES} and {MAX_SESSION_TRANSCRIPT_BYTES} bytes"
             )
 
     def _operational_transition_blockers(
@@ -13979,10 +14070,39 @@ class AgoraWorkspace:
                             "Usage does not belong to its filesystem owner",
                         )
                     usage_actor = resolve_actor(usage.actor, usage_path)
+                    session_backed = False
+                    if usage.session_id is not None:
+                        try:
+                            session_path = root / ".agora" / "sessions" / usage.session_id
+                            source_session = self._load_session(session_path)
+                            if source_session.status not in {"completed", "failed"}:
+                                raise ValueError("Usage source Session is unfinished")
+                            if (
+                                source_session.swarm_id != swarm.id
+                                or source_session.work_id != work.id
+                                or (source_session.executor or source_session.actor) != usage.actor
+                            ):
+                                raise ValueError("Usage source Session scope does not match")
+                            summary_path = session_path / "SUMMARY.md"
+                            summary = read_markdown(summary_path)
+                            tokens_used = _optional_integer_attribute(
+                                summary.attributes, "tokens-used"
+                            )
+                            if tokens_used != usage.amounts.get("tokens"):
+                                raise ValueError("Usage does not match Session token telemetry")
+                            expected_evidence = (
+                                f"repo://.agora/sessions/{usage.session_id}/SUMMARY.md"
+                            )
+                            if expected_evidence not in usage.evidence_refs:
+                                raise ValueError("Usage does not cite its Session summary")
+                            session_backed = True
+                        except (FileNotFoundError, ValueError) as error:
+                            issue("usage.session-invalid", usage_path, str(error))
                     if (
                         usage_actor is not None
                         and usage_actor.authentication_required
                         and usage.action_id is None
+                        and not session_backed
                     ):
                         issue(
                             "usage.authentication-missing",
@@ -14723,6 +14843,22 @@ class AgoraWorkspace:
                     path,
                     f"Session id {session.id} does not match directory {path.parent.name}",
                 )
+            if session.retry_of is not None:
+                retry_source_path = root / ".agora" / "sessions" / session.retry_of
+                try:
+                    retry_source = self._load_session(retry_source_path)
+                    if retry_source.status != "failed":
+                        raise ValueError("Retry source Session is not failed")
+                    if (
+                        retry_source.actor != session.actor
+                        or retry_source.swarm_id != session.swarm_id
+                        or retry_source.work_id != session.work_id
+                    ):
+                        raise ValueError("Retry source Session scope does not match")
+                    if not (retry_source_path / "SUMMARY.md").is_file():
+                        raise ValueError("Retry source Session summary is missing")
+                except (FileNotFoundError, ValueError) as error:
+                    issue("session.retry-source-invalid", path, str(error))
             session_actor = resolve_actor(session.actor, path)
             session_executor = resolve_actor(session.executor or session.actor, path)
             if (
@@ -15785,9 +15921,11 @@ class AgoraWorkspace:
 
     @contextmanager
     def consistent_read(self, operation: str = "consistent-read") -> Iterator[None]:
-        """Serialize a multi-record read against Core-managed project mutations."""
+        """Share a read lock while excluding Core-managed project mutations."""
 
-        with self._mutation_lock((self.project_root(),), operation, coordinate_external=False):
+        with self._mutation_lock(
+            (self.project_root(),), operation, coordinate_external=False, shared=True
+        ):
             yield
 
     def work_control_read_set_sha256(self, swarm_id: str, work_id: str) -> str:
@@ -15893,6 +16031,7 @@ class AgoraWorkspace:
         operation: str,
         *,
         coordinate_external: bool = True,
+        shared: bool = False,
     ) -> Iterator[None]:
         resolved = tuple(sorted({item.resolve() for item in resources}, key=str))
         depth = getattr(self._lock_state, "depth", 0)
@@ -15918,6 +16057,7 @@ class AgoraWorkspace:
                         operation,
                         timeout=self.lock_timeout,
                         now=self._now(),
+                        shared=shared,
                     )
                 )
             for resource in resolved:
@@ -17138,6 +17278,7 @@ class AgoraWorkspace:
                     "evidence-refs": record.evidence_refs,
                     "created-at": record.created_at,
                     "action": record.action_id,
+                    "session": record.session_id,
                 },
                 body=(
                     f"# Usage {record.id}\n\n"
@@ -17165,6 +17306,7 @@ class AgoraWorkspace:
             created_at=string_attribute(document.attributes, "created-at"),
             path=str(path),
             action_id=optional_string_attribute(document.attributes, "action"),
+            session_id=optional_string_attribute(document.attributes, "session"),
         )
         assert_slug(record.id, "Usage id")
         if not record.evidence_refs or any(
@@ -17173,6 +17315,8 @@ class AgoraWorkspace:
             raise ValueError(f"Usage requires non-empty evidence references: {path}")
         if record.action_id is not None:
             assert_slug(record.action_id, "Usage Lifecycle Action id")
+        if record.session_id is not None:
+            assert_slug(record.session_id, "Usage Session id")
         return record
 
     @staticmethod
@@ -17370,6 +17514,7 @@ class AgoraWorkspace:
         model: str,
         *,
         prompt: str | None = None,
+        execution_profile: ExecutionProfile = "balanced",
     ) -> list[str]:
         if runner is not None:
             command = shlex.split(runner)
@@ -17380,10 +17525,25 @@ class AgoraWorkspace:
             "Read the Agora session context from the path in AGORA_CONTEXT. Follow its operational "
             "Markdown, perform only the next action permitted for the assigned role, persist "
             "artifacts and evidence through Agora, and stop at human approval or unavailable "
-            "authority."
+            "authority. Prefer compact inspection and targeted file ranges; do not load full "
+            "activity, event, prior-result, diff, or build-log histories. Keep tool and final "
+            "output concise and refer to durable artifacts for detail."
         )
         if integration == "codex":
-            command = ["codex", "exec"]
+            effort = {
+                "efficient": "low",
+                "balanced": "medium",
+                "complex": "high",
+            }[execution_profile]
+            command = [
+                "codex",
+                "exec",
+                "--ephemeral",
+                "--color",
+                "never",
+                "-c",
+                f'model_reasoning_effort="{effort}"',
+            ]
             if not model.startswith("configured-by-"):
                 command.extend(["--model", model])
             return [*command, prompt]
@@ -17396,7 +17556,20 @@ class AgoraWorkspace:
             # session, causing every retry to fail identically. Pass an
             # explicit bypass so the claude integration is actually usable
             # for unattended governed sessions, matching Codex's posture.
-            command = ["claude", "--print", "--permission-mode", "bypassPermissions"]
+            effort = {
+                "efficient": "low",
+                "balanced": "medium",
+                "complex": "high",
+            }[execution_profile]
+            command = [
+                "claude",
+                "--print",
+                "--permission-mode",
+                "bypassPermissions",
+                "--effort",
+                effort,
+                "--no-session-persistence",
+            ]
             if not model.startswith("configured-by-"):
                 command.extend(["--model", model])
             return [*command, prompt]
@@ -17624,6 +17797,12 @@ class AgoraWorkspace:
                 max_output_bytes=int(
                     parameters.get("max-output-bytes", str(DEFAULT_SESSION_MAX_OUTPUT_BYTES))
                 ),
+                max_transcript_bytes=int(
+                    parameters.get("max-transcript-bytes", str(DEFAULT_SESSION_TRANSCRIPT_BYTES))
+                ),
+                execution_profile=self._execution_profile(
+                    parameters.get("execution-profile", "balanced")
+                ),
             )
             context = self._validate_session_preparation(root, session)[-1]
             return hashlib.sha256(context.encode()).hexdigest()
@@ -17849,6 +18028,8 @@ class AgoraWorkspace:
                 "runner",
                 "timeout-seconds",
                 "max-output-bytes",
+                "max-transcript-bytes",
+                "execution-profile",
             },
             "swarm.assign": {"role", "target"},
             "work.block": {"reason"},
@@ -17887,6 +18068,21 @@ class AgoraWorkspace:
         legacy_session_parameters = action == "session.prepare" and parameter_keys in (
             {"session", "runner"},
             {"session", "runner", "timeout-seconds", "max-output-bytes"},
+            {
+                "session",
+                "executor",
+                "runner",
+                "timeout-seconds",
+                "max-output-bytes",
+            },
+            {
+                "session",
+                "executor",
+                "runner",
+                "timeout-seconds",
+                "max-output-bytes",
+                "max-transcript-bytes",
+            },
         )
         legacy_actor_runtime_parameters = action == "actor.runtime.update" and parameter_keys == {
             "integration",
@@ -18231,6 +18427,7 @@ class AgoraWorkspace:
             "integration": record.integration,
             "provider": record.provider,
             "model": record.model,
+            "execution-profile": record.execution_profile,
             "status": record.status,
             "context": record.context_path,
             "launch-command": record.launch_command,
@@ -18239,6 +18436,7 @@ class AgoraWorkspace:
             "exit-code": record.exit_code,
             "timeout-seconds": record.timeout_seconds,
             "max-output-bytes": record.max_output_bytes,
+            "max-transcript-bytes": record.max_transcript_bytes,
             "output-bytes": record.output_bytes,
             "termination-reason": record.termination_reason,
             "context-sha256": record.context_sha256,
@@ -18248,6 +18446,7 @@ class AgoraWorkspace:
             "authorization-sha256": record.authorization_sha256,
             "authorization-signature": record.authorization_signature,
             "preparation-action": record.preparation_action_id,
+            "retry-of": record.retry_of,
         }
         return render_markdown(
             MarkdownDocument(
@@ -18328,6 +18527,9 @@ class AgoraWorkspace:
             integration=self._integration(string_attribute(document.attributes, "integration")),
             provider=string_attribute(document.attributes, "provider"),
             model=string_attribute(document.attributes, "model"),
+            execution_profile=self._execution_profile(
+                optional_string_attribute(document.attributes, "execution-profile") or "balanced"
+            ),
             status=status,
             path=str(path),
             context_path=string_attribute(document.attributes, "context"),
@@ -18347,6 +18549,12 @@ class AgoraWorkspace:
                 DEFAULT_SESSION_MAX_OUTPUT_BYTES,
                 MAX_SESSION_MAX_OUTPUT_BYTES,
             ),
+            max_transcript_bytes=_positive_integer_attribute_default(
+                document.attributes,
+                "max-transcript-bytes",
+                MAX_SESSION_TRANSCRIPT_BYTES,
+                MAX_SESSION_TRANSCRIPT_BYTES,
+            ),
             output_bytes=_nonnegative_integer_attribute_default(
                 document.attributes, "output-bytes", 0
             ),
@@ -18358,12 +18566,36 @@ class AgoraWorkspace:
             authorization_sha256=authorization_sha256,
             authorization_signature=authorization_signature,
             preparation_action_id=preparation_action_id,
+            retry_of=optional_string_attribute(document.attributes, "retry-of"),
         )
+        if record.retry_of is not None:
+            assert_slug(record.retry_of, "Session retry source id")
+            if record.retry_of == record.id:
+                raise ValueError(f"Session cannot retry itself: {path}")
+        if record.max_transcript_bytes < MIN_SESSION_TRANSCRIPT_BYTES:
+            raise ValueError(
+                f"Session transcript boundary is below {MIN_SESSION_TRANSCRIPT_BYTES} bytes: {path}"
+            )
         validate_persisted_session_authorization(record)
         return record
 
     @staticmethod
     def _render_session_result(record: SessionRecord, stdout: str, stderr: str) -> str:
+        original_stdout = stdout
+        original_stderr = stderr
+        # Markdown indents every persisted output line by four spaces. Budget for the
+        # worst case (one content byte per line) so RESULT.md stays inside the
+        # session-specific durable transcript boundary.
+        transcript_budget = max(1, (record.max_transcript_bytes - 4096) // 5)
+        stdout_bytes = len(stdout.encode("utf-8"))
+        stderr_bytes = len(stderr.encode("utf-8"))
+        transcript_truncated = stdout_bytes + stderr_bytes > transcript_budget
+        if transcript_truncated:
+            stdout_budget = min(stdout_bytes, transcript_budget // 2)
+            stderr_budget = max(0, transcript_budget - stdout_budget)
+            stdout = _bounded_transcript_text(stdout, stdout_budget, keep_tail=True)
+            stderr = _bounded_transcript_text(stderr, stderr_budget, keep_tail=True)
+
         def block(value: str) -> str:
             lines = value.rstrip().splitlines() or ["(empty)"]
             return "\n".join(f"    {line}" for line in lines)
@@ -18377,6 +18609,10 @@ class AgoraWorkspace:
                     "exit-code": record.exit_code,
                     "output-bytes": record.output_bytes,
                     "termination-reason": record.termination_reason,
+                    "transcript-limit-bytes": record.max_transcript_bytes,
+                    "transcript-truncated": transcript_truncated,
+                    "stdout-bytes": len(original_stdout.encode("utf-8")),
+                    "stderr-bytes": len(original_stderr.encode("utf-8")),
                 },
                 body=(
                     f"# Session result {record.id}\n\n## Standard output\n\n{block(stdout)}\n\n"
@@ -18386,11 +18622,30 @@ class AgoraWorkspace:
         )
 
     @staticmethod
+    def _session_token_usage(record: SessionRecord, stdout: str, stderr: str) -> int | None:
+        """Extract authoritative runtime telemetry without estimating provider usage."""
+
+        if (
+            record.integration != "codex"
+            or not record.launch_command
+            or Path(record.launch_command[0]).name != "codex"
+        ):
+            return None
+        match = re.search(
+            r"(?im)^\s*tokens used\s*$\s*^\s*([0-9][0-9,]*)\s*\Z",
+            stderr,
+        )
+        if match is None:
+            return None
+        return int(match.group(1).replace(",", ""))
+
+    @staticmethod
     def _render_session_summary(
         record: SessionRecord,
         *,
         completed_at: str,
         result_sha256: str,
+        tokens_used: int | None = None,
     ) -> str:
         outcome = "completed successfully" if record.status == "completed" else "failed"
         work_reference = (
@@ -18410,11 +18665,15 @@ class AgoraWorkspace:
                     "integration": record.integration,
                     "provider": record.provider,
                     "model": record.model,
+                    "execution-profile": record.execution_profile,
                     "exit-code": record.exit_code,
                     "output-bytes": record.output_bytes,
+                    "transcript-limit-bytes": record.max_transcript_bytes,
                     "termination-reason": record.termination_reason,
                     "context-sha256": record.context_sha256,
                     "result-sha256": result_sha256,
+                    "tokens-used": tokens_used,
+                    "retry-of": record.retry_of,
                     "completed-at": completed_at,
                 },
                 body=(
@@ -18449,6 +18708,18 @@ class AgoraWorkspace:
             raise ValueError(f"Session result output size does not match SESSION.md: {path}")
         if optional_string_attribute(attributes, "termination-reason") != record.termination_reason:
             raise ValueError(f"Session result termination reason does not match SESSION.md: {path}")
+        if (
+            _positive_integer_attribute_default(
+                attributes,
+                "transcript-limit-bytes",
+                record.max_transcript_bytes,
+                MAX_SESSION_TRANSCRIPT_BYTES,
+            )
+            != record.max_transcript_bytes
+        ):
+            raise ValueError(
+                f"Session result transcript boundary does not match SESSION.md: {path}"
+            )
 
     @staticmethod
     def _validate_session_summary(record: SessionRecord) -> None:
@@ -18460,12 +18731,27 @@ class AgoraWorkspace:
             raise ValueError(f"Session summary id does not match SESSION.md: {path}")
         if string_attribute(attributes, "status") != record.status:
             raise ValueError(f"Session summary status does not match SESSION.md: {path}")
+        if (
+            _positive_integer_attribute_default(
+                attributes,
+                "transcript-limit-bytes",
+                record.max_transcript_bytes,
+                MAX_SESSION_TRANSCRIPT_BYTES,
+            )
+            != record.max_transcript_bytes
+        ):
+            raise ValueError(
+                f"Session summary transcript boundary does not match SESSION.md: {path}"
+            )
         result_sha256 = string_attribute(attributes, "result-sha256")
         if re.fullmatch(r"[0-9a-f]{64}", result_sha256) is None:
             raise ValueError(f"Session summary result digest is not SHA-256: {path}")
         result_path = Path(record.path) / "RESULT.md"
         if hashlib.sha256(result_path.read_bytes()).hexdigest() != result_sha256:
             raise ValueError(f"Session summary result digest mismatch: {path}")
+        tokens_used = _optional_integer_attribute(attributes, "tokens-used")
+        if tokens_used is not None and tokens_used < 0:
+            raise ValueError(f"Session summary token usage cannot be negative: {path}")
 
     @staticmethod
     def _validate_session_progress(record: SessionRecord) -> None:
@@ -18501,12 +18787,17 @@ class AgoraWorkspace:
         integration: Integration,
         provider: str,
         model: str,
+        execution_profile: ExecutionProfile,
+        retry_summary_path: Path | None = None,
     ) -> str:
         method_root = root / ".agora" / "methods" / swarm.method
         swarm_root = Path(swarm.path)
         role_paths = [method_root / "roles" / f"{role}.md" for role in roles]
-        environment_paths = sorted((root / ".agora" / "environments").glob("*.md"))
-        handoff_paths = sorted((swarm_root / "handoffs").glob("*/HANDOFF.md"))
+        handoff_paths = []
+        for path in sorted((swarm_root / "handoffs").glob("*/HANDOFF.md")):
+            handoff = self._load_handoff(swarm, path.parent.name)
+            if work is None or handoff.work_id in {None, work.id}:
+                handoff_paths.append(path)
         delegation_paths = self._related_delegation_paths(
             root, swarm.id, work.id if work is not None else None
         )
@@ -18524,25 +18815,20 @@ class AgoraWorkspace:
                 represented_paths.extend(
                     [
                         represented_root / "SWARM.md",
-                        represented_root / "events.md",
-                        *sorted((represented_root / "handoffs").glob("*/HANDOFF.md")),
                     ]
                 )
         required_reading = [
             root / ".agora" / "project.md",
-            root / ".agora" / "activity.md",
             root / ".agora" / "constitution.md",
             root / ".agora" / "PROTOCOL.md",
             root / ".agora" / "STANDARDS.md",
             root / ".agora" / "coordination.md",
             root / ".agora" / "tools" / "TOOLS.md",
             swarm_root / "SWARM.md",
-            swarm_root / "events.md",
             method_root / "METHOD.md",
             method_root / "PROTOCOL.md",
             method_root / "TOOLS.md",
             *role_paths,
-            *environment_paths,
             *handoff_paths,
             *delegation_paths,
             *represented_paths,
@@ -18558,6 +18844,8 @@ class AgoraWorkspace:
                     *sorted((Path(work.path) / "approval-delegations").glob("*/DELEGATION.md")),
                 ]
             )
+        if retry_summary_path is not None:
+            required_reading.append(retry_summary_path)
         reading = "\n".join(
             f"- `{path.relative_to(root)}`" for path in required_reading if path.exists()
         )
@@ -18569,11 +18857,32 @@ class AgoraWorkspace:
             if work is not None
             else "## Active work\n\nNo work item was selected for this session.\n\n"
         )
+        inspection_context = ""
+        if work is not None:
+            snapshot_token = self.work_inspection_read_set_sha256(swarm.id, work.id)
+            inspection_context = (
+                "## Decision snapshot\n\n"
+                f"- Token: `{snapshot_token}`\n"
+                "- Refresh: `agora work inspect --swarm $AGORA_SWARM --work $AGORA_WORK "
+                f"--snapshot-token {snapshot_token}`\n\n"
+            )
+        retry_context = (
+            (
+                "## Retry\n\n"
+                f"- Previous session: `{retry_summary_path.parent.name}`\n"
+                f"- Resume summary: `{retry_summary_path.relative_to(root)}`\n"
+                "- Do not load the prior `RESULT.md`; use the summary and targeted durable "
+                "records, then inspect a narrow result tail only if the summary identifies an "
+                "unresolved runtime error.\n\n"
+            )
+            if retry_summary_path is not None
+            else ""
+        )
         return (
             f"# Agora session context\n\n"
             f"## Project\n\n- Name: {project.project}\n- Root: `{root}`\n\n"
             f"## Runtime\n\n- Integration: `{integration}`\n- Provider: `{provider}`\n"
-            f"- Model: `{model}`\n\n"
+            f"- Model: `{model}`\n- Execution profile: `{execution_profile}`\n\n"
             f"## Responsible actor\n\n- Identity: `{actor.reference}`\n- Kind: `{actor.kind}`\n"
             f"- Roles: {', '.join(f'`{role}`' for role in roles)}\n"
             f"- Capabilities: {', '.join(f'`{item}`' for item in actor.capabilities)}\n"
@@ -18584,10 +18893,13 @@ class AgoraWorkspace:
             "- Authority: bounded by the responsible actor's assigned roles; execution does not "
             "transfer ownership or approval authority.\n\n"
             f"## Swarm\n\n- Id: `{swarm.id}`\n- Method: `{swarm.method}`\n"
-            f"- Objective: {swarm.objective}\n\n{work_context}"
+            f"- Objective: {swarm.objective}\n\n{work_context}{inspection_context}{retry_context}"
             f"## Required reading\n\n{reading}\n\n"
             "## Operating rules\n\n"
-            "1. Read every available file listed above before acting.\n"
+            "1. Start from the bounded decision snapshot. Read the listed policy and active-work "
+            "records, then expand only to a targeted file or small range required by the next "
+            "action. Never read `.agora/activity.md` or an entire event ledger for session "
+            "orientation.\n"
             "2. Perform only actions allowed to the assigned role and active transition.\n"
             "3. Use the Agora CLI to persist state, artifacts, evidence, and material outcomes.\n"
             "   Agora engine progress is emitted line-by-line on stderr; keep `AGORA_TRACE` "
@@ -18599,6 +18911,10 @@ class AgoraWorkspace:
             "7. Report only meaningful execution milestones with `agora session progress "
             '--session $AGORA_SESSION_ID --by $AGORA_EXECUTOR --summary "..."`; never report '
             "chain-of-thought or private reasoning.\n"
+            "8. Keep commands quiet and bounded: prefer summaries, narrow test targets, small "
+            "line ranges, and references to durable artifacts over full diffs, source trees, or "
+            "build logs. Read only the selected `.agora/environments/<id>.md` immediately before "
+            "an environment-aware tool operation.\n"
         )
 
     def _related_delegation_paths(
@@ -19539,6 +19855,12 @@ class AgoraWorkspace:
         return value  # type: ignore[return-value]
 
     @staticmethod
+    def _execution_profile(value: str) -> ExecutionProfile:
+        if value not in EXECUTION_PROFILES:
+            raise ValueError(f"Unsupported execution profile: {value}")
+        return value  # type: ignore[return-value]
+
+    @staticmethod
     def _method(value: str) -> Method:
         assert_slug(value, "Method id")
         return value
@@ -20061,4 +20383,23 @@ def _bound_tool_output(
         125,
         bounded_stdout.decode("utf-8", errors="replace"),
         f"{bounded_stderr.decode('utf-8', errors='replace').rstrip()}\n{diagnostic}".lstrip(),
+    )
+
+
+def _bounded_transcript_text(value: str, max_bytes: int, *, keep_tail: bool) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    marker = (
+        b"\n[Agora omitted earlier provider transcript; durable outcomes belong in artifacts.]\n"
+    )
+    if max_bytes <= len(marker):
+        return marker[:max_bytes].decode("utf-8", errors="ignore")
+    available = max_bytes - len(marker)
+    selected = encoded[-available:] if keep_tail else encoded[:available]
+    selected_text = selected.decode("utf-8", errors="ignore")
+    return (
+        marker.decode("utf-8") + selected_text
+        if keep_tail
+        else selected_text + marker.decode("utf-8")
     )

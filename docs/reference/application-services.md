@@ -117,6 +117,12 @@ limits with explicit truncation metadata. Its consistency check fingerprints onl
 change those fields, so unrelated Activity entries do not force a retry or invalidate the token.
 Callers expand to the full control projection (`work inspect --full`) or targeted reads only when
 the compact result exposes an ambiguity or the next action needs supporting detail.
+The CLI accepts the prior token through `work inspect --snapshot-token TOKEN` and emits a bounded
+`agora/application/work-inspection-not-modified/v1` response when the decision material is unchanged.
+Core verifies the read-set twice and returns that envelope before loading work, lifecycle, swarm, or
+gate DTOs, so polling avoids both token volume and projection assembly.
+Both compact and full projections use a shared local read lock, so parallel readers coexist while
+remaining mutually exclusive with Core mutations.
 
 ## Governed command
 

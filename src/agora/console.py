@@ -447,8 +447,9 @@ class ConsoleResult:
     def _validation(self, data: dict[str, Any]) -> None:
         ok = data.get("ok") is True
         issues = data.get("issues", [])
+        issue_count = data.get("issue_count", len(issues))
         self._headline("Agora validation", ok=ok)
-        self._rows((("Project", data.get("project")), ("Issues", len(issues))))
+        self._rows((("Project", data.get("project")), ("Issues", issue_count)))
         checked = data.get("checked", {})
         if isinstance(checked, dict):
             total = sum(value for value in checked.values() if isinstance(value, int))
@@ -461,6 +462,8 @@ class ConsoleResult:
                     continue
                 label = str(item.get("code", item.get("severity", "issue")))
                 detail = str(item.get("message", item.get("path", "")))
+                if isinstance(item.get("count"), int) and item["count"] > 1:
+                    detail = f"{detail} ({item['count']} occurrences)"
                 self._check(label, detail, ok=item.get("severity") != "error")
         else:
             self._check("Validation", "No issues found", ok=True)

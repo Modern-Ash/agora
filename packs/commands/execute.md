@@ -5,45 +5,41 @@ description: "Execute a permitted transition step for an assigned Agora role"
 
 # Execute governed work
 
-In at most two sentences, tell the user the governed outcome and actor, authority, gate, evidence,
-budget, and verification checks. Continue without reconfirming requested in-scope work; pause for a
-material choice, human-only approval, or unapproved external, destructive, or costly action.
+In at most two sentences, state the governed outcome and the actor, authority, gate, evidence,
+budget, and verification you will check. Continue requested in-scope work; pause for a material
+choice, human-only approval, or unapproved external, destructive, or costly action.
 
-Preserve a selected `AGORA_TRACE`; otherwise use `compact`. Report only material phases, blockers,
-or long-running progress; omit raw traces and payloads unless debugging was requested.
+Use `AGORA_CONTEXT`. If absent, use compact
+`agora work inspect --swarm "$AGORA_SWARM" --work "$AGORA_WORK"`, or
+`agora next --actor "$AGORA_ACTOR" --limit 1` when work is unknown. Reuse `snapshot_token`; use
+`--full` only for a specific ambiguity. Never orient from `.agora/activity.md`, a full event ledger,
+or an earlier `RESULT.md`. On retry, read `SUMMARY.md` and inspect only the narrow diagnostic tail it
+identifies. Preserve a selected `AGORA_TRACE`; otherwise use `compact`.
 
-Use `AGORA_CONTEXT`; if absent and work is known, start with
-`agora work inspect --swarm "$AGORA_SWARM" --work "$AGORA_WORK"`. Otherwise use
-`agora next --actor "$AGORA_ACTOR" --limit 1`. On an older CLI, fall back to targeted `show` and
-`readiness` queries. Expand only as needed. Derive actions from durable Method Pack state. Batch safe
-actions until human attention, missing authority, failure, no progress, or session bounds. For a new
-controller run, prefer `--until-blocked --max-steps 3`; never launch it recursively. Record at least
-one governed transition, artifact, evidence, approval, block, or delegation. Never choose rework to
-avoid a higher-priority human decision.
-Treat the timeout and output limits in `AGORA_SESSION` as immutable execution policy. The controller
-records bounded process output in the session `RESULT.md`; place material outcomes in governed work
-artifacts and evidence rather than relying on that process log.
+Confirm swarm, actor, assignment, work, state, outgoing edge, role tools, WIP, gates, and remaining
+usage. Derive actions from the Method Pack. Batch safe actions until human attention, missing
+authority, failure, no progress, or session bounds. A new controller may use
+`--until-blocked --max-steps 3`; never launch one recursively. Persist at least one material
+transition, artifact, evidence, approval, block, or delegation. Never choose rework to evade a
+higher-priority human decision.
 
-Confirm swarm, actor, assignment, work, state, and outgoing edge. Respect role tools, WIP, and gates.
-Persist material decisions, artifacts, evidence, approvals, and interactions. Invoke external
-operations through `agora tool invoke`. For an environment, select `.agora/environments` policy and
-confirm role, approval, and evidence requirements.
-When a runtime or reviewed adapter reports measured resource consumption, append it with
-`agora usage add` and cite the authoritative telemetry reference. Never estimate or invent usage.
-Check `agora usage status --swarm <swarm> --work <work>` before allocating or launching bounded
-work so the next operation fits the durable remaining budget.
-When work is delegated, read the related `DELEGATION.md` and act only within its parent or child
-contract. Do not invent a transition or bypass a gate.
+For a controller session use the narrowest profile: `efficient` with a 64 KiB transcript for
+inspection, evidence, transitions, and retry diagnosis; `balanced` with 128 KiB for ordinary
+delivery; `complex` only for substantive implementation or review. Treat the session timeout and
+output bounds as immutable. The configured runtime owns the concrete model.
 
-When repository history is required, read `.agora/STANDARDS.md` and use the governed
-`repository/commit` operation with a Conventional Commits 1.0.0 message. Do not bypass its input
-validation with an ungoverned Git command.
+Keep tool output below 200 lines or 32 KiB where supported. Use quiet commands, narrow ranges, and
+targeted tests. Store long diffs, reports, and logs in durable artifacts; return only status, failing
+cases, and references. Do not print whole files, repository-wide diffs, dependency trees, or
+successful build logs.
 
-If active work cannot proceed, use an authorized block with an explicit reason instead of inventing
-a Method Pack state. Do not mutate blocked or cancelled work. Resume only after its stated blocker is
-resolved. Treat delegation rejection as child authority and delegation cancellation as parent
-authority; neither operation permits silently rewriting independently owned child work.
+Use `agora tool invoke` for external operations and read only the selected environment policy.
+Read the related `DELEGATION.md` for delegated work. For repository history, follow
+`.agora/STANDARDS.md` and the governed `repository/commit` operation. Do not invent transitions,
+approvals, usage, or authority. Agora records an authentic Codex token footer automatically; add
+other authoritative telemetry with `agora usage add`, without duplication.
 
-Finish with the durable change, checks actually confirmed, verification, blocker, and next action.
+If work cannot proceed, record an authorized block with its reason. Do not mutate blocked or
+cancelled work. Finish with the durable change, checks confirmed, blocker, and next action.
 
 Execution request: `$ARGUMENTS`

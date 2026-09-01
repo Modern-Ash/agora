@@ -27,7 +27,7 @@ from agora.application import (
     WorkItemFilters,
     approve_gate_authorization_payload,
 )
-from agora.application.dto import ArtifactSummary, SerializableDTO
+from agora.application.dto import ArtifactSummary, SerializableDTO, WorkInspection
 from agora.cli import main
 from agora.model import (
     AddActorInput,
@@ -648,6 +648,26 @@ def test_work_inspection_snapshot_changes_only_with_relevant_decision_context(
     assert changed.materials["evidence"] == 2
 
 
+def test_work_inspection_snapshot_short_circuits_projection_assembly(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, service = read_project
+    initial = service.work_inspection("delivery", "read-boundary")
+    assert isinstance(initial, WorkInspection)
+
+    monkeypatch.setattr(
+        service,
+        "get_work_item",
+        lambda *_args: pytest.fail("unchanged snapshots must not assemble the inspection"),
+    )
+
+    unchanged = service.work_inspection("delivery", "read-boundary", initial.snapshot_token)
+
+    assert unchanged.unchanged is True
+    assert unchanged.snapshot_token == initial.snapshot_token
+
+
 def test_work_inspection_cli_exposes_full_and_brief_views(
     read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
 ) -> None:
@@ -675,6 +695,35 @@ def test_work_inspection_cli_exposes_full_and_brief_views(
     assert errors.getvalue() == ""
     assert brief["schema"] == "agora/application/work-inspection/v1"
     assert len(brief_output.getvalue().encode()) < 4_096
+
+    unchanged_output = io.StringIO()
+    assert (
+        main(
+            [
+                "work",
+                "inspect",
+                "--swarm",
+                "delivery",
+                "--work",
+                "read-boundary",
+                "--snapshot-token",
+                brief["snapshot_token"],
+            ],
+            cwd=root,
+            stdout=unchanged_output,
+            stderr=errors,
+        )
+        == 0
+    )
+    unchanged = json.loads(unchanged_output.getvalue())
+    assert unchanged == {
+        "schema": "agora/application/work-inspection-not-modified/v1",
+        "snapshot_token": brief["snapshot_token"],
+        "swarm_id": "delivery",
+        "work_id": "read-boundary",
+        "unchanged": True,
+    }
+    assert len(unchanged_output.getvalue()) < len(brief_output.getvalue())
 
     full_output = io.StringIO()
     assert (

@@ -32,6 +32,7 @@ from agora.application.dto import (
     WorkControlProjection,
     WorkInspection,
     WorkInspectionBlocker,
+    WorkInspectionNotModified,
     WorkInspectionTransition,
     WorkItemDetail,
     WorkItemSummary,
@@ -522,7 +523,12 @@ class AgoraReadService:
 
         return self._read(f"work control projection {swarm_id}/{work_id}", read)
 
-    def work_inspection(self, swarm_id: str, work_id: str) -> WorkInspection:
+    def work_inspection(
+        self,
+        swarm_id: str,
+        work_id: str,
+        snapshot_token: str | None = None,
+    ) -> WorkInspection | WorkInspectionNotModified:
         """Return bounded decision context without assembling audit-heavy control material."""
 
         self._require_work_slugs(swarm_id, work_id)
@@ -599,10 +605,19 @@ class AgoraReadService:
                 reason=reason,
             )
 
-        def read() -> WorkInspection:
+        def read() -> WorkInspection | WorkInspectionNotModified:
             with self._workspace.consistent_read("work-inspection"):
                 for _ in range(3):
                     before = self._workspace.work_inspection_read_set_sha256(swarm_id, work_id)
+                    if snapshot_token == before:
+                        after = self._workspace.work_inspection_read_set_sha256(swarm_id, work_id)
+                        if before == after:
+                            return WorkInspectionNotModified(
+                                snapshot_token=before,
+                                swarm_id=swarm_id,
+                                work_id=work_id,
+                            )
+                        continue
                     inspection = assemble(before)
                     after = self._workspace.work_inspection_read_set_sha256(swarm_id, work_id)
                     if before == after:
@@ -762,6 +777,7 @@ class AgoraReadService:
             integration=record.integration,
             provider=record.provider,
             model=record.model,
+            execution_profile=record.execution_profile,
             status=record.status,
             record_uri=f"repo://.agora/sessions/{record.id}/SESSION.md",
             context_uri=f"repo://.agora/sessions/{record.id}/CONTEXT.md",
@@ -771,6 +787,7 @@ class AgoraReadService:
             exit_code=record.exit_code,
             timeout_seconds=record.timeout_seconds,
             max_output_bytes=record.max_output_bytes,
+            max_transcript_bytes=record.max_transcript_bytes,
             output_bytes=record.output_bytes,
             termination_reason=record.termination_reason,
             context_sha256=record.context_sha256,
@@ -780,6 +797,7 @@ class AgoraReadService:
             authorization_sha256=record.authorization_sha256,
             authorization_signature=record.authorization_signature,
             preparation_action_id=record.preparation_action_id,
+            retry_of=record.retry_of,
         )
 
     @staticmethod

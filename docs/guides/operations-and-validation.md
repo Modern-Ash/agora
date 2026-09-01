@@ -75,6 +75,7 @@ agora work list
 agora work list --swarm delivery --state reviewing
 agora work list --swarm delivery --operational-status blocked
 agora work inspect --swarm delivery --work payment-api
+agora work inspect --swarm delivery --work payment-api --snapshot-token <previous-token>
 agora work status-changes --swarm delivery --work payment-api
 agora work traceability --swarm delivery --work payment-api
 agora delegation list --status accepted
@@ -93,6 +94,9 @@ decision summary: current state, available transitions and blockers, role assign
 material counts, required and missing artifacts, and a snapshot token. Use `work inspect --full` or
 a targeted query only when that summary indicates more context is necessary. The compact projection
 is an optimization of reads and output, not a weaker lifecycle or authorization check.
+When `--snapshot-token` still matches, the CLI returns only the token, work identity, and
+`unchanged: true`; callers can reuse their prior compact projection without paying for repeated JSON
+context. The option is intentionally unavailable with `--full`.
 
 `work traceability` is a non-mutating derived view. It maps criteria and stages to generated Gherkin,
 directly linked evidence, and shared artifacts, then compares recorded provenance hashes with the
@@ -153,7 +157,12 @@ available.
 
 ```bash
 agora validate
+agora validate --summary
 ```
+
+`--summary` preserves the exit status and total issue count while grouping identical severity, code,
+and message combinations. Each group contains at most three representative paths plus truncation
+metadata, which keeps repeated stale-evidence diagnostics bounded for agents and CI logs.
 
 It checks:
 
