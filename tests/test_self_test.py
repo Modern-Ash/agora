@@ -9,15 +9,19 @@ def test_exercises_every_bundled_method_with_every_supported_actor_form() -> Non
     result = run_role_self_test()
 
     assert result["ok"] is True
-    assert result["methods"] == 3
+    assert result["methods"] == 4
     assert result["actor_kinds"] == ["human", "ai-agent", "swarm"]
     assert len(result["cases"]) == len(BUNDLED_METHODS) * len(ACTOR_KINDS)
-    assert result["role_assignments_verified"] == 24
-    assert result["disallowed_assignments_rejected"] == 24
+    assert result["role_assignments_verified"] == 39
+    assert result["disallowed_assignments_rejected"] == 39
     assert {(case["method"], case["actor_kind"]) for case in result["cases"]} == {
         (method_id, actor_kind) for method_id in BUNDLED_METHODS for actor_kind in ACTOR_KINDS
     }
     assert all(case["terminal_state"] in {"completed", "done"} for case in result["cases"])
+
+    ai_dlc_cases = [case for case in result["cases"] if case["method"] == "ai-dlc"]
+    assert {case["actor_kind"] for case in ai_dlc_cases} == {"human", "ai-agent", "swarm"}
+    assert all(case["terminal_state"] == "completed" for case in ai_dlc_cases)
 
 
 def test_self_test_is_available_without_an_initialized_project(tmp_path: Path) -> None:
@@ -27,4 +31,4 @@ def test_self_test_is_available_without_an_initialized_project(tmp_path: Path) -
     assert main(["self-test"], cwd=tmp_path, stdout=output, stderr=errors) == 0
     assert errors.getvalue() == ""
     assert '"scope": "bundled-role-conformance"' in output.getvalue()
-    assert '"role_assignments_verified": 24' in output.getvalue()
+    assert '"role_assignments_verified": 39' in output.getvalue()
