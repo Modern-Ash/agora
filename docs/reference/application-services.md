@@ -1,6 +1,6 @@
 # Application Services contracts
 
-Agora Core 0.8.0 exposes an in-process, provider-neutral boundary in `agora.application`. Agora CLI
+Agora Core 0.8.1 exposes an in-process, provider-neutral boundary in `agora.application`. Agora CLI
 and Studio API are adapters over this boundary. Studio must not invoke CLI commands or parse
 `.agora/` records.
 

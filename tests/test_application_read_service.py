@@ -1191,7 +1191,7 @@ def test_core_0_8_fixture_is_confirmable_coherent_and_portable() -> None:
     path = Path(__file__).parent / "contracts" / "core-0.8-application-contracts.json"
     fixture = json.loads(path.read_text(encoding="utf-8"))
 
-    assert fixture["core_version"] == "0.8.0"
+    assert fixture["core_version"] == "0.8.1"
     assert fixture["artifact"]["schema"].endswith("artifact-summary/v3")
     assert fixture["evidence"]["schema"].endswith("evidence-summary/v3")
     assert fixture["gate_command"]["schema"].endswith("approve-gate-command/v4")

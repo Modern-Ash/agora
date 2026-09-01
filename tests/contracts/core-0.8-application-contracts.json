@@ -15,7 +15,7 @@
     "prepared_schema": "agora/application/prepared-budget-amendment/v1",
     "projection_schema": "agora/application/budget-amendment-projection/v1"
   },
-  "core_version": "0.8.0",
+  "core_version": "0.8.1",
   "durable_activity": {
     "actor": "project:owner",
     "schema": "agora/application/activity-entry/v1",
