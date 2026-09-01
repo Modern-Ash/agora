@@ -255,7 +255,7 @@ def _core_0_8_golden_contract(
         if selected_reference in item.artifact_references
     )
     return {
-        "core_version": "0.8.0",
+        "core_version": "0.8.1",
         "artifact": artifact.to_dict(),
         "evidence": evidence.to_dict(),
         "gate_command": confirmation.to_dict(),
