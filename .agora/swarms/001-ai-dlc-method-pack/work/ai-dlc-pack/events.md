@@ -45,3 +45,6 @@
 - 2026-09-01T23:52:56.119606Z | work.criterion-stage-marked | criterion=ac-gates-enforced actor=project:owner stage=accepted
 - 2026-09-01T23:52:56.338032Z | work.criterion-stage-marked | criterion=ac-docs actor=project:owner stage=accepted
 - 2026-09-01T23:52:56.552820Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:owner stage=accepted
+- 2026-09-01T23:53:01.781461Z | work.transitioned | from=implementing to=verifying actor=project:agent
+- 2026-09-01T23:53:06.217599Z | approval.added | role=spec-owner actor=project:owner delegation=none
+- 2026-09-01T23:53:06.422720Z | work.transitioned | from=verifying to=completed actor=project:owner
