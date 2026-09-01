@@ -21,3 +21,4 @@
 - 2026-09-01T23:22:13.416237Z | work.criterion-stage-marked | criterion=ac-docs actor=project:owner stage=planned
 - 2026-09-01T23:22:13.632556Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:owner stage=planned
 - 2026-09-01T23:22:23.324405Z | work.transitioned | from=clarified to=planned actor=project:agent
+- 2026-09-01T23:22:30.837512Z | work.transitioned | from=planned to=implementing actor=project:agent

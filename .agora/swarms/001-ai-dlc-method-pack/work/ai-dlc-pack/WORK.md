@@ -3,7 +3,7 @@ schema: "agora/work/v1"
 id: "ai-dlc-pack"
 swarm: "ai-dlc-method-pack"
 title: "ai-dlc Method Pack"
-state: "planned"
+state: "implementing"
 revision: 1
 operational-status: "active"
 status-reason: null
