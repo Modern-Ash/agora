@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -89,6 +90,20 @@ def main() -> None:
                 actor_id="owner",
             ),
             "compatible",
+        )
+        workspace.clarify_work(
+            WorkActorInput(
+                swarm_id=quickstart.swarm.id,
+                work_id="discount-feature",
+                actor_id="owner",
+            ),
+            runner=shlex.join(
+                [
+                    sys.executable,
+                    "-c",
+                    "import json; print(json.dumps({'questions': []}))",
+                ]
+            ),
         )
         workspace.transition_work(
             TransitionWorkInput(
