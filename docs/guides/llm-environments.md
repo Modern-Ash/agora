@@ -76,8 +76,11 @@ $agora-form-swarm Form the payment-idempotency swarm with registered actors.
 $agora-review Review payment-idempotency against its criteria, artifacts, and evidence.
 ```
 
-The skill tells Codex to read the project protocol and use the Agora CLI. Material state belongs in
-`.agora`, not only in the conversation.
+The skill tells Codex to use the minimum relevant project context and Agora CLI query. Before a
+mutation it gives the user a short statement of the intended durable result and the checks it will
+confirm. It proceeds without redundant confirmation for requested in-scope work, but stops for
+material human decisions or unapproved external, destructive, or costly actions. Material state
+belongs in `.agora`, not only in the conversation.
 
 The generated `agora-specify` skill treats clarification as Method Pack-aware. It inspects the
 active lifecycle, roles, gates, assignments, and protocol before invoking `agora work clarify`,
@@ -85,10 +88,10 @@ relays unresolved questions to the user, and never turns a runtime suggestion in
 criterion, approval, evidence record, or state transition. The same portable instruction is
 projected for Claude and generic environments.
 
-When a Codex chat invokes Agora, the portable execution and status skills enable or preserve
-`AGORA_TRACE=compact` and relay the resulting `stderr` phases before summarizing the final JSON.
-This exposes engine progress in the conversation without parsing TTY animation or mixing it with
-machine-readable `stdout`.
+When a Codex chat invokes Agora, the portable skills preserve a selected trace mode or default to
+`AGORA_TRACE=compact`. They summarize material phases, blockers, and verified results rather than
+echoing every trace line or structured payload. Status starts with the narrowest query, and execution
+batches bounded safe progress until human attention, missing authority, failure, or no progress.
 
 ## Claude example
 
@@ -120,9 +123,9 @@ The adapter materializes portable instructions as Claude command files:
 Agora only creates these files. Command discovery, invocation syntax, model access, permissions, and
 execution remain responsibilities of the installed Claude environment.
 
-The generated Claude execution and status commands follow the same trace rule as Codex: preserve a
-caller-selected `AGORA_TRACE` value, otherwise use `compact`, relay each Agora-owned phase, and keep
-the final structured result separate. The trace never requests or exposes Claude reasoning.
+The generated Claude commands follow the same concise interaction and trace rules as Codex: preserve
+a selected `AGORA_TRACE`, otherwise use `compact`, and report material phases and verified outcomes
+without exposing model reasoning.
 
 ### Optional: a global Claude Code skill instead of per-project commands
 

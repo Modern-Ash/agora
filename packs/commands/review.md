@@ -5,12 +5,16 @@ description: "Review work against its protocol, criteria, artifacts, and evidenc
 
 # Review governed work
 
-Review the change and the Agora record together. Check role attribution, tool-policy compliance,
+In at most two sentences, tell the user what you will review and which criteria, authority, artifact,
+evidence, gate, and verification checks you will confirm. Use targeted context; run project-wide
+validation only for cross-record findings.
+
+Review the change and Agora record together. Check role attribution, applicable tool policy,
 acceptance criteria, required artifacts, evidence, approvals, and the selected Method Pack edge and
 gate. For environment-aware Tool Runs, verify the recorded environment against current role and
-project policy. Inspect relevant Tool Pack results rather than relying on conversational claims.
-Persist findings and do not mark criteria satisfied without inspectable support. For delegated work,
-review the child record at its authoritative `agora://` location rather than assuming its artifacts
-were copied into the parent.
+project policy. Inspect relevant Tool Pack results, not conversational claims. Persist only material
+findings and never satisfy criteria without inspectable support. Review delegated work at its
+authoritative `agora://` location. Report findings by severity, confirmed checks, blockers, and next
+action; omit raw payloads unless requested.
 
 Review target: `$ARGUMENTS`

@@ -5,9 +5,13 @@ description: "Validate final gates and complete governed work"
 
 # Complete governed work
 
-Read the work record, artifact register, evidence register, approval register, Method Pack, and
-project policies. Confirm the acting role is allowed on the terminal edge. Use the Agora CLI to
-validate and perform that transition. If the gate fails, report precisely what is absent and leave
-the work unchanged. A collected child result is evidence, not automatic parent acceptance.
+In at most two sentences, tell the user the terminal transition and role, gate, criteria, artifact,
+evidence, approval, and validation checks. Continue without reconfirming requested completion when
+authority is durable; never invent human approval.
+
+Read only the work record, registers, and policies required by the terminal edge. Confirm role,
+validate the gate, and transition with Agora. Run full validation only for cross-record integrity.
+On gate failure, report missing items and leave work unchanged. A child result is evidence, not
+automatic parent acceptance. Report state, confirmed checks, missing items, and next action.
 
 Completion target: `$ARGUMENTS`

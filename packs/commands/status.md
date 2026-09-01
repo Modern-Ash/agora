@@ -5,15 +5,18 @@ description: "Inspect and validate durable Agora project state"
 
 # Inspect Agora state
 
-When invoked from chat or another non-TTY host, set `AGORA_TRACE=compact` and relay Agora's stderr
-lines; keep stdout intact for the structured result.
+Tell the user in one sentence what state and durable source you will inspect. This is read-only; do
+not ask for confirmation.
 
-Use `agora status`, `agora next`, `agora inbox`, and the domain `list` commands before selecting work
-or reporting project state.
-Use `agora event list` for attributed history and `agora validate` before relying on cross-record
-references. Treat validation errors as durable-state problems: report the exact code and path, and do
-not silently rewrite or infer missing records. Distinguish Method Pack state from work
-`operational-status`. Inspect nested status changes before explaining a block, resumption, rejection,
-or cancellation.
+Use the narrowest query that answers the request. For work selection, start with
+`agora next --actor <actor> --swarm <swarm> --limit 1`. Use `agora status` for a project overview,
+`agora inbox` for human attention, domain `list` commands to resolve identity or scope, `agora event
+list` for attributed history, and `agora validate` only for requested health checks or cross-record
+integrity. Do not run all of them by default.
+
+Preserve a selected `AGORA_TRACE`; otherwise use `compact`. Summarize instead of echoing traces or
+payloads. Report validation errors by exact code and path without rewriting or inferring records.
+Distinguish Method Pack state from `operational-status`; inspect nested changes only to explain an
+interruption. Report state, blockers, next action, and durable source.
 
 Query target: `$ARGUMENTS`
