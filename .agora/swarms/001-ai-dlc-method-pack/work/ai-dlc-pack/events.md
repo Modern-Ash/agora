@@ -12,3 +12,12 @@
 - 2026-09-01T23:17:11.998751Z | work.criterion-stage-marked | criterion=ac-docs actor=project:owner stage=specified
 - 2026-09-01T23:17:12.273461Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:owner stage=specified
 - 2026-09-01T23:17:12.527075Z | work.transitioned | from=drafting to=clarified actor=project:owner
+- 2026-09-01T23:22:12.006670Z | artifact.added | kind=implementation-plan uri=docs/superpowers/plans/2026-09-01-ai-dlc-method-pack.md actor=project:owner
+- 2026-09-01T23:22:12.241719Z | work.criterion-stage-marked | criterion=ac-pack-valid actor=project:owner stage=planned
+- 2026-09-01T23:22:12.480480Z | work.criterion-stage-marked | criterion=ac-roles-conform actor=project:owner stage=planned
+- 2026-09-01T23:22:12.716632Z | work.criterion-stage-marked | criterion=ac-lifecycle-test actor=project:owner stage=planned
+- 2026-09-01T23:22:12.943957Z | work.criterion-stage-marked | criterion=ac-sample-runs actor=project:owner stage=planned
+- 2026-09-01T23:22:13.183917Z | work.criterion-stage-marked | criterion=ac-gates-enforced actor=project:owner stage=planned
+- 2026-09-01T23:22:13.416237Z | work.criterion-stage-marked | criterion=ac-docs actor=project:owner stage=planned
+- 2026-09-01T23:22:13.632556Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:owner stage=planned
+- 2026-09-01T23:22:23.324405Z | work.transitioned | from=clarified to=planned actor=project:agent
