@@ -2,7 +2,7 @@
 schema: "agora/swarm/v1"
 id: "ai-dlc-method-pack"
 method: "spec-driven"
-status: "ready"
+status: "running"
 branch: "agora/ai-dlc-method-pack"
 required-roles: ["spec-owner","developer"]
 assignments: {"spec-owner":"project:owner","developer":"project:agent"}

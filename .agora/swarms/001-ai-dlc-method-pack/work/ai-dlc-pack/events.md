@@ -1,0 +1,14 @@
+# Work events
+
+- 2026-09-01T23:14:52.200152Z | work.created | state=drafting actor=project:owner
+- 2026-09-01T23:15:03.737222Z | artifact.added | kind=spec uri=docs/superpowers/specs/2026-09-01-ai-dlc-method-pack-design.md actor=project:owner
+- 2026-09-01T23:15:57.986241Z | work.clarified-advisory | questions=5 actor=project:owner
+- 2026-09-01T23:16:57.814262Z | work.clarified-advisory | questions=5 actor=project:owner
+- 2026-09-01T23:17:10.882213Z | work.criterion-stage-marked | criterion=ac-pack-valid actor=project:owner stage=specified
+- 2026-09-01T23:17:11.104790Z | work.criterion-stage-marked | criterion=ac-roles-conform actor=project:owner stage=specified
+- 2026-09-01T23:17:11.320929Z | work.criterion-stage-marked | criterion=ac-lifecycle-test actor=project:owner stage=specified
+- 2026-09-01T23:17:11.554945Z | work.criterion-stage-marked | criterion=ac-sample-runs actor=project:owner stage=specified
+- 2026-09-01T23:17:11.778821Z | work.criterion-stage-marked | criterion=ac-gates-enforced actor=project:owner stage=specified
+- 2026-09-01T23:17:11.998751Z | work.criterion-stage-marked | criterion=ac-docs actor=project:owner stage=specified
+- 2026-09-01T23:17:12.273461Z | work.criterion-stage-marked | criterion=ac-verify-all actor=project:owner stage=specified
+- 2026-09-01T23:17:12.527075Z | work.transitioned | from=drafting to=clarified actor=project:owner
