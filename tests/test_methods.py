@@ -152,3 +152,79 @@ def test_rejects_invalid_role_environment_scope(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="allowed-environments"):
         load_method_contract(method)
+
+
+def test_loads_the_ai_dlc_pack_phase_lifecycle() -> None:
+    contract = load_method_contract(packs_root() / "methods" / "ai-dlc")
+
+    assert contract.id == "ai-dlc"
+    assert contract.required_roles == [
+        "product-owner",
+        "architect",
+        "builder",
+        "operator",
+        "quality-reviewer",
+    ]
+    assert contract.work_states == [
+        "initiation",
+        "ideation",
+        "inception",
+        "construction",
+        "operation",
+        "completed",
+    ]
+    assert contract.terminal_state == "completed"
+    assert contract.wip_limits == {}
+    assert contract.criterion_stages == [
+        "elaborated",
+        "designed",
+        "built",
+        "verified",
+        "deployed",
+        "accepted",
+    ]
+    assert contract.criterion_stage_roles["designed"] == ["architect"]
+    assert contract.criterion_stage_roles["deployed"] == ["operator"]
+    assert contract.criterion_stage_roles["accepted"] == ["product-owner"]
+
+    ideation = next(
+        r for r in contract.transitions if r.source == "initiation" and r.target == "ideation"
+    )
+    assert ideation.roles == ["product-owner"]
+    assert ideation.gate == "intent-framed"
+    assert contract.gates["intent-framed"].required_artifacts == ["intent"]
+    assert contract.gates["intent-framed"].require_resolved_clarifications is True
+
+    design = next(
+        r for r in contract.transitions if r.source == "inception" and r.target == "construction"
+    )
+    assert design.gate == "design-approved"
+    assert contract.gates["design-approved"].required_artifacts == ["architecture", "domain-model"]
+    assert contract.gates["design-approved"].required_approval_roles == [
+        "architect",
+        "product-owner",
+    ]
+    assert contract.gates["design-approved"].required_criterion_stage == "designed"
+
+    build = next(
+        r for r in contract.transitions if r.source == "construction" and r.target == "operation"
+    )
+    assert build.gate == "build-verified"
+    assert contract.gates["build-verified"].require_successful_evidence is True
+    assert contract.gates["build-verified"].required_approval_roles == ["quality-reviewer"]
+
+    completion = next(r for r in contract.transitions if r.target == "completed")
+    assert completion.roles == ["product-owner"]
+    assert completion.gate == "completion"
+    assert contract.gates["completion"].required_criterion_stage == "accepted"
+    assert contract.gates["completion"].require_successful_evidence is True
+    assert contract.gates["completion"].required_approval_roles == ["product-owner"]
+
+    assert any(
+        r.source == "construction" and r.target == "inception" and r.gate is None
+        for r in contract.transitions
+    )
+    assert any(
+        r.source == "operation" and r.target == "construction" and r.gate is None
+        for r in contract.transitions
+    )
