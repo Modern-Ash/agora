@@ -44,6 +44,8 @@ from agora.model import (
     BUILTIN_METHODS,
     DEFAULT_SESSION_MAX_OUTPUT_BYTES,
     DEFAULT_SESSION_TIMEOUT_SECONDS,
+    DEFAULT_SESSION_TRANSCRIPT_BYTES,
+    EXECUTION_PROFILES,
     INTEGRATIONS,
     ActorRecord,
     AddActorInput,
@@ -428,6 +430,7 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "integration": value.integration,
             "provider": value.provider,
             "model": value.model,
+            "execution_profile": value.execution_profile,
             "status": value.status,
             "path": str(session_root),
             "context_path": str(session_root / "CONTEXT.md"),
@@ -437,6 +440,7 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "exit_code": value.exit_code,
             "timeout_seconds": value.timeout_seconds,
             "max_output_bytes": value.max_output_bytes,
+            "max_transcript_bytes": value.max_transcript_bytes,
             "output_bytes": value.output_bytes,
             "termination_reason": value.termination_reason,
             "context_sha256": value.context_sha256,
@@ -447,6 +451,7 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "authorization_signature": value.authorization_signature,
             "preparation_action_id": value.preparation_action_id,
             "executor": value.executor,
+            "retry_of": value.retry_of,
         }
     if isinstance(value, TraceabilitySummary):
         payload = value.to_dict()
@@ -486,6 +491,8 @@ def _run_input(args: argparse.Namespace) -> RunNextInput:
         signature=args.signature,
         timeout_seconds=args.timeout_seconds,
         max_output_bytes=args.max_output_bytes,
+        max_transcript_bytes=getattr(args, "max_transcript_bytes", None),
+        execution_profile=getattr(args, "execution_profile", None),
     )
 
 
@@ -932,6 +939,8 @@ def _run_continue_wizard(
         runner=args.runner,
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,
+        max_transcript_bytes=getattr(args, "max_transcript_bytes", None),
+        execution_profile=getattr(args, "execution_profile", None),
     )
     preview = workspace.preview_run(run_input)
     if interactive:
@@ -2080,7 +2089,12 @@ def _build_parser() -> argparse.ArgumentParser:
     status.add_argument(
         "--board", action="store_true", help="Render a terminal-native board across swarms"
     )
-    commands.add_parser("validate", help="Validate every Agora record and reference")
+    validate = commands.add_parser("validate", help="Validate every Agora record and reference")
+    validate.add_argument(
+        "--summary",
+        action="store_true",
+        help="Group repeated issues and return bounded representative paths",
+    )
     next_action = commands.add_parser("next", help="Show the next governed operational actions")
     next_action.add_argument("--actor")
     next_action.add_argument("--swarm")
@@ -2108,6 +2122,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Repeat agent actions until human attention or no governed progress",
     )
     continue_action.add_argument("--max-steps", type=int, default=20)
+    continue_action.add_argument("--max-transcript-bytes", type=int)
+    continue_action.add_argument("--execution-profile", choices=EXECUTION_PROFILES)
     run = commands.add_parser("run", help="Prepare or launch the next eligible agent action")
     run.add_argument("--actor")
     run.add_argument("--executor")
@@ -2119,6 +2135,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--signature", help="Signature for an already prepared session")
     run.add_argument("--timeout-seconds", type=int)
     run.add_argument("--max-output-bytes", type=int)
+    run.add_argument("--max-transcript-bytes", type=int)
+    run.add_argument("--execution-profile", choices=EXECUTION_PROFILES)
     run.add_argument(
         "--explain",
         action="store_true",
@@ -2138,6 +2156,8 @@ def _build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--signature", help="Raw Ed25519 session authorization signature")
     resume.add_argument("--timeout-seconds", type=int)
     resume.add_argument("--max-output-bytes", type=int)
+    resume.add_argument("--max-transcript-bytes", type=int)
+    resume.add_argument("--execution-profile", choices=EXECUTION_PROFILES)
     environment = commands.add_parser(
         "environment", help="Manage project-defined execution environment policies"
     ).add_subparsers(dest="environment_command", required=True)
@@ -2403,6 +2423,8 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument("--runner", help="External command that executes the prepared session")
     start.add_argument("--timeout-seconds", type=int, default=DEFAULT_SESSION_TIMEOUT_SECONDS)
     start.add_argument("--max-output-bytes", type=int, default=DEFAULT_SESSION_MAX_OUTPUT_BYTES)
+    start.add_argument("--max-transcript-bytes", type=int, default=DEFAULT_SESSION_TRANSCRIPT_BYTES)
+    start.add_argument("--execution-profile", choices=EXECUTION_PROFILES, default="balanced")
     start.add_argument("--launch", action="store_true")
     start.add_argument("--force", action="store_true")
 
@@ -2898,6 +2920,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return the full audit projection instead of bounded decision context",
     )
+    work_inspect.add_argument(
+        "--snapshot-token",
+        help="Return a minimal unchanged response when the compact snapshot still matches",
+    )
 
     work_readiness = work.add_parser(
         "readiness",
@@ -3099,6 +3125,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     session_prepare.add_argument(
         "--max-output-bytes", type=int, default=DEFAULT_SESSION_MAX_OUTPUT_BYTES
+    )
+    session_prepare.add_argument(
+        "--max-transcript-bytes", type=int, default=DEFAULT_SESSION_TRANSCRIPT_BYTES
+    )
+    session_prepare.add_argument(
+        "--execution-profile", choices=EXECUTION_PROFILES, default="balanced"
     )
     session_authorization = session.add_parser(
         "authorization", help="Export the canonical payload for a prepared session"
@@ -3398,6 +3430,33 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validation_summary(report: ValidationReport) -> dict[str, Any]:
+    grouped: dict[tuple[str, str, str], list[str]] = {}
+    for issue in report.issues:
+        key = (issue.severity, issue.code, issue.message)
+        grouped.setdefault(key, []).append(issue.path)
+    issues = []
+    for (severity, code, message), paths in sorted(grouped.items()):
+        unique_paths = list(dict.fromkeys(paths))
+        issues.append(
+            {
+                "severity": severity,
+                "code": code,
+                "message": message,
+                "count": len(paths),
+                "paths": unique_paths[:3],
+                "paths_truncated": len(unique_paths) > 3,
+            }
+        )
+    return {
+        "ok": report.ok,
+        "project": report.project,
+        "checked": report.checked,
+        "issue_count": len(report.issues),
+        "issues": issues,
+    }
+
+
 def _dispatch(
     workspace: AgoraWorkspace,
     args: argparse.Namespace,
@@ -3544,7 +3603,8 @@ def _dispatch(
     if args.command == "status":
         return _render_status_board(reads) if args.board else reads.project_overview()
     if args.command == "validate":
-        return workspace.validate()
+        report = workspace.validate()
+        return _validation_summary(report) if args.summary else report
     if args.command == "intent" and args.intent_command == "add":
         return workspace.create_intent(
             CreateIntentInput(
@@ -3718,6 +3778,8 @@ def _dispatch(
                 signature=args.signature,
                 timeout_seconds=args.timeout_seconds,
                 max_output_bytes=args.max_output_bytes,
+                max_transcript_bytes=args.max_transcript_bytes,
+                execution_profile=args.execution_profile,
             )
         )
     if args.command == "session" and args.session_command == "show":
@@ -3904,6 +3966,8 @@ def _dispatch(
                 force=args.force,
                 timeout_seconds=args.timeout_seconds,
                 max_output_bytes=args.max_output_bytes,
+                max_transcript_bytes=args.max_transcript_bytes,
+                execution_profile=args.execution_profile,
             )
         )
     if args.command == "method" and args.method_command == "install":
@@ -4385,8 +4449,10 @@ def _dispatch(
         return reads.get_work_item(args.swarm, args.work)
     if args.command == "work" and args.work_command == "inspect":
         if args.full:
+            if args.snapshot_token:
+                raise ValueError("--snapshot-token is available only for compact work inspection")
             return reads.work_control_projection(args.swarm, args.work)
-        return reads.work_inspection(args.swarm, args.work)
+        return reads.work_inspection(args.swarm, args.work, args.snapshot_token)
     if args.command == "work" and args.work_command == "readiness":
         return workspace.next_gate_readiness(args.swarm, args.work)
     if args.command == "work" and args.work_command == "list":
@@ -4433,6 +4499,8 @@ def _dispatch(
                     runner=args.runner,
                     timeout_seconds=args.timeout_seconds,
                     max_output_bytes=args.max_output_bytes,
+                    max_transcript_bytes=args.max_transcript_bytes,
+                    execution_profile=args.execution_profile,
                 ),
             )
         )

@@ -3,6 +3,7 @@ from typing import Literal
 
 ActorKind = Literal["human", "ai-agent", "swarm", "service", "automation"]
 Integration = Literal["generic", "codex", "claude"]
+ExecutionProfile = Literal["efficient", "balanced", "complex"]
 Method = str
 PackKind = Literal["method", "tool"]
 ToolRisk = Literal["read", "write", "destructive"]
@@ -25,11 +26,15 @@ ACTOR_KINDS: tuple[ActorKind, ...] = (
     "automation",
 )
 INTEGRATIONS: tuple[Integration, ...] = ("generic", "codex", "claude")
+EXECUTION_PROFILES: tuple[ExecutionProfile, ...] = ("efficient", "balanced", "complex")
 BUILTIN_METHODS: tuple[Method, ...] = ("spec-driven", "scrum", "kanban")
 DEFAULT_SESSION_TIMEOUT_SECONDS = 3600
 MAX_SESSION_TIMEOUT_SECONDS = 86400
 DEFAULT_SESSION_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_SESSION_MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+MIN_SESSION_TRANSCRIPT_BYTES = 64 * 1024
+DEFAULT_SESSION_TRANSCRIPT_BYTES = 128 * 1024
+MAX_SESSION_TRANSCRIPT_BYTES = 256 * 1024
 DEFAULT_GATE_DECISION_TTL_SECONDS = 15 * 60
 
 
@@ -467,6 +472,7 @@ class UsageRecord:
     created_at: str
     path: str
     action_id: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -529,6 +535,7 @@ class SessionRecord:
     integration: Integration
     provider: str
     model: str
+    execution_profile: ExecutionProfile
     status: str
     path: str
     context_path: str
@@ -538,6 +545,7 @@ class SessionRecord:
     exit_code: int | None = None
     timeout_seconds: int = DEFAULT_SESSION_TIMEOUT_SECONDS
     max_output_bytes: int = DEFAULT_SESSION_MAX_OUTPUT_BYTES
+    max_transcript_bytes: int = DEFAULT_SESSION_TRANSCRIPT_BYTES
     output_bytes: int = 0
     termination_reason: str | None = None
     context_sha256: str | None = None
@@ -548,6 +556,7 @@ class SessionRecord:
     authorization_signature: str | None = None
     preparation_action_id: str | None = None
     executor: str | None = None
+    retry_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1246,6 +1255,8 @@ class RunNextInput:
     signature: str | None = None
     timeout_seconds: int | None = None
     max_output_bytes: int | None = None
+    max_transcript_bytes: int | None = None
+    execution_profile: ExecutionProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -1258,10 +1269,12 @@ class RunPreview:
     integration: str
     provider: str
     model: str
+    execution_profile: ExecutionProfile | None
     authentication_required: bool
     runtime_source: Literal["configured", "override", "not-applicable"]
     timeout_seconds: int | None
     max_output_bytes: int | None
+    max_transcript_bytes: int | None
     executor: str | None = None
     executor_kind: ActorKind | None = None
     executor_capabilities: list[str] = field(default_factory=list)
@@ -1298,6 +1311,8 @@ class ResumeSessionInput:
     signature: str | None = None
     timeout_seconds: int | None = None
     max_output_bytes: int | None = None
+    max_transcript_bytes: int | None = None
+    execution_profile: ExecutionProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -1972,6 +1987,7 @@ class AddUsageInput(WorkActorInput):
     id: str
     amounts: dict[str, int] = field(default_factory=dict)
     evidence_refs: list[str] = field(default_factory=list)
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2111,7 +2127,10 @@ class StartSessionInput:
     force: bool = False
     timeout_seconds: int = DEFAULT_SESSION_TIMEOUT_SECONDS
     max_output_bytes: int = DEFAULT_SESSION_MAX_OUTPUT_BYTES
+    max_transcript_bytes: int = DEFAULT_SESSION_TRANSCRIPT_BYTES
+    execution_profile: ExecutionProfile = "balanced"
     executor_id: str | None = None
+    retry_of: str | None = None
 
 
 @dataclass(frozen=True)

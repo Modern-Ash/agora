@@ -56,3 +56,28 @@ launch evidence, bounded captured result, and durable audit trail.
 See the [Tool Pack reference](../reference/tool-packs.md) for the complete manifest and invocation
 contract, and run the [execution boundaries sample](../../samples/execution-boundaries/README.md) for
 a deterministic demonstration.
+
+## Autonomous session transcripts
+
+Session `max-output-bytes` remains the hard process-output boundary (4 MiB by default). Agora
+separately bounds the durable `RESULT.md` transcript to 128 KiB by default. Set
+`--max-transcript-bytes` between 65,536 and 262,144 bytes. The result keeps the concise
+standard-output outcome and most recent provider diagnostics, marks omitted material explicitly,
+and records the original stream sizes. Long diffs, source listings, and successful build logs should
+live in normal artifacts; the transcript should contain their final status and durable references.
+
+`--execution-profile efficient|balanced|complex` is provider-neutral. Codex maps it to low, medium,
+or high reasoning effort and runs ephemerally without color output; Claude maps it to the equivalent
+effort and disables native session persistence. The default is `balanced`. Use `efficient` for
+inspection and record maintenance and reserve `complex` for substantive implementation or review.
+Explicit runners receive the selected value as `AGORA_EXECUTION_PROFILE`.
+
+`CONTEXT.md` is scoped to the selected work item. It excludes the project Activity Ledger and full
+event histories, embeds the compact inspection token, and directs the runtime to targeted reads.
+Retries name their source session and include its `SUMMARY.md`, never its full `RESULT.md`, as the
+orientation record.
+
+When the Codex runtime emits its authoritative final `tokens used` counter, Agora records an
+append-only work usage entry backed by the session summary. Agora does not estimate missing telemetry
+and does not add provider SDKs; integrations without a supported authoritative counter continue to
+submit usage explicitly.

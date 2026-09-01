@@ -33,6 +33,7 @@ class WorkspaceLock:
         *,
         timeout: float = 0,
         now: datetime | None = None,
+        shared: bool = False,
     ) -> None:
         if not math.isfinite(timeout) or timeout < 0:
             raise ValueError("Lock timeout must be a finite non-negative number")
@@ -40,6 +41,7 @@ class WorkspaceLock:
         self.operation = operation
         self.timeout = timeout
         self.acquired_at = (now or datetime.now(UTC)).astimezone(UTC)
+        self.shared = shared
         self.path = workspace_lock_path(self.resource)
         self._descriptor: int | None = None
 
@@ -60,7 +62,7 @@ class WorkspaceLock:
         try:
             while True:
                 try:
-                    _lock_descriptor(descriptor, blocking=False)
+                    _lock_descriptor(descriptor, blocking=False, shared=self.shared)
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
@@ -76,6 +78,8 @@ class WorkspaceLock:
             raise
 
         self._descriptor = descriptor
+        if self.shared:
+            return
         try:
             contents = render_markdown(
                 MarkdownDocument(
@@ -166,9 +170,9 @@ def inspect_workspace_lock(resource: Path) -> WorkspaceLockStatus:
     )
 
 
-def _lock_descriptor(descriptor: int, *, blocking: bool) -> None:
+def _lock_descriptor(descriptor: int, *, blocking: bool, shared: bool = False) -> None:
     if fcntl is not None:
-        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        flags = (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | (0 if blocking else fcntl.LOCK_NB)
         try:
             fcntl.flock(descriptor, flags)
         except BlockingIOError:

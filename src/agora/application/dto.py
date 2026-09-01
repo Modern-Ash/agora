@@ -137,6 +137,7 @@ class SessionSummary(SerializableDTO):
     integration: str
     provider: str
     model: str
+    execution_profile: str
     status: str
     record_uri: str
     context_uri: str
@@ -146,6 +147,7 @@ class SessionSummary(SerializableDTO):
     exit_code: int | None
     timeout_seconds: int
     max_output_bytes: int
+    max_transcript_bytes: int
     output_bytes: int
     termination_reason: str | None
     context_sha256: str | None
@@ -155,6 +157,7 @@ class SessionSummary(SerializableDTO):
     authorization_sha256: str | None
     authorization_signature: str | None
     preparation_action_id: str | None
+    retry_of: str | None
     schema: str = field(default="agora/application/session-summary/v1", init=False)
 
 
@@ -483,6 +486,15 @@ class WorkInspectionTransition(SerializableDTO):
     blocker_count: int
     blockers_truncated: bool
     schema: str = field(default="agora/application/work-inspection-transition/v1", init=False)
+
+
+@dataclass(frozen=True)
+class WorkInspectionNotModified(SerializableDTO):
+    snapshot_token: str
+    swarm_id: str
+    work_id: str
+    unchanged: bool = True
+    schema: str = field(default="agora/application/work-inspection-not-modified/v1", init=False)
 
 
 @dataclass(frozen=True)

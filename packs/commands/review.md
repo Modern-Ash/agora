@@ -12,6 +12,9 @@ validation only for cross-record findings.
 Start with `agora work inspect --swarm <swarm> --work <work>`; use `work inspect --full` or
 targeted domain queries only for details required by the review. On an older CLI, fall back to
 targeted `show`, `readiness`, and `traceability` queries. Review the change and Agora record together.
+Reuse the compact inspection `snapshot_token` until relevant durable material changes. Keep a review
+session `balanced` by default; select `complex` only for genuinely ambiguous implementation or
+security analysis, and keep its durable transcript at 128 KiB unless final diagnostics need more.
 Check role attribution, applicable tool policy,
 acceptance criteria, required artifacts, evidence, approvals, and the selected Method Pack edge and
 gate. For environment-aware Tool Runs, verify the recorded environment against current role and

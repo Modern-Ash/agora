@@ -294,15 +294,16 @@ This resolves actor overrides over project defaults, detects the selected local 
   RESULT.md  # after launch
 ```
 
-`CONTEXT.md` points the runner to the constitution, protocol, Method Pack, assigned role, work record,
-artifacts, evidence, approvals, and events. Preparing a session does not require the runner to be
-installed, which keeps planning and external delegation portable.
+`CONTEXT.md` points the runner to the constitution, protocol, Method Pack, assigned role, and scoped
+work records. It excludes the project Activity Ledger and full event streams. Preparing a session
+does not require the runner to be installed, which keeps planning and external delegation portable.
 
 Use `--launch` to execute the detected command (`codex` or `claude`) in the project directory:
 
 ```bash
 agora start --id idempotency-implementation --actor ai-facilitator \
-  --swarm payment-idempotency --work idempotency-key --launch
+  --swarm payment-idempotency --work idempotency-key \
+  --execution-profile complex --max-transcript-bytes 131072 --launch
 ```
 
 For a generic IDE, cloud worker, or internal orchestrator, provide its command explicitly:
@@ -314,13 +315,15 @@ agora start --id internal-run --actor ai-facilitator \
 ```
 
 The child process receives `AGORA_PROJECT`, `AGORA_SESSION`, `AGORA_CONTEXT`, `AGORA_ACTOR`,
-`AGORA_SWARM`, `AGORA_TRACE`, and, when selected, `AGORA_WORK`. `AGORA_TRACE` defaults to `compact`
+`AGORA_EXECUTION_PROFILE`, `AGORA_SWARM`, `AGORA_TRACE`, and, when selected, `AGORA_WORK`.
+`AGORA_TRACE` defaults to `compact`
 for a launched session unless the caller already supplied `off`, `detailed`, or `jsonl`. The runner
 owns model authentication and should read `AGORA_CONTEXT` before acting. Agora records the command,
 resolved integration/provider/model, exit status, bounded output, and session events without binding
 the framework to a provider SDK. Session launches default to a 3,600-second timeout and 4 MiB output
-limit. Customize them with `--timeout-seconds` and `--max-output-bytes`; the selected values are
-durable and signed.
+limit. Durable transcripts default to 128 KiB. Customize these boundaries with `--timeout-seconds`,
+`--max-output-bytes`, and `--max-transcript-bytes`. Select neutral runtime effort with
+`--execution-profile efficient|balanced|complex`; the selected values are durable.
 
 When the actor was registered with `--require-authentication`, immediate `start` is rejected. Use
 `agora session prepare`, sign and apply that Lifecycle Action, then export the launch payload with

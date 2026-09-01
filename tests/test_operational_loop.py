@@ -652,9 +652,38 @@ def test_materializes_non_interactive_native_cli_commands(tmp_path: Path, monkey
         )
     )
 
-    assert session.launch_command[:4] == ["codex", "exec", "--model", "gpt-test"]
+    assert session.launch_command[:2] == ["codex", "exec"]
+    assert "--ephemeral" in session.launch_command
+    assert session.launch_command[session.launch_command.index("--color") + 1] == "never"
+    assert 'model_reasoning_effort="medium"' in session.launch_command
+    assert session.launch_command[session.launch_command.index("--model") + 1] == "gpt-test"
     assert "AGORA_CONTEXT" in session.launch_command[-1]
     assert "human approval" in session.launch_command[-1]
+
+
+def test_maps_provider_neutral_execution_profiles_to_runtime_effort(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = _scrum_workspace(
+        tmp_path,
+        monkeypatch,
+        integration="codex",
+        model="configured-by-codex",
+    )
+
+    session = workspace.start_session(
+        StartSessionInput(
+            id="efficient-runtime",
+            actor_id="developer",
+            swarm_id="delivery",
+            work_id="increment",
+            execution_profile="efficient",
+        )
+    )
+
+    assert session.execution_profile == "efficient"
+    assert 'model_reasoning_effort="low"' in session.launch_command
+    assert "--model" not in session.launch_command
 
 
 def test_bounds_real_session_runtime_and_persists_timeout_result(

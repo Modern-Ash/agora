@@ -15,10 +15,14 @@ pack installation lock the canonical Agora home path. Initialization locks both 
 target project in deterministic path order. Nested operations reuse the lock; accepting a delegation
 can therefore create child work without deadlocking itself.
 
-Read-only commands such as `status`, `list`, `show`, `doctor`, `validate`, and event queries do not
-take the writer lock. Atomic Markdown replacement gives them either the preceding or following file,
-never a partially written file. A read spanning several records can observe a mutation in progress;
-run it again after the writer finishes when a fully stable multi-record view is required.
+Most single-record read commands such as `status`, `list`, `show`, `doctor`, `validate`, and event
+queries do not take the writer lock. Atomic Markdown replacement gives them either the preceding or
+following file, never a partially written file. Aggregate work projections (`work inspect` and
+`work inspect --full`) take a shared operating-system lock: concurrent projections may proceed
+together, while a mutation waits or fails according to `AGORA_LOCK_TIMEOUT`. They also fingerprint
+their durable read-set before and after assembly, so direct filesystem editors cannot silently
+produce a mixed snapshot. Platforms without a shared-lock primitive conservatively serialize these
+aggregate reads.
 
 ## Atomic documents and compound rollback
 
