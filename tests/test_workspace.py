@@ -3804,7 +3804,7 @@ def test_lists_and_summarizes_operational_workspace_state(
 
     assert status.counts == {
         "actors": 3,
-        "methods": 3,
+        "methods": 4,
         "tools": 11,
         "environments": 0,
         "swarms": 1,
@@ -3819,6 +3819,7 @@ def test_lists_and_summarizes_operational_workspace_state(
     assert status.attention["active-work"] == ["delivery/observable-work"]
     assert status.attention["unfinished-sessions"] == ["observable-session"]
     assert [item.id for item in workspace.list_methods()] == [
+        "ai-dlc",
         "kanban",
         "scrum",
         "spec-driven",

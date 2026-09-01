@@ -48,11 +48,9 @@ def main() -> None:
     )
     agora.initialize(InitInput())
 
-    for role_id, (actor_id, kind, caps) in ROLES.items():
+    for _role_id, (actor_id, kind, caps) in ROLES.items():
         agora.add_actor(
-            AddActorInput(
-                id=actor_id, name=actor_id, kind=kind, capabilities=caps, scope="project"
-            )
+            AddActorInput(id=actor_id, name=actor_id, kind=kind, capabilities=caps, scope="project")
         )
     agora.create_swarm(
         CreateSwarmInput(id="delivery", objective="Deliver via AI-DLC", create_branch=False)

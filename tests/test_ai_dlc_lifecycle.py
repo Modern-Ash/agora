@@ -54,9 +54,7 @@ def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
 def _form_swarm(workspace: AgoraWorkspace) -> None:
     for _role_id, (actor_id, kind, caps) in _ROLES.items():
         workspace.add_actor(
-            AddActorInput(
-                id=actor_id, name=actor_id, kind=kind, capabilities=caps, scope="project"
-            )
+            AddActorInput(id=actor_id, name=actor_id, kind=kind, capabilities=caps, scope="project")
         )
     workspace.create_swarm(CreateSwarmInput(id="delivery", objective="Deliver via AI-DLC"))
     for role_id, (actor_id, _kind, _caps) in _ROLES.items():
