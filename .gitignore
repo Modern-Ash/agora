@@ -7,7 +7,6 @@ build/
 .ruff_cache/
 __pycache__/
 *.py[cod]
-.agora/
 .agents/skills/agora-*/
 .claude/commands/agora.*.md
 graphify-out/
