@@ -76,6 +76,8 @@ do not exist as one static agent file in this repository.
   fallbacks, and render the aggregate board.
 - [AI-native SDLC controls](guides/ai-native-sdlc.md): govern intent, continuous evaluations,
   structured reviews, runtime guardrails, idempotent triggers, control bands, and delivery metrics.
+- [AI-DLC method](guides/ai-dlc.md): run AWS's AI-Driven Development Life Cycle as a bundled Method
+  Pack — phase-boundary states, five approval gates, rework edges, and role mapping.
 - [Getting started](getting-started.md): follow the governed workflow from installation to completed
   work.
 - [Installation and customization](guides/installation-and-customization.md): configure user,
