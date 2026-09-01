@@ -9,9 +9,11 @@ In at most two sentences, tell the user what you will specify and which ambiguit
 artifact, and evidence checks you will confirm. Continue without reconfirming requested in-scope
 work; pause only when a material decision belongs to the user or an authorized role.
 
-Prefer `AGORA_CONTEXT` and targeted queries. Read only the active swarm, Method Pack, relevant policy,
-and repository context. Create unambiguous criteria and required artifact kinds; keep what and why
-separate from implementation until planning is permitted.
+Prefer `AGORA_CONTEXT`. For existing work, start with
+`agora work inspect --swarm <swarm> --work <work>`; on an older CLI, fall back to targeted
+`show` and `readiness` queries. Read only remaining relevant policy and repository context. Create
+unambiguous criteria and required artifact kinds; keep what and why separate from implementation
+until planning is permitted.
 
 Before treating the work as unambiguous, inspect its current Method Pack state, outgoing
 transitions, gates, assigned roles, and `PROTOCOL.md`. If the next gate declares

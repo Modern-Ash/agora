@@ -378,6 +378,12 @@ class ConsoleResult:
             self._session_diagnosis(data)
         elif command == "work readiness" and isinstance(data, dict):
             self._work_readiness(data)
+        elif (
+            command == "work inspect"
+            and isinstance(data, dict)
+            and data.get("schema") == "agora/application/work-inspection/v1"
+        ):
+            self._work_inspection(data)
         else:
             self._generic(command, data)
         self.stream.flush()
@@ -564,6 +570,52 @@ class ConsoleResult:
                 if gate.get("git_issues"):
                     self._check("Git issues", ", ".join(gate["git_issues"]), ok=False)
 
+    def _work_inspection(self, data: dict[str, Any]) -> None:
+        reference = f"{data.get('swarm_id')}/{data.get('work_id')}"
+        self._headline(f"Work inspection · {reference}", ok=True)
+        self._rows(
+            (
+                ("Title", data.get("title")),
+                ("Revision", data.get("revision")),
+                ("Method", data.get("method")),
+                ("State", data.get("state")),
+                ("Operational", data.get("operational_status")),
+                ("Snapshot", str(data.get("snapshot_token", ""))[:12]),
+            )
+        )
+        criteria = data.get("criteria", {})
+        materials = data.get("materials", {})
+        self._section("Checks")
+        self._rows(
+            (
+                (
+                    "Criteria",
+                    f"{criteria.get('satisfied', 0)}/{criteria.get('total', 0)} satisfied",
+                ),
+                ("Artifacts", materials.get("artifacts", 0)),
+                ("Evidence", materials.get("evidence", 0)),
+                ("Approvals", materials.get("approvals", 0)),
+            )
+        )
+        transitions = data.get("transitions", [])
+        if not transitions:
+            self._section("Next action")
+            self._rows((("Result", data.get("reason") or "No outgoing transition"),))
+            return
+        self._section("Transitions")
+        for transition in transitions:
+            if not isinstance(transition, dict):
+                continue
+            target = transition.get("target_state")
+            available = transition.get("available") is True
+            roles = ", ".join(transition.get("authorized_roles", [])) or "none"
+            actors = ", ".join(transition.get("assigned_actors", {}).values()) or "unassigned"
+            self._check(str(target), f"roles={roles} actors={actors}", ok=available)
+            blockers = transition.get("blockers", [])
+            for blocker in blockers:
+                if isinstance(blocker, dict):
+                    self._rows(((str(blocker.get("code", "blocker")), blocker.get("message")),))
+
     def _generic(self, command: str, data: Any) -> None:
         ok = not (isinstance(data, dict) and data.get("ok") is False)
         self._headline(command.replace("-", " ").title(), ok=ok)
@@ -690,6 +742,9 @@ def supports_color(stream: TextIO) -> bool:
 
 
 def _normalize(value: Any) -> Any:
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return _normalize(to_dict())
     if is_dataclass(value) and not isinstance(value, type):
         return {key: _normalize(child) for key, child in asdict(value).items()}
     if isinstance(value, dict):

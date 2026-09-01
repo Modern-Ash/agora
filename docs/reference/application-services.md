@@ -50,6 +50,7 @@ audit remains in the existing Markdown records and Activity Ledger.
 | `specification_history()` | `agora/application/specification-summary/v1` |
 | `specification_revision()` | `agora/application/specification-revision-detail/v1` |
 | `gate_decision_options()` | `agora/application/gate-decision-options-projection/v3` |
+| `work_inspection()` | `agora/application/work-inspection/v1` |
 | `work_control_projection()` | `agora/application/work-control-projection/v3` |
 
 `WorkItemDetail v2` explicitly nests `ArtifactSummary v2`, `EvidenceSummary v2`, and
@@ -106,6 +107,16 @@ material during assembly, then returns retryable `durable-state.concurrent-edit`
 returns a mixed snapshot. Filesystem writers can still race after the final fingerprint, so governed
 mutations repeat their read-set check immediately before the shared transaction. Markdown and Git
 remain the source of truth.
+
+`work_inspection()` is the compact decision surface for an agent iteration. It returns the current
+state and operational status, bounded transition options and blockers, assignment and approval
+actors, criteria and material counts, required and missing artifacts, plus a deterministic
+`snapshot_token`. It intentionally omits histories, artifact bodies, evidence detail, provider
+output, prompts, credentials, and model reasoning. Lists, references, and free text have fixed
+limits with explicit truncation metadata. Its consistency check fingerprints only records that can
+change those fields, so unrelated Activity entries do not force a retry or invalidate the token.
+Callers expand to the full control projection (`work inspect --full`) or targeted reads only when
+the compact result exposes an ambiguity or the next action needs supporting detail.
 
 ## Governed command
 

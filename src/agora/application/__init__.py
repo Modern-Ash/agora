@@ -35,6 +35,9 @@ from agora.application.dto import (
     TraceabilitySummary,
     TransitionSummary,
     WorkControlProjection,
+    WorkInspection,
+    WorkInspectionBlocker,
+    WorkInspectionTransition,
     WorkItemDetail,
     WorkItemSummary,
 )
@@ -146,4 +149,7 @@ __all__ = [
     "WorkItemFilters",
     "WorkItemSummary",
     "WorkControlProjection",
+    "WorkInspection",
+    "WorkInspectionBlocker",
+    "WorkInspectionTransition",
 ]

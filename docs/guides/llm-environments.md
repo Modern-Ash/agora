@@ -82,6 +82,13 @@ confirm. It proceeds without redundant confirmation for requested in-scope work,
 material human decisions or unapproved external, destructive, or costly actions. Material state
 belongs in `.agora`, not only in the conversation.
 
+For work already selected, the portable skills begin with
+`agora work inspect --swarm <swarm> --work <work>`. That bounded Core projection normally
+replaces separate `show`, `readiness`, `traceability`, and `next` probes. Skills expand to the full
+inspection or a targeted query only when the compact result reveals a blocker or the requested
+action needs more evidence. Older Agora installations remain compatible through explicit targeted
+query fallbacks.
+
 The generated `agora-specify` skill treats clarification as Method Pack-aware. It inspects the
 active lifecycle, roles, gates, assignments, and protocol before invoking `agora work clarify`,
 relays unresolved questions to the user, and never turns a runtime suggestion into a satisfied

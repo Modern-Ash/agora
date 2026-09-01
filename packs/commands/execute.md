@@ -12,12 +12,14 @@ material choice, human-only approval, or unapproved external, destructive, or co
 Preserve a selected `AGORA_TRACE`; otherwise use `compact`. Report only material phases, blockers,
 or long-running progress; omit raw traces and payloads unless debugging was requested.
 
-Use `AGORA_CONTEXT`; if absent, start with `agora next --actor "$AGORA_ACTOR" --limit 1` and expand
-only as needed. Derive actions from durable Method Pack state. Batch safe actions until human
-attention, missing authority, failure, no progress, or session bounds. For a new controller run,
-prefer `--until-blocked --max-steps 3`; never launch it recursively. Record at least one governed
-transition, artifact, evidence, approval, block, or delegation. Never choose rework to avoid a
-higher-priority human decision.
+Use `AGORA_CONTEXT`; if absent and work is known, start with
+`agora work inspect --swarm "$AGORA_SWARM" --work "$AGORA_WORK"`. Otherwise use
+`agora next --actor "$AGORA_ACTOR" --limit 1`. On an older CLI, fall back to targeted `show` and
+`readiness` queries. Expand only as needed. Derive actions from durable Method Pack state. Batch safe
+actions until human attention, missing authority, failure, no progress, or session bounds. For a new
+controller run, prefer `--until-blocked --max-steps 3`; never launch it recursively. Record at least
+one governed transition, artifact, evidence, approval, block, or delegation. Never choose rework to
+avoid a higher-priority human decision.
 Treat the timeout and output limits in `AGORA_SESSION` as immutable execution policy. The controller
 records bounded process output in the session `RESULT.md`; place material outcomes in governed work
 artifacts and evidence rather than relying on that process log.

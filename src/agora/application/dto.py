@@ -458,3 +458,54 @@ class WorkControlProjection(SerializableDTO):
     specification_history: SpecificationSummary
     gate_decision_options: GateDecisionOptionsProjection
     schema: str = field(default="agora/application/work-control-projection/v3", init=False)
+
+
+@dataclass(frozen=True)
+class WorkInspectionBlocker(SerializableDTO):
+    code: str
+    category: str
+    message: str
+    references: tuple[str, ...]
+    truncated: bool = False
+    schema: str = field(default="agora/application/work-inspection-blocker/v1", init=False)
+
+
+@dataclass(frozen=True)
+class WorkInspectionTransition(SerializableDTO):
+    target_state: str
+    gate_id: str | None
+    authorized_roles: tuple[str, ...]
+    assigned_actors: Mapping[str, str]
+    required_approval_roles: tuple[str, ...]
+    required_approval_actors: Mapping[str, str]
+    available: bool
+    blockers: tuple[WorkInspectionBlocker, ...]
+    blocker_count: int
+    blockers_truncated: bool
+    schema: str = field(default="agora/application/work-inspection-transition/v1", init=False)
+
+
+@dataclass(frozen=True)
+class WorkInspection(SerializableDTO):
+    snapshot_token: str
+    swarm_id: str
+    work_id: str
+    title: str
+    revision: int
+    method: str
+    state: str
+    operational_status: str
+    status_reason: str | None
+    status_reason_truncated: bool
+    terminal: bool
+    has_budget_limits: bool
+    criteria: Mapping[str, int]
+    materials: Mapping[str, int]
+    required_artifacts: tuple[str, ...]
+    missing_artifacts: tuple[str, ...]
+    artifacts_truncated: bool
+    transitions: tuple[WorkInspectionTransition, ...]
+    transition_count: int
+    transitions_truncated: bool
+    reason: str | None
+    schema: str = field(default="agora/application/work-inspection/v1", init=False)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeVar
 
@@ -30,6 +30,9 @@ from agora.application.dto import (
     TraceabilitySummary,
     TransitionSummary,
     WorkControlProjection,
+    WorkInspection,
+    WorkInspectionBlocker,
+    WorkInspectionTransition,
     WorkItemDetail,
     WorkItemSummary,
 )
@@ -65,6 +68,13 @@ from agora.model import (
 from agora.workspace import AgoraWorkspace
 
 ReadResult = TypeVar("ReadResult")
+
+_INSPECTION_TRANSITION_LIMIT = 8
+_INSPECTION_BLOCKER_LIMIT = 8
+_INSPECTION_ROLE_LIMIT = 8
+_INSPECTION_ARTIFACT_LIMIT = 12
+_INSPECTION_REFERENCE_LIMIT = 4
+_INSPECTION_TEXT_LIMIT = 240
 
 
 class AgoraReadService:
@@ -511,6 +521,139 @@ class AgoraReadService:
                 )
 
         return self._read(f"work control projection {swarm_id}/{work_id}", read)
+
+    def work_inspection(self, swarm_id: str, work_id: str) -> WorkInspection:
+        """Return bounded decision context without assembling audit-heavy control material."""
+
+        self._require_work_slugs(swarm_id, work_id)
+
+        def assemble(snapshot_token: str) -> WorkInspection:
+            work = self.get_work_item(swarm_id, work_id)
+            work_record = self._workspace.show_work(swarm_id, work_id)
+            lifecycle = self.lifecycle(swarm_id, work_id)
+            swarm = self.get_swarm(swarm_id)
+            if work.state != work_record.state or work.state != lifecycle.current_state:
+                raise InvalidDurableStateError(
+                    "Work changed while its compact inspection was being read"
+                )
+            current = tuple(
+                transition
+                for transition in lifecycle.transitions
+                if transition.source == lifecycle.current_state
+            )
+            visible = current[:_INSPECTION_TRANSITION_LIMIT]
+            required_artifacts = tuple(work.required_artifacts)
+            missing_artifacts = tuple(
+                kind for kind in required_artifacts if kind not in work.artifact_kinds
+            )
+            status_reason, status_reason_truncated = self._bounded_inspection_text(
+                work.status_reason
+            )
+            terminal = work.state == lifecycle.terminal_state
+            reason = None
+            if terminal:
+                reason = "Work is in a terminal state"
+            elif work.operational_status != "active":
+                reason = f"Work operational status is {work.operational_status}"
+            elif not current:
+                reason = "No outgoing transition exists for the current state"
+            elif not any(transition.available for transition in current):
+                reason = "All outgoing transitions are blocked"
+            return WorkInspection(
+                snapshot_token=snapshot_token,
+                swarm_id=swarm_id,
+                work_id=work_id,
+                title=work.title,
+                revision=work_record.revision,
+                method=lifecycle.method,
+                state=work.state,
+                operational_status=work.operational_status,
+                status_reason=status_reason,
+                status_reason_truncated=status_reason_truncated,
+                terminal=terminal,
+                has_budget_limits=work.budget_limits is not None,
+                criteria={
+                    "total": len(work.acceptance_criteria),
+                    "satisfied": len(work.satisfied_criteria),
+                },
+                materials={
+                    "artifacts": len(work.artifacts),
+                    "evidence": len(work.evidence),
+                    "successful_evidence": sum(
+                        evidence.result == "success" for evidence in work.evidence
+                    ),
+                    "approvals": len(work.approvals),
+                },
+                required_artifacts=required_artifacts[:_INSPECTION_ARTIFACT_LIMIT],
+                missing_artifacts=missing_artifacts[:_INSPECTION_ARTIFACT_LIMIT],
+                artifacts_truncated=(
+                    len(required_artifacts) > _INSPECTION_ARTIFACT_LIMIT
+                    or len(missing_artifacts) > _INSPECTION_ARTIFACT_LIMIT
+                ),
+                transitions=tuple(
+                    self._work_inspection_transition(transition, swarm.assignments)
+                    for transition in visible
+                ),
+                transition_count=len(current),
+                transitions_truncated=len(current) > len(visible),
+                reason=reason,
+            )
+
+        def read() -> WorkInspection:
+            with self._workspace.consistent_read("work-inspection"):
+                for _ in range(3):
+                    before = self._workspace.work_inspection_read_set_sha256(swarm_id, work_id)
+                    inspection = assemble(before)
+                    after = self._workspace.work_inspection_read_set_sha256(swarm_id, work_id)
+                    if before == after:
+                        return inspection
+                raise ConcurrentDurableEditError(
+                    "Durable work inspection material changed during three read attempts",
+                    details={"stale_reason": "external-edit"},
+                )
+
+        return self._read(f"work inspection {swarm_id}/{work_id}", read)
+
+    def _work_inspection_transition(
+        self,
+        transition: TransitionSummary,
+        assignments: Mapping[str, str],
+    ) -> WorkInspectionTransition:
+        roles = transition.authorized_roles[:_INSPECTION_ROLE_LIMIT]
+        approval_roles = transition.required_approval_roles[:_INSPECTION_ROLE_LIMIT]
+        blockers = transition.blockers[:_INSPECTION_BLOCKER_LIMIT]
+        return WorkInspectionTransition(
+            target_state=transition.target,
+            gate_id=transition.gate_id,
+            authorized_roles=roles,
+            assigned_actors={role: assignments[role] for role in roles if role in assignments},
+            required_approval_roles=approval_roles,
+            required_approval_actors={
+                role: assignments[role] for role in approval_roles if role in assignments
+            },
+            available=bool(transition.available),
+            blockers=tuple(self._work_inspection_blocker(blocker) for blocker in blockers),
+            blocker_count=len(transition.blockers),
+            blockers_truncated=len(transition.blockers) > len(blockers),
+        )
+
+    @classmethod
+    def _work_inspection_blocker(cls, blocker: GateBlockerSummary) -> WorkInspectionBlocker:
+        message, message_truncated = cls._bounded_inspection_text(blocker.message)
+        references = blocker.references[:_INSPECTION_REFERENCE_LIMIT]
+        return WorkInspectionBlocker(
+            code=blocker.code,
+            category=blocker.category,
+            message=message or "",
+            references=references,
+            truncated=(message_truncated or len(blocker.references) > _INSPECTION_REFERENCE_LIMIT),
+        )
+
+    @staticmethod
+    def _bounded_inspection_text(value: str | None) -> tuple[str | None, bool]:
+        if value is None or len(value) <= _INSPECTION_TEXT_LIMIT:
+            return value, False
+        return value[: _INSPECTION_TEXT_LIMIT - 1] + "…", True
 
     def _work_materials(
         self, swarm_id: str, work_id: str
