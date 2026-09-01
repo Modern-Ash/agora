@@ -15803,6 +15803,41 @@ class AgoraWorkspace:
                 paths.append(root / artifact.uri.removeprefix("repo://"))
         return durable_read_set_sha256(root, paths, include_git_state=True)
 
+    def work_inspection_read_set_sha256(self, swarm_id: str, work_id: str) -> str:
+        """Fingerprint only durable inputs consumed by compact work inspection."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        work_root = Path(work.path)
+        paths = [
+            root / ".agora" / "project.md",
+            Path(swarm.path) / "SWARM.md",
+            root / ".agora" / "methods" / swarm.method,
+            work_root / "WORK.md",
+            work_root / "artifacts.md",
+            work_root / "evidence.md",
+            work_root / "approvals.md",
+            work_root / "clarifications.md",
+            work_root / "waivers",
+            work_root / "approval-delegations",
+        ]
+        for sibling in sorted((Path(swarm.path) / "work").glob("*")):
+            if not sibling.is_dir():
+                continue
+            paths.extend(
+                (
+                    sibling / "WORK.md",
+                    sibling / "artifacts.md",
+                    sibling / "evidence.md",
+                    sibling / "approvals.md",
+                )
+            )
+        for artifact in self._work_artifact_records(work):
+            if artifact.uri.startswith("repo://"):
+                paths.append(root / artifact.uri.removeprefix("repo://"))
+        return durable_read_set_sha256(root, paths, include_git_state=True)
+
     def _mutation_resources(
         self,
         scope: str,

@@ -2888,6 +2888,17 @@ def _build_parser() -> argparse.ArgumentParser:
     work_show.add_argument("--swarm", required=True)
     work_show.add_argument("--work", required=True)
 
+    work_inspect = work.add_parser(
+        "inspect", help="Read consistent work state, authority, gates, and blockers"
+    )
+    work_inspect.add_argument("--swarm", required=True)
+    work_inspect.add_argument("--work", required=True)
+    work_inspect.add_argument(
+        "--full",
+        action="store_true",
+        help="Return the full audit projection instead of bounded decision context",
+    )
+
     work_readiness = work.add_parser(
         "readiness",
         help=(
@@ -4372,6 +4383,10 @@ def _dispatch(
         return workspace.list_work_status_changes(args.swarm, args.work)
     if args.command == "work" and args.work_command == "show":
         return reads.get_work_item(args.swarm, args.work)
+    if args.command == "work" and args.work_command == "inspect":
+        if args.full:
+            return reads.work_control_projection(args.swarm, args.work)
+        return reads.work_inspection(args.swarm, args.work)
     if args.command == "work" and args.work_command == "readiness":
         return workspace.next_gate_readiness(args.swarm, args.work)
     if args.command == "work" and args.work_command == "list":
@@ -4799,6 +4814,9 @@ def _parse_artifact_promotions(values: list[str]) -> dict[str, str]:
 
 def _print_json(output: TextIO, value: Any) -> None:
     def normalize(item: Any) -> Any:
+        to_dict = getattr(item, "to_dict", None)
+        if callable(to_dict):
+            return normalize(to_dict())
         if is_dataclass(item) and not isinstance(item, type):
             return {key: normalize(child) for key, child in asdict(item).items()}
         if isinstance(item, dict):

@@ -335,6 +335,7 @@ def test_every_read_contract_is_json_serializable_immutable_and_rejects_path_val
         service.specification_revision("delivery", "read-boundary", "invalid"),
         service.gate_decision_options("delivery", "read-boundary"),
         service.work_control_projection("delivery", "read-boundary"),
+        service.work_inspection("delivery", "read-boundary"),
     )
 
     for value in values:
@@ -586,6 +587,136 @@ def test_work_control_projection_is_consistent_and_reuses_core_contracts(
     assert projection.evidence == projection.work.evidence
     assert projection.approvals == projection.work.approvals
     assert projection.gate_decision_options.current_state == projection.work.state
+
+
+def test_work_inspection_is_bounded_and_keeps_decision_critical_context(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    _, _, service = read_project
+
+    inspection = service.work_inspection("delivery", "read-boundary")
+    payload = inspection.to_dict()
+
+    assert inspection.schema == "agora/application/work-inspection/v1"
+    assert re.fullmatch(r"[0-9a-f]{64}", inspection.snapshot_token)
+    assert inspection.state == "specified"
+    assert inspection.revision == 1
+    assert inspection.operational_status == "active"
+    assert inspection.criteria == {"total": 1, "satisfied": 0}
+    assert inspection.materials == {
+        "artifacts": 1,
+        "evidence": 1,
+        "successful_evidence": 1,
+        "approvals": 1,
+    }
+    assert inspection.missing_artifacts == ()
+    assert inspection.transition_count == 1
+    assert inspection.transitions_truncated is False
+    transition = inspection.transitions[0]
+    assert transition.target_state == "planned"
+    assert transition.assigned_actors == {"developer": "project:developer"}
+    assert transition.available is True
+    assert len(json.dumps(payload)) < 4_096
+    serialized = inspection.to_json()
+    assert "Read boundary accepted" not in serialized
+    assert "repo://reports/read-service.txt" not in serialized
+
+
+def test_work_inspection_snapshot_changes_only_with_relevant_decision_context(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, workspace, service = read_project
+    initial = service.work_inspection("delivery", "read-boundary")
+
+    activity = root / ".agora" / "activity.md"
+    activity.write_text(activity.read_text(encoding="utf-8") + "\nUnrelated read history.\n")
+    unrelated = service.work_inspection("delivery", "read-boundary")
+    assert unrelated.snapshot_token == initial.snapshot_token
+
+    workspace.add_evidence(
+        AddEvidenceInput(
+            swarm_id="delivery",
+            work_id="read-boundary",
+            actor_id="developer",
+            type="second-test",
+            result="success",
+            artifact_refs=["repo://reports/read-service.txt"],
+        )
+    )
+    changed = service.work_inspection("delivery", "read-boundary")
+    assert changed.snapshot_token != initial.snapshot_token
+    assert changed.materials["evidence"] == 2
+
+
+def test_work_inspection_cli_exposes_full_and_brief_views(
+    read_project: tuple[Path, AgoraWorkspace, AgoraReadService],
+) -> None:
+    root, _, _ = read_project
+    errors = io.StringIO()
+    brief_output = io.StringIO()
+
+    assert (
+        main(
+            [
+                "work",
+                "inspect",
+                "--swarm",
+                "delivery",
+                "--work",
+                "read-boundary",
+            ],
+            cwd=root,
+            stdout=brief_output,
+            stderr=errors,
+        )
+        == 0
+    )
+    brief = json.loads(brief_output.getvalue())
+    assert errors.getvalue() == ""
+    assert brief["schema"] == "agora/application/work-inspection/v1"
+    assert len(brief_output.getvalue().encode()) < 4_096
+
+    full_output = io.StringIO()
+    assert (
+        main(
+            [
+                "work",
+                "inspect",
+                "--swarm",
+                "delivery",
+                "--work",
+                "read-boundary",
+                "--full",
+            ],
+            cwd=root,
+            stdout=full_output,
+            stderr=errors,
+        )
+        == 0
+    )
+    full = json.loads(full_output.getvalue())
+    assert full["schema"] == "agora/application/work-control-projection/v3"
+    assert len(brief_output.getvalue()) < len(full_output.getvalue())
+
+    narrated = io.StringIO()
+    assert (
+        main(
+            [
+                "--narrate",
+                "work",
+                "inspect",
+                "--swarm",
+                "delivery",
+                "--work",
+                "read-boundary",
+            ],
+            cwd=root,
+            stdout=narrated,
+            stderr=errors,
+        )
+        == 0
+    )
+    assert "Work inspection · delivery/read-boundary" in narrated.getvalue()
 
 
 def test_work_control_projection_serializes_an_interleaved_core_mutation(
@@ -1077,6 +1208,7 @@ def test_core_0_8_fixture_is_confirmable_coherent_and_portable() -> None:
     assert "evidence-content-sha256=" in activity_summary
     assert fixture["gate_decision_projection"]["schema"].endswith("gate-decision-projection/v3")
     assert fixture["work_control_projection_schema"].endswith("work-control-projection/v3")
+    assert fixture["work_inspection_schema"].endswith("work-inspection/v1")
     assert fixture["operational_error"]["schema"].endswith("error/v2")
     assert fixture["budget"]["projection_schema"].endswith("budget-amendment-projection/v1")
     serialized = json.dumps(fixture, sort_keys=True)

@@ -488,6 +488,12 @@ a supported framework migration only when their paths are absent. It preserves e
 content; if portable commands are customized, review and update their adapter files as part of the
 same change.
 
+Consequently, updating the Agora package does not refresh command text in an existing project. To
+adopt revised bundled instructions, compare the new `packs/commands` files with the project's
+`.agora/commands`, replace only the reviewed commands, copy each accepted command verbatim to its
+Codex or Claude adapter, then run `agora validate` and review the Git diff. Keep local amendments or
+merge them deliberately; do not use `agora init --force` merely to refresh skills.
+
 Prepare an execution session after an actor is assigned to a ready or running swarm:
 
 ```bash

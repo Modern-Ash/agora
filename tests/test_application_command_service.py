@@ -224,6 +224,7 @@ def _core_0_8_golden_contract(
     )
     reads = AgoraReadService(workspace)
     options_projection = reads.gate_decision_options("delivery", "release")
+    work_inspection = reads.work_inspection("delivery", "release")
     option = next(
         item
         for item in options_projection.options
@@ -263,6 +264,7 @@ def _core_0_8_golden_contract(
         "gate_options_projection_schema": options_projection.schema,
         "gate_decision_projection": projection.to_dict(),
         "work_control_projection_schema": "agora/application/work-control-projection/v3",
+        "work_inspection_schema": work_inspection.schema,
         "durable_activity": projection.activity.to_dict(),
         "operational_error": PreparationExpiredError(
             "The prepared gate decision expired"

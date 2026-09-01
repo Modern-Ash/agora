@@ -117,9 +117,12 @@ and Studio API. Moving a handler must not move its invariant into either interfa
 Core 0.8 extends the local read boundary for project overview, actors, swarms, work, sessions,
 Method Pack topology, calculated transition availability, gates and blockers, materials, Activity,
 traceability, bounded specification history and revision detail, exact gate decision options, and a
-consistent aggregate work control projection. Workspace exposes stable typed reads for durable
-materials and lifecycle assessment; `AgoraReadService` no longer reaches into private Workspace
-parsers. See [Application Services contracts](reference/application-services.md).
+consistent aggregate work control projection. It also exposes a bounded work inspection for the
+common agent loop: the inspection retains decision-critical state, blockers, assignments, material
+counts, missing artifacts, and transition options while using a narrower consistency fingerprint.
+Workspace exposes stable typed reads for durable materials and lifecycle assessment;
+`AgoraReadService` no longer reaches into private Workspace parsers. See
+[Application Services contracts](reference/application-services.md).
 
 `AgoraCommandService` exposes the first governed mutation contract as
 `agora/application/approve-gate-command/v4`. The command and its preparation contract bind the
@@ -146,6 +149,11 @@ filesystem isolation; an external writer can still race during the commit window
 Agora CLI maps arguments, standard input and output, terminal-oriented errors, and process exit
 codes to versioned Core requests and results. Agents and automation may continue to use it without
 making CLI syntax a dependency of Studio or a source of domain policy.
+
+`agora work inspect --swarm <swarm> --work <work>` renders the bounded inspection used for the normal
+agent iteration. `--full` returns the full work control projection for diagnostics and deep review.
+Both are read-only Core contracts; skills do not reconstruct domain policy from Markdown or CLI
+output.
 
 The CLI also exposes an observation adapter for
 `agora/application/engine-trace-event/v1`. `--trace compact`, `detailed`, and `jsonl` write ordered,

@@ -420,5 +420,6 @@
     "transition_target": "completed",
     "work_id": "release"
   },
-  "work_control_projection_schema": "agora/application/work-control-projection/v3"
+  "work_control_projection_schema": "agora/application/work-control-projection/v3",
+  "work_inspection_schema": "agora/application/work-inspection/v1"
 }

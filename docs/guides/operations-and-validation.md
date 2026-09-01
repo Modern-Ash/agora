@@ -74,6 +74,7 @@ agora swarm handoffs --swarm delivery
 agora work list
 agora work list --swarm delivery --state reviewing
 agora work list --swarm delivery --operational-status blocked
+agora work inspect --swarm delivery --work payment-api
 agora work status-changes --swarm delivery --work payment-api
 agora work traceability --swarm delivery --work payment-api
 agora delegation list --status accepted
@@ -86,6 +87,12 @@ agora tracker events
 
 Filters match persisted values exactly. An empty machine result is an empty JSON array, not an
 error; the terminal view instead reports that no items were found.
+
+`work inspect` is the default read for one agent iteration. It returns a bounded, consistent
+decision summary: current state, available transitions and blockers, role assignments, criteria and
+material counts, required and missing artifacts, and a snapshot token. Use `work inspect --full` or
+a targeted query only when that summary indicates more context is necessary. The compact projection
+is an optimization of reads and output, not a weaker lifecycle or authorization check.
 
 `work traceability` is a non-mutating derived view. It maps criteria and stages to generated Gherkin,
 directly linked evidence, and shared artifacts, then compares recorded provenance hashes with the
