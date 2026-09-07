@@ -852,7 +852,7 @@ def test_queries_status_and_returns_a_failure_code_for_invalid_state(
     assert main(["method", "list"], cwd=root, stdout=output, stderr=errors) == 0
     assert main(["validate"], cwd=root, stdout=output, stderr=errors) == 0
     assert '"project": "project"' in output.getvalue()
-    assert '"methods": 3' in output.getvalue()
+    assert '"methods": 4' in output.getvalue()
     assert '"ok": true' in output.getvalue()
 
     constitution = root / ".agora" / "constitution.md"

@@ -20,7 +20,7 @@ from agora.model import (
 )
 from agora.workspace import AgoraWorkspace
 
-BUNDLED_METHODS = ("spec-driven", "scrum", "kanban")
+BUNDLED_METHODS = ("spec-driven", "scrum", "kanban", "ai-dlc")
 ACTOR_KINDS = ("human", "ai-agent", "swarm")
 
 

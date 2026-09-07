@@ -622,6 +622,7 @@ def test_pack_lock_tracks_managed_mutations_and_cli_refreshes_manual_changes(
     lock_path = workspace.project_root() / ".agora" / "PACKS.lock.md"
     initial = read_pack_lock(lock_path)
     assert [(item.kind, item.id) for item in initial.packs] == [
+        ("method", "ai-dlc"),
         ("method", "kanban"),
         ("method", "scrum"),
         ("method", "spec-driven"),

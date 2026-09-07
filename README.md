@@ -274,9 +274,11 @@ The active Method Pack defines the lifecycle, not the CLI core.
 | `spec-driven` | Feature work that needs explicit intent before implementation | Clarification, specification, planning, implementation, validation |
 | `scrum` | Time-boxed delivery with accountable product and facilitation roles | Backlog, sprint flow, review, acceptance, increment evidence |
 | `kanban` | Continuous pull-based delivery | Queue policy, WIP limits, review, service acceptance |
+| `ai-dlc` | Teams adopting AWS's AI-Driven Development Life Cycle | Phase gates for initiation, ideation, inception, construction, and operation, with rework edges |
 
 Teams can author and install a custom Method Pack for another process without changing Agora's
-kernel. Start with the [Method Pack reference](docs/reference/method-packs.md) and the
+kernel. Start with the [Method Pack reference](docs/reference/method-packs.md), the
+[AI-DLC guide](docs/guides/ai-dlc.md), and the
 [custom lifecycle sample](samples/custom-lifecycle/README.md).
 
 For continuous agent operation, Agora also stores reviewed intent, evaluation outcomes, structured
