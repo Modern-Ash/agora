@@ -21,6 +21,11 @@ def _repository(tmp_path: Path) -> Path:
     _git(root, "init", "--initial-branch", "main")
     _git(root, "config", "user.name", "Agora Test")
     _git(root, "config", "user.email", "agora@example.test")
+    # Keep git's own background housekeeping (gc / commit-graph / maintenance)
+    # from writing into .git while the mutation-free assertions inspect the tree.
+    _git(root, "config", "gc.auto", "0")
+    _git(root, "config", "maintenance.auto", "false")
+    _git(root, "config", "fetch.writeCommitGraph", "false")
     (root / "README.md").write_text("# Existing project\n", encoding="utf-8")
     _git(root, "add", "README.md")
     _git(root, "commit", "-m", "chore: initialize fixture")
