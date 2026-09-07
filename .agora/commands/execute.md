@@ -5,9 +5,12 @@ description: "Execute a permitted transition step for an assigned Agora role"
 
 # Execute governed work
 
-In at most two sentences, state the governed outcome and the actor, authority, gate, evidence,
-budget, and verification you will check. Continue requested in-scope work; pause for a material
-choice, human-only approval, or unapproved external, destructive, or costly action.
+If it is not already obvious from the request, state in one line the governed outcome and the
+actor, authority, gate, evidence, and budget you will check. Then proceed with in-scope work
+without narrating each step. Pause and ask one concrete question — a line of context, the choice,
+and a recommended default — before a material choice, human-only approval, gate transition, or
+unapproved external, destructive, or costly action. End the turn once the step is done or the next
+decision is the human's; do not add unrelated checks or restate the result.
 
 Use `AGORA_CONTEXT`. If absent, use compact
 `agora work inspect --swarm "$AGORA_SWARM" --work "$AGORA_WORK"`, or

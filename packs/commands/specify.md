@@ -5,9 +5,11 @@ description: "Specify governed work and its artifact and evidence requirements"
 
 # Specify work
 
-In at most two sentences, tell the user what you will specify and which ambiguity, authority, gate,
-artifact, and evidence checks you will confirm. Continue without reconfirming requested in-scope
-work; pause only when a material decision belongs to the user or an authorized role.
+If it is not obvious from the request, state in one line what you will specify and the ambiguity,
+authority, gate, artifact, and evidence checks you will confirm. Do not reconfirm in-scope work or
+narrate each step. Pause and ask one concrete question — context, choice, recommended default —
+only when a material decision belongs to the user or an authorized role. End the turn once the
+specification is registered or the next decision is the human's.
 
 Prefer `AGORA_CONTEXT`. For existing work, start with
 `agora work inspect --swarm <swarm> --work <work>`; on an older CLI, fall back to targeted

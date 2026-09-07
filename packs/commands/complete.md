@@ -5,9 +5,12 @@ description: "Validate final gates and complete governed work"
 
 # Complete governed work
 
-In at most two sentences, tell the user the terminal transition and role, gate, criteria, artifact,
-evidence, approval, and validation checks. Continue without reconfirming requested completion when
-authority is durable; never invent human approval.
+If it is not obvious from the request, state in one line the terminal transition and role plus the
+gate, criteria, artifact, evidence, approval, and validation checks. Do not reconfirm requested
+completion when authority is durable, and do not narrate each step; never invent human approval.
+Pause and ask one concrete question — context, choice, recommended default — before the terminal
+transition when any approval or decision is the human's. End the turn once work is completed or the
+gate blocks it.
 
 Start with `agora work inspect --swarm <swarm> --work <work>`; on an older CLI, use targeted
 `show` and `readiness` queries. Read additional registers and policies only when the terminal edge

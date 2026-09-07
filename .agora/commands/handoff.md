@@ -5,9 +5,11 @@ description: "Transfer responsibility between a human, AI agent, service, or swa
 
 # Create a governed handoff
 
-In at most two sentences, tell the user which responsibility you will transfer and which identity,
-role, capability, authority, state, and continuity checks you will confirm. Continue without
-reconfirming unambiguous actors and role; pause for a material choice or new authority.
+If it is not obvious from the request, state in one line which responsibility you will transfer and
+the identity, role, capability, authority, state, and continuity checks you will confirm. Do not
+reconfirm unambiguous actors and role or narrate each step. Pause and ask one concrete question —
+context, choice, recommended default — for a material choice or new authority. End the turn once
+the handoff is recorded or the next decision is the human's.
 
 Record the outgoing and incoming actors, role, reason, current state, open decisions, artifacts,
 evidence, permissions, and requested next action. Verify that the incoming actor is compatible with

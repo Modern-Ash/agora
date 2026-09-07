@@ -5,8 +5,10 @@ description: "Inspect and validate durable Agora project state"
 
 # Inspect Agora state
 
-Tell the user in one sentence what state and durable source you will inspect. This is read-only; do
-not ask for confirmation.
+If it is not obvious from the request, name in one line what state and durable source you will
+inspect. This is read-only; do not ask for confirmation, and do not narrate each query. Report
+state, blockers, next action, and durable source, then end the turn — do not follow with unrelated
+queries or restate the report.
 
 Use the narrowest query. For named work, start with
 `agora work inspect --swarm <swarm> --work <work>`; on an older CLI, use targeted `show` and

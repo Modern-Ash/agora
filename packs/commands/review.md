@@ -5,9 +5,11 @@ description: "Review work against its protocol, criteria, artifacts, and evidenc
 
 # Review governed work
 
-In at most two sentences, tell the user what you will review and which criteria, authority, artifact,
-evidence, gate, and verification checks you will confirm. Use targeted context; run project-wide
-validation only for cross-record findings.
+If it is not obvious from the request, state in one line what you will review and the criteria,
+authority, artifact, evidence, gate, and verification checks you will confirm. Use targeted context;
+run project-wide validation only for cross-record findings. Pause and ask one concrete question —
+context, choice, recommended default — before any decision that is the user's or an authorized
+role's. End the turn once findings are recorded; do not add unrelated checks or restate them.
 
 Start with `agora work inspect --swarm <swarm> --work <work>`; use `work inspect --full` or
 targeted domain queries only for details required by the review. On an older CLI, fall back to
