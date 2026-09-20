@@ -3,4 +3,4 @@
 from agora.workspace import AgoraWorkspace
 
 __all__ = ["AgoraWorkspace"]
-__version__ = "0.8.2"
+__version__ = "0.9.0"
