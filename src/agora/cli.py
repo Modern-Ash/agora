@@ -22,6 +22,7 @@ from agora.application.dto import (
     ActivityEntry,
     ActorSummary,
     ProjectOverview,
+    SessionProvenanceSummary,
     SessionSummary,
     SwarmSummary,
     TraceabilitySummary,
@@ -452,6 +453,7 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "preparation_action_id": value.preparation_action_id,
             "executor": value.executor,
             "retry_of": value.retry_of,
+            "provenance": _session_provenance_record_view(value.provenance),
         }
     if isinstance(value, TraceabilitySummary):
         payload = value.to_dict()
@@ -477,6 +479,15 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             ],
         }
     return value
+
+
+def _session_provenance_record_view(value: SessionProvenanceSummary) -> dict[str, object] | None:
+    """Match the persisted record shape; legacy Sessions without provenance render null."""
+    if value.selection_reason is None:
+        return None
+    payload = value.to_dict()
+    payload.pop("schema", None)
+    return payload
 
 
 def _run_input(args: argparse.Namespace) -> RunNextInput:

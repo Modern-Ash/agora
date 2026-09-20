@@ -55,6 +55,17 @@ audit remains in the existing Markdown records and Activity Ledger.
 | `work_control_projection()` | `agora/application/work-control-projection/v3` |
 | `flavor_projection()` | Schema declared by the registered flavor projector |
 
+`SessionSummary` carries a nested `provenance` (`agora/application/session-provenance/v1`) that
+reports how the runtime was selected: `runtime_basis`, `provider_basis` and `model_basis`
+(`declared`, `observed` or `unavailable`), `selection_reason` (`primary`, `runner-override`,
+`fallback-executable-unavailable`, `fallback-rate-limited`, `no-candidate-available`), an optional
+caller-declared `runtime_version`, and whether a configured fallback was used with the original
+integration, provider, model and reason. Sessions persisted before this metadata existed report every
+basis as `unavailable` and are never interpreted as distinct provenance. Values may not contain
+credentials, tokens or endpoint URLs. Core itself only records `declared` bases; usage stays linked
+through `UsageRecord.session_id` and is not duplicated. New Sessions bind provenance into the signed
+session authorization payload; legacy Sessions keep their original payload.
+
 `WorkItemDetail v2` explicitly nests `ArtifactSummary v2`, `EvidenceSummary v2`, and
 `ApprovalSummary v2`. Core 0.6 removed `WorkItemDetail v1` from its public surface rather than
 publishing two incompatible shapes under the same schema. This is an intentional 0.x minor

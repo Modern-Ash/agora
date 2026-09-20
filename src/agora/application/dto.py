@@ -127,6 +127,23 @@ class SwarmSummary(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class SessionProvenanceSummary(SerializableDTO):
+    """Runtime selection facts; unknown values are explicit ``unavailable``, never omitted."""
+
+    runtime_basis: str
+    provider_basis: str
+    model_basis: str
+    selection_reason: str | None
+    runtime_version: str | None
+    fallback_used: bool
+    fallback_from_integration: str | None
+    fallback_from_provider: str | None
+    fallback_from_model: str | None
+    fallback_reason: str | None
+    schema: str = field(default="agora/application/session-provenance/v1", init=False)
+
+
+@dataclass(frozen=True)
 class SessionSummary(SerializableDTO):
     id: str
     actor: str
@@ -158,6 +175,7 @@ class SessionSummary(SerializableDTO):
     authorization_signature: str | None
     preparation_action_id: str | None
     retry_of: str | None
+    provenance: SessionProvenanceSummary
     schema: str = field(default="agora/application/session-summary/v1", init=False)
 
 
