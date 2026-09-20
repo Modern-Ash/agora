@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:modern-ash:agora-ai-sdlc:studio-projection:v1",
+  "title": "Agora AI-SDLC Studio projection v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "generated_at",
+    "project",
+    "flavor",
+    "profiles",
+    "lifecycle",
+    "clarifications",
+    "provenance",
+    "separation",
+    "metrics",
+    "presentation"
+  ],
+  "properties": {
+    "schema": {"const": "agora-ai-sdlc/studio-projection/v1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "project": {"$ref": "#/$defs/project"},
+    "flavor": {"$ref": "#/$defs/flavor-section"},
+    "profiles": {"$ref": "#/$defs/profiles-section"},
+    "lifecycle": {"$ref": "#/$defs/lifecycle-section"},
+    "clarifications": {"$ref": "#/$defs/clarifications-section"},
+    "provenance": {"$ref": "#/$defs/provenance-section"},
+    "separation": {"$ref": "#/$defs/separation-section"},
+    "metrics": {"$ref": "#/$defs/metrics-section"},
+    "presentation": {"$ref": "#/$defs/presentation"}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 200},
+    "reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"$ref": "#/$defs/identifier"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 500}
+      },
+      "additionalProperties": true
+    },
+    "unavailable": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"const": "unavailable"},
+        "reason": {"$ref": "#/$defs/reason"}
+      },
+      "not": {"required": ["value"]},
+      "additionalProperties": true
+    },
+    "project": {
+      "type": "object",
+      "required": ["selection_id", "id", "swarm_id", "work_id", "snapshot"],
+      "properties": {
+        "selection_id": {"$ref": "#/$defs/identifier"},
+        "id": {"$ref": "#/$defs/identifier"},
+        "swarm_id": {"$ref": "#/$defs/identifier"},
+        "work_id": {"$ref": "#/$defs/identifier"},
+        "snapshot": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": true
+    },
+    "flavor-value": {
+      "type": "object",
+      "required": ["id", "name", "version", "manifest_schema", "supported_core"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "name": {"type": "string", "minLength": 1},
+        "version": {"$ref": "#/$defs/identifier"},
+        "manifest_schema": {"$ref": "#/$defs/identifier"},
+        "supported_core": {"$ref": "#/$defs/identifier"}
+      },
+      "additionalProperties": true
+    },
+    "flavor-section": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable"},
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": {"status": {"const": "available"}, "value": {"$ref": "#/$defs/flavor-value"}},
+          "additionalProperties": true
+        }
+      ]
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "depth", "active"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "depth": {"$ref": "#/$defs/identifier"},
+        "active": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "profiles-section": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable"},
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "available"},
+            "value": {"type": "array", "items": {"$ref": "#/$defs/profile"}, "minItems": 1}
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "state": {
+      "type": "object",
+      "required": ["id", "initial", "terminal"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "initial": {"type": "boolean"},
+        "terminal": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "transition": {
+      "type": "object",
+      "required": ["source", "target", "available", "blockers"],
+      "properties": {
+        "source": {"$ref": "#/$defs/identifier"},
+        "target": {"$ref": "#/$defs/identifier"},
+        "available": {"type": "boolean"},
+        "blockers": {"type": "array", "items": {"$ref": "#/$defs/reason"}}
+      },
+      "additionalProperties": true
+    },
+    "lifecycle-value": {
+      "type": "object",
+      "required": ["source_schema", "method", "current_state", "terminal_state", "states", "transitions"],
+      "properties": {
+        "source_schema": {"$ref": "#/$defs/identifier"},
+        "method": {"$ref": "#/$defs/identifier"},
+        "current_state": {"$ref": "#/$defs/identifier"},
+        "terminal_state": {"$ref": "#/$defs/identifier"},
+        "states": {"type": "array", "items": {"$ref": "#/$defs/state"}, "minItems": 1},
+        "transitions": {"type": "array", "items": {"$ref": "#/$defs/transition"}}
+      },
+      "additionalProperties": true
+    },
+    "lifecycle-section": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable"},
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": {"status": {"const": "available"}, "value": {"$ref": "#/$defs/lifecycle-value"}},
+          "additionalProperties": true
+        }
+      ]
+    },
+    "clarification": {
+      "type": "object",
+      "required": ["id", "status", "question", "requested_by", "created_at"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "status": {"$ref": "#/$defs/identifier"},
+        "question": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "requested_by": {"$ref": "#/$defs/identifier"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "answered_by": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "clarifications-section": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable"},
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "available"},
+            "value": {
+              "type": "object",
+              "required": ["source_schema", "open", "resolved"],
+              "properties": {
+                "source_schema": {"$ref": "#/$defs/identifier"},
+                "open": {"type": "array", "items": {"$ref": "#/$defs/clarification"}},
+                "resolved": {"type": "array", "items": {"$ref": "#/$defs/clarification"}}
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "provenance-field": {
+      "type": "object",
+      "required": ["source", "value"],
+      "properties": {
+        "source": {"enum": ["observed", "declared", "unavailable"]},
+        "value": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "unavailable"}}},
+          "then": {"properties": {"value": {"const": null}}},
+          "else": {"properties": {"value": {"type": "string", "minLength": 1}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "fallback-provenance": {
+      "type": "object",
+      "required": ["source", "used", "from", "reason"],
+      "properties": {
+        "source": {"enum": ["observed", "declared", "unavailable"]},
+        "used": {"type": ["boolean", "null"]},
+        "from": {
+          "type": ["object", "null"],
+          "properties": {
+            "runtime": {"type": "string"},
+            "provider": {"type": "string"},
+            "model": {"type": "string"}
+          },
+          "required": ["runtime", "provider", "model"],
+          "additionalProperties": true
+        },
+        "reason": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "unavailable"}}},
+          "then": {
+            "properties": {
+              "used": {"const": null},
+              "from": {"const": null},
+              "reason": {"const": null}
+            }
+          },
+          "else": {
+            "if": {"properties": {"used": {"const": true}}},
+            "then": {
+              "properties": {
+                "from": {"type": "object"},
+                "reason": {"type": "string", "minLength": 1}
+              }
+            },
+            "else": {
+              "properties": {
+                "used": {"const": false},
+                "from": {"const": null},
+                "reason": {"const": null}
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "execution-provenance": {
+      "type": "object",
+      "required": ["session_id", "actor", "runtime", "runtime_version", "provider", "model", "selection_reason", "fallback"],
+      "properties": {
+        "session_id": {"$ref": "#/$defs/identifier"},
+        "actor": {"$ref": "#/$defs/identifier"},
+        "runtime": {"$ref": "#/$defs/provenance-field"},
+        "runtime_version": {"$ref": "#/$defs/provenance-field"},
+        "provider": {"$ref": "#/$defs/provenance-field"},
+        "model": {"$ref": "#/$defs/provenance-field"},
+        "selection_reason": {"$ref": "#/$defs/provenance-field"},
+        "fallback": {"$ref": "#/$defs/fallback-provenance"}
+      },
+      "additionalProperties": true
+    },
+    "provenance-section": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable"},
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "available"},
+            "value": {
+              "type": "object",
+              "required": ["source_schema", "executions"],
+              "properties": {
+                "source_schema": {"$ref": "#/$defs/identifier"},
+                "executions": {"type": "array", "items": {"$ref": "#/$defs/execution-provenance"}}
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "separation-section": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable"},
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "available"},
+            "value": {
+              "type": "object",
+              "required": ["source_schema", "decision", "required_dimensions", "blockers"],
+              "properties": {
+                "source_schema": {"$ref": "#/$defs/identifier"},
+                "decision": {"$ref": "#/$defs/identifier"},
+                "required_dimensions": {"type": "array", "items": {"$ref": "#/$defs/identifier"}},
+                "blockers": {"type": "array", "items": {"$ref": "#/$defs/reason"}}
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "metric": {
+      "type": "object",
+      "required": ["id", "value", "unit", "source"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "value": {"type": "number"},
+        "unit": {"$ref": "#/$defs/identifier"},
+        "source": {"$ref": "#/$defs/identifier"}
+      },
+      "additionalProperties": true
+    },
+    "metrics-section": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable"},
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": {
+            "status": {"const": "available"},
+            "value": {
+              "type": "object",
+              "required": ["source_schema", "window", "items"],
+              "properties": {
+                "source_schema": {"$ref": "#/$defs/identifier"},
+                "window": {"$ref": "#/$defs/identifier"},
+                "items": {"type": "array", "items": {"$ref": "#/$defs/metric"}}
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "presentation": {
+      "type": "object",
+      "required": ["authoritative", "labels", "section_order"],
+      "properties": {
+        "authoritative": {"const": false},
+        "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+        "section_order": {"type": "array", "items": {"$ref": "#/$defs/identifier"}}
+      },
+      "additionalProperties": true
+    }
+  }
+}

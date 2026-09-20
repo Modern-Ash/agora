@@ -114,7 +114,7 @@ private keys.
 As Core is modularized, application services remain the shared compatibility surface for Agora CLI
 and Studio API. Moving a handler must not move its invariant into either interface.
 
-Core 0.8 extends the local read boundary for project overview, actors, swarms, work, sessions,
+Core extends the local read boundary for project overview, actors, swarms, work, sessions,
 Method Pack topology, calculated transition availability, gates and blockers, materials, Activity,
 traceability, bounded specification history and revision detail, exact gate decision options, and a
 consistent aggregate work control projection. It also exposes a bounded work inspection for the
@@ -123,6 +123,15 @@ counts, missing artifacts, and transition options while using a narrower consist
 Workspace exposes stable typed reads for durable materials and lifecycle assessment;
 `AgoraReadService` no longer reaches into private Workspace parsers. See
 [Application Services contracts](reference/application-services.md).
+
+Installed flavors may register provider-neutral read projectors with `AgoraReadService`. Core
+supplies frozen application DTOs, reserves project identity, lifecycle, clarifications and snapshot
+authority, and validates the flavor-owned availability envelopes, non-authoritative presentation
+hints and the projector's self-contained JSON Schema. This lets Studio consume one normalized JSON
+aggregate without importing a flavor package,
+parsing flavor Markdown, accepting a browser path, or turning presentation metadata into policy.
+Projectors are pure adapters over the supplied context; provider SDKs, remote calls and hidden
+filesystem reads remain outside this boundary.
 
 `AgoraCommandService` exposes the first governed mutation contract as
 `agora/application/approve-gate-command/v4`. The command and its preparation contract bind the

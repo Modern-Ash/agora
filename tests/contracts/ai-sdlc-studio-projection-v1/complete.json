@@ -1,0 +1,120 @@
+{
+  "schema": "agora-ai-sdlc/studio-projection/v1",
+  "generated_at": "2026-09-20T12:00:00Z",
+  "project": {
+    "selection_id": "selected-01J7W9X4",
+    "id": "payments-api",
+    "swarm_id": "delivery",
+    "work_id": "idempotent-capture",
+    "snapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "flavor": {
+    "status": "available",
+    "value": {
+      "id": "agora-ai-sdlc",
+      "name": "Agora AI-SDLC",
+      "version": "0.1.0",
+      "manifest_schema": "agora/flavor/v1",
+      "supported_core": ">=0.8.2,<0.9"
+    }
+  },
+  "profiles": {
+    "status": "available",
+    "value": [{"id": "regulated", "depth": "regulated", "active": true}]
+  },
+  "lifecycle": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora/application/lifecycle-projection/v3",
+      "method": "ai-sdlc",
+      "current_state": "construction",
+      "terminal_state": "completed",
+      "states": [
+        {"id": "readiness", "initial": true, "terminal": false},
+        {"id": "construction", "initial": false, "terminal": false},
+        {"id": "completed", "initial": false, "terminal": true}
+      ],
+      "transitions": [
+        {
+          "source": "construction",
+          "target": "operations",
+          "available": false,
+          "blockers": [
+            {
+              "code": "gate.approvals-missing",
+              "message": "Required quality review is missing"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "clarifications": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora/application/traceability-summary/v2",
+      "open": [
+        {
+          "id": "capture-timeout",
+          "status": "open",
+          "question": "Which timeout is contractually supported?",
+          "requested_by": "project:architect",
+          "created_at": "2026-09-20T11:30:00Z"
+        }
+      ],
+      "resolved": []
+    }
+  },
+  "provenance": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora-ai-sdlc/provenance/v1",
+      "executions": [
+        {
+          "session_id": "build-session-17",
+          "actor": "project:builder",
+          "runtime": {"source": "observed", "value": "local-runner"},
+          "runtime_version": {"source": "observed", "value": "1.4.0"},
+          "provider": {"source": "observed", "value": "internal-gateway"},
+          "model": {"source": "observed", "value": "approved-model"},
+          "selection_reason": {"source": "observed", "value": "regulated-route"},
+          "fallback": {"source": "observed", "used": false, "from": null, "reason": null}
+        }
+      ]
+    }
+  },
+  "separation": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora-ai-sdlc/independent-review/v1",
+      "decision": "blocked",
+      "required_dimensions": ["actor", "provider"],
+      "blockers": [
+        {
+          "code": "review.missing",
+          "message": "Independent review is not recorded for the current revision"
+        }
+      ]
+    }
+  },
+  "metrics": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora-ai-sdlc/operational-metrics/v1",
+      "window": "2026-09-20T11:00:00Z/2026-09-20T12:00:00Z",
+      "items": [
+        {"id": "deployment-frequency", "value": 3, "unit": "count", "source": "core:evidence"},
+        {"id": "change-failure-rate", "value": 0.1, "unit": "ratio", "source": "core:evidence"}
+      ]
+    }
+  },
+  "presentation": {
+    "authoritative": false,
+    "labels": {
+      "construction": "Construction",
+      "operations": "Operations",
+      "review.missing": "Independent review required"
+    },
+    "section_order": ["lifecycle", "clarifications", "separation", "provenance", "metrics"]
+  }
+}

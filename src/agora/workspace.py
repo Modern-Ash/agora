@@ -9390,6 +9390,39 @@ class AgoraWorkspace:
             ],
         }
 
+    def work_clarifications(self, swarm_id: str, work_id: str) -> tuple[dict[str, object], ...]:
+        """Return path-free clarification facts with stable derived identities."""
+
+        root = self.project_root()
+        swarm = self._load_swarm(root, swarm_id)
+        work = self._load_work(swarm, work_id)
+        path = Path(work.path) / "clarifications.md"
+        if not path.is_file():
+            return ()
+        records: list[dict[str, object]] = []
+        for index, row in enumerate(self._load_clarification_rows(work), start=1):
+            answer = row["answer"] or None
+            identity = self._canonical_sha256(
+                {
+                    "index": index,
+                    "question": row["question"],
+                    "actor": row["actor"],
+                    "timestamp": row["timestamp"],
+                }
+            )
+            records.append(
+                {
+                    "id": f"clarification-{identity[:16]}",
+                    "status": "resolved" if answer is not None else "open",
+                    "question": row["question"],
+                    "answer": answer,
+                    "requested_by": row["actor"],
+                    "answered_by": None,
+                    "created_at": row["timestamp"],
+                }
+            )
+        return tuple(records)
+
     @staticmethod
     def _gherkin_recorded_sha256(path: Path) -> str | None:
         if not path.is_file():

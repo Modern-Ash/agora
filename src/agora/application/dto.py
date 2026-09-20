@@ -343,6 +343,27 @@ class TraceabilitySummary(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class ClarificationSummary(SerializableDTO):
+    id: str
+    status: str
+    question: str
+    answer: str | None
+    requested_by: str
+    answered_by: str | None
+    created_at: str
+    schema: str = field(default="agora/application/clarification-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
+class ClarificationsProjection(SerializableDTO):
+    swarm_id: str
+    work_id: str
+    open: tuple[ClarificationSummary, ...]
+    resolved: tuple[ClarificationSummary, ...]
+    schema: str = field(default="agora/application/clarifications-projection/v1", init=False)
+
+
+@dataclass(frozen=True)
 class SpecificationRevisionSummary(SerializableDTO):
     id: str
     kind: str

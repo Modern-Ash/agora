@@ -1,0 +1,44 @@
+{
+  "schema": "agora-ai-sdlc/studio-projection/v1",
+  "generated_at": "2026-09-20T12:00:00Z",
+  "project": {
+    "selection_id": "selected-01J7W9X5",
+    "id": "legacy-service",
+    "swarm_id": "delivery",
+    "work_id": "migration",
+    "snapshot": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "flavor": {
+    "status": "unavailable",
+    "reason": {"code": "projection.flavor-unavailable", "message": "No active flavor is projected"}
+  },
+  "profiles": {
+    "status": "unavailable",
+    "reason": {"code": "projection.profiles-unavailable", "message": "No active profile is projected"}
+  },
+  "lifecycle": {
+    "status": "unavailable",
+    "reason": {"code": "projection.lifecycle-unavailable", "message": "Lifecycle projection is unavailable"}
+  },
+  "clarifications": {
+    "status": "unavailable",
+    "reason": {"code": "projection.clarifications-unavailable", "message": "Clarifications are unavailable"}
+  },
+  "provenance": {
+    "status": "unavailable",
+    "reason": {"code": "projection.provenance-unavailable", "message": "Runtime provenance is unavailable"}
+  },
+  "separation": {
+    "status": "unavailable",
+    "reason": {"code": "projection.separation-unavailable", "message": "Review separation is unavailable"}
+  },
+  "metrics": {
+    "status": "unavailable",
+    "reason": {"code": "projection.metrics-unavailable", "message": "No Core-backed metric window is available"}
+  },
+  "presentation": {
+    "authoritative": false,
+    "labels": {},
+    "section_order": ["lifecycle", "clarifications", "separation", "provenance", "metrics"]
+  }
+}
