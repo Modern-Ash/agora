@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping
+import math
+import re
+from collections.abc import Callable, Iterable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
 
 from agora.application.dto import (
     ActivityEntry,
     ActorSummary,
     ApprovalSummary,
     ArtifactSummary,
+    ClarificationsProjection,
+    ClarificationSummary,
     EvidenceSummary,
     GateBlockerSummary,
     GateDecisionOptionsProjection,
@@ -43,6 +51,13 @@ from agora.application.errors import (
     InvalidReadQueryError,
     ProjectNotFoundError,
     ReadResourceNotFoundError,
+)
+from agora.application.extensions import (
+    FlavorProjectContext,
+    FlavorProjection,
+    FlavorProjectionContext,
+    FlavorProjectionContribution,
+    FlavorProjectionProvider,
 )
 from agora.application.queries import (
     ActivityFilters,
@@ -76,17 +91,80 @@ _INSPECTION_ROLE_LIMIT = 8
 _INSPECTION_ARTIFACT_LIMIT = 12
 _INSPECTION_REFERENCE_LIMIT = 4
 _INSPECTION_TEXT_LIMIT = 240
+_FLAVOR_PROJECTION_LIMIT = 1_000_000
+_PROJECTION_SECTION = re.compile(r"[A-Za-z][A-Za-z0-9._-]{0,99}\Z")
+_PROJECTION_SCHEMA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
+_OPAQUE_SELECTION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}\Z")
+_EMBEDDED_LOCATION = re.compile(
+    r"(?:\b(?:https?|file|repo)://[^\s<>\"']+)"
+    r"|(?<![A-Za-z0-9._-])(?:~?/|\.{1,2}/|\\\\|[A-Za-z]:[\\/])\S*",
+    re.IGNORECASE,
+)
+_SECRET_VALUE = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+    r"|\b(?:sk|gh[pousr])_[A-Za-z0-9_-]{8,}"
+    r"|\bgithub_pat_[A-Za-z0-9_]{8,}"
+    r"|\bglpat-[A-Za-z0-9_-]{8,}"
+    r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"
+    r"|bearer\s+\S+",
+    re.IGNORECASE,
+)
+_FORBIDDEN_PROJECTION_KEYS = {
+    "accesskey",
+    "accesstoken",
+    "apikey",
+    "authorization",
+    "credential",
+    "credentials",
+    "cwd",
+    "endpoint",
+    "endpointurl",
+    "filesystempath",
+    "password",
+    "path",
+    "privatekey",
+    "projectpath",
+    "root",
+    "secret",
+    "secrets",
+    "token",
+    "url",
+}
+_RESERVED_PROJECTION_SECTIONS = {
+    "schema",
+    "generated_at",
+    "project",
+    "lifecycle",
+    "clarifications",
+    "presentation",
+}
 
 
 class AgoraReadService:
     """Expose versioned read DTOs without moving or duplicating workspace rules."""
 
-    def __init__(self, workspace: AgoraWorkspace) -> None:
+    def __init__(
+        self,
+        workspace: AgoraWorkspace,
+        *,
+        flavor_projectors: Iterable[FlavorProjectionProvider] = (),
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
         self._workspace = workspace
+        self._now = now or (lambda: datetime.now(UTC))
+        self._flavor_projectors: dict[str, FlavorProjectionProvider] = {}
+        self._flavor_projection_validators: dict[str, Draft202012Validator] = {}
+        for projector in flavor_projectors:
+            self._register_flavor_projector(projector)
 
     @classmethod
-    def from_path(cls, cwd: Path | str) -> AgoraReadService:
-        return cls(AgoraWorkspace(cwd=cwd))
+    def from_path(
+        cls,
+        cwd: Path | str,
+        *,
+        flavor_projectors: Iterable[FlavorProjectionProvider] = (),
+    ) -> AgoraReadService:
+        return cls(AgoraWorkspace(cwd=cwd), flavor_projectors=flavor_projectors)
 
     def project_overview(self) -> ProjectOverview:
         def read() -> ProjectOverview:
@@ -347,6 +425,374 @@ class AgoraReadService:
             )
 
         return self._read(f"traceability {swarm_id}/{work_id}", read)
+
+    def clarifications(self, swarm_id: str, work_id: str) -> ClarificationsProjection:
+        self._require_work_slugs(swarm_id, work_id)
+
+        def read() -> ClarificationsProjection:
+            records = tuple(
+                ClarificationSummary(
+                    id=str(record["id"]),
+                    status=str(record["status"]),
+                    question=str(record["question"]),
+                    answer=(str(record["answer"]) if record["answer"] is not None else None),
+                    requested_by=str(record["requested_by"]),
+                    answered_by=(
+                        str(record["answered_by"]) if record["answered_by"] is not None else None
+                    ),
+                    created_at=str(record["created_at"]),
+                )
+                for record in self._workspace.work_clarifications(swarm_id, work_id)
+            )
+            return ClarificationsProjection(
+                swarm_id=swarm_id,
+                work_id=work_id,
+                open=tuple(item for item in records if item.status == "open"),
+                resolved=tuple(item for item in records if item.status == "resolved"),
+            )
+
+        return self._read(f"clarifications {swarm_id}/{work_id}", read)
+
+    def flavor_projection(
+        self,
+        projection_schema: str,
+        selection_id: str,
+        swarm_id: str,
+        work_id: str,
+    ) -> FlavorProjection:
+        """Compose one coherent Core snapshot with a registered flavor projection."""
+
+        self._require_work_slugs(swarm_id, work_id)
+        if (
+            not isinstance(projection_schema, str)
+            or _PROJECTION_SCHEMA.fullmatch(projection_schema) is None
+            or ".." in projection_schema
+        ):
+            raise InvalidReadQueryError("Projection schema is invalid")
+        if not isinstance(selection_id, str) or _OPAQUE_SELECTION.fullmatch(selection_id) is None:
+            raise InvalidReadQueryError("Selection id must be an opaque identifier")
+        projector = self._flavor_projectors.get(projection_schema)
+        if projector is None:
+            raise ReadResourceNotFoundError(
+                f"No flavor projector is registered for schema {projection_schema}"
+            )
+
+        def assemble() -> FlavorProjection:
+            context = self._flavor_projection_context(swarm_id, work_id)
+            try:
+                contribution = projector.project(context)
+            except Exception as error:
+                raise InvalidDurableStateError("Registered flavor projector failed") from error
+            sections, presentation = self._validate_flavor_contribution(projector, contribution)
+            lifecycle = self._lifecycle_projection_section(context.lifecycle)
+            clarifications = self._clarifications_projection_section(context.clarifications)
+            identity = {
+                "selection_id": selection_id,
+                "id": context.project.id,
+                "swarm_id": swarm_id,
+                "work_id": work_id,
+            }
+            snapshot_material = {
+                "schema": projection_schema,
+                "project": identity,
+                **sections,
+                "lifecycle": lifecycle,
+                "clarifications": clarifications,
+                "presentation": presentation,
+            }
+            snapshot = hashlib.sha256(
+                json.dumps(
+                    snapshot_material,
+                    allow_nan=False,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("ascii")
+            ).hexdigest()
+            projection = FlavorProjection(
+                schema=projection_schema,
+                generated_at=self._timestamp(),
+                project={**identity, "snapshot": snapshot},
+                sections=sections,
+                lifecycle=lifecycle,
+                clarifications=clarifications,
+                presentation=presentation,
+            )
+            payload = projection.to_dict()
+            self._validate_safe_projection(payload)
+            try:
+                self._flavor_projection_validators[projection_schema].validate(payload)
+            except ValidationError as error:
+                raise InvalidDurableStateError(
+                    "Flavor projector output does not match its registered schema"
+                ) from error
+            return projection
+
+        def read() -> FlavorProjection:
+            with self._workspace.consistent_read("flavor-projection"):
+                for _ in range(3):
+                    before = self._workspace.work_control_read_set_sha256(swarm_id, work_id)
+                    projection = assemble()
+                    after = self._workspace.work_control_read_set_sha256(swarm_id, work_id)
+                    if before == after:
+                        return projection
+                raise ConcurrentDurableEditError(
+                    "Durable flavor projection material changed during three read attempts",
+                    details={"stale_reason": "external-edit"},
+                )
+
+        return self._read(f"flavor projection {swarm_id}/{work_id}", read)
+
+    def _register_flavor_projector(self, projector: FlavorProjectionProvider) -> None:
+        projection_schema = getattr(projector, "projection_schema", None)
+        schema_document = getattr(projector, "projection_schema_document", None)
+        required_sections = getattr(projector, "required_sections", None)
+        if (
+            not isinstance(projection_schema, str)
+            or _PROJECTION_SCHEMA.fullmatch(projection_schema) is None
+            or ".." in projection_schema
+        ):
+            raise InvalidReadQueryError("Flavor projector schema is invalid")
+        if not isinstance(required_sections, tuple) or not required_sections:
+            raise InvalidReadQueryError("Flavor projector must declare required sections")
+        if len(set(required_sections)) != len(required_sections):
+            raise InvalidReadQueryError("Flavor projector section names must be unique")
+        for section in required_sections:
+            if not isinstance(section, str) or _PROJECTION_SECTION.fullmatch(section) is None:
+                raise InvalidReadQueryError("Flavor projector section name is invalid")
+            if section in _RESERVED_PROJECTION_SECTIONS:
+                raise InvalidReadQueryError(
+                    f"Flavor projector cannot own reserved section {section}"
+                )
+        if projection_schema in self._flavor_projectors:
+            raise InvalidReadQueryError(
+                f"Flavor projector schema is already registered: {projection_schema}"
+            )
+        if not isinstance(schema_document, Mapping):
+            raise InvalidReadQueryError("Flavor projector must declare a JSON Schema document")
+        try:
+            serialized_schema = json.loads(json.dumps(schema_document, allow_nan=False))
+        except (TypeError, ValueError) as error:
+            raise InvalidReadQueryError(
+                "Flavor projector JSON Schema is not JSON-compatible"
+            ) from error
+        declared_schema = (
+            serialized_schema.get("properties", {}).get("schema", {}).get("const")
+            if isinstance(serialized_schema, dict)
+            else None
+        )
+        if declared_schema != projection_schema:
+            raise InvalidReadQueryError("Flavor projector JSON Schema does not match its schema id")
+        self._reject_remote_schema_references(serialized_schema)
+        try:
+            Draft202012Validator.check_schema(serialized_schema)
+            validator = Draft202012Validator(serialized_schema)
+        except SchemaError as error:
+            raise InvalidReadQueryError("Flavor projector JSON Schema is invalid") from error
+        self._flavor_projectors[projection_schema] = projector
+        self._flavor_projection_validators[projection_schema] = validator
+
+    @classmethod
+    def _reject_remote_schema_references(cls, value: object) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "$ref" and (not isinstance(item, str) or not item.startswith("#")):
+                    raise InvalidReadQueryError("Flavor projector schema references must be local")
+                cls._reject_remote_schema_references(item)
+        elif isinstance(value, list):
+            for item in value:
+                cls._reject_remote_schema_references(item)
+
+    def _flavor_projection_context(self, swarm_id: str, work_id: str) -> FlavorProjectionContext:
+        sessions = tuple(
+            session
+            for session in self.list_sessions()
+            if session.swarm_id == swarm_id and session.work_id == work_id
+        )
+        configuration = self._workspace.show_project()
+        return FlavorProjectionContext(
+            project=FlavorProjectContext(
+                id=configuration.project,
+                version=configuration.version,
+                integration=configuration.integration,
+                default_method=configuration.default_method,
+                created_at=configuration.created_at,
+            ),
+            work=self.get_work_item(swarm_id, work_id),
+            lifecycle=self.lifecycle(swarm_id, work_id),
+            clarifications=self.clarifications(swarm_id, work_id),
+            traceability=self.work_traceability(swarm_id, work_id),
+            sessions=sessions,
+        )
+
+    def _validate_flavor_contribution(
+        self,
+        projector: FlavorProjectionProvider,
+        contribution: object,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        if not isinstance(contribution, FlavorProjectionContribution):
+            raise InvalidDurableStateError("Flavor projector returned an incompatible contribution")
+        serialized = contribution.to_dict()
+        sections = serialized["sections"]
+        presentation = serialized["presentation"]
+        if not isinstance(sections, dict) or not isinstance(presentation, dict):
+            raise InvalidDurableStateError("Flavor projector contribution is malformed")
+        missing = set(projector.required_sections) - set(sections)
+        if missing:
+            raise InvalidDurableStateError("Flavor projector omitted one or more required sections")
+        for name, section in sections.items():
+            if _PROJECTION_SECTION.fullmatch(name) is None:
+                raise InvalidDurableStateError("Flavor projector section name is invalid")
+            if name in _RESERVED_PROJECTION_SECTIONS:
+                raise InvalidDurableStateError(
+                    "Flavor projector attempted to replace a Core-owned section"
+                )
+            self._validate_projection_envelope(section)
+        if presentation.get("authoritative") is not False:
+            raise InvalidDurableStateError(
+                "Flavor projection presentation must be non-authoritative"
+            )
+        self._validate_safe_projection({**sections, "presentation": presentation})
+        return sections, presentation
+
+    @staticmethod
+    def _validate_projection_envelope(section: object) -> None:
+        if not isinstance(section, dict):
+            raise InvalidDurableStateError("Flavor projection section must be an object")
+        status = section.get("status")
+        if status == "available":
+            if "value" not in section or "reason" in section:
+                raise InvalidDurableStateError(
+                    "Available flavor projection section must contain only a value"
+                )
+            return
+        if status == "unavailable":
+            reason = section.get("reason")
+            if "value" in section or not isinstance(reason, dict):
+                raise InvalidDurableStateError(
+                    "Unavailable flavor projection section requires a safe reason"
+                )
+            code = reason.get("code")
+            message = reason.get("message")
+            if (
+                not isinstance(code, str)
+                or _PROJECTION_SECTION.fullmatch(code) is None
+                or not isinstance(message, str)
+                or not 1 <= len(message) <= 500
+            ):
+                raise InvalidDurableStateError("Unavailable flavor projection reason is malformed")
+            return
+        raise InvalidDurableStateError(
+            "Flavor projection section status must be available or unavailable"
+        )
+
+    @classmethod
+    def _validate_safe_projection(cls, payload: object) -> None:
+        def walk(value: object, depth: int = 0) -> None:
+            if depth > 32:
+                raise InvalidDurableStateError("Flavor projection nesting is too deep")
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    normalized = re.sub(r"[^a-z0-9]", "", key.casefold())
+                    if normalized in _FORBIDDEN_PROJECTION_KEYS:
+                        raise InvalidDurableStateError(
+                            "Flavor projection contains a forbidden field"
+                        )
+                    walk(item, depth + 1)
+                return
+            if isinstance(value, list):
+                for item in value:
+                    walk(item, depth + 1)
+                return
+            if isinstance(value, str):
+                candidate = value.strip()
+                folded = candidate.casefold()
+                if (
+                    candidate.startswith(("/", "\\\\", "./", "../", "~/"))
+                    or folded.startswith((".agora/", "file://", "repo://"))
+                    or _EMBEDDED_LOCATION.search(candidate) is not None
+                    or _SECRET_VALUE.search(candidate) is not None
+                ):
+                    raise InvalidDurableStateError("Flavor projection contains a forbidden value")
+                return
+            if value is None or isinstance(value, (bool, int)):
+                return
+            if isinstance(value, float) and math.isfinite(value):
+                return
+            raise InvalidDurableStateError("Flavor projection contains a non-JSON value")
+
+        walk(payload)
+        try:
+            encoded = json.dumps(payload, allow_nan=False, ensure_ascii=True).encode("ascii")
+        except (TypeError, ValueError) as error:
+            raise InvalidDurableStateError("Flavor projection is not valid JSON") from error
+        if len(encoded) > _FLAVOR_PROJECTION_LIMIT:
+            raise InvalidDurableStateError("Flavor projection exceeds the size limit")
+
+    @staticmethod
+    def _lifecycle_projection_section(
+        lifecycle: LifecycleProjection,
+    ) -> dict[str, object]:
+        transitions = []
+        for transition in lifecycle.transitions:
+            if transition.source != lifecycle.current_state:
+                continue
+            transitions.append(
+                {
+                    "source": transition.source,
+                    "target": transition.target,
+                    "available": transition.available is True,
+                    "blockers": [
+                        {"code": blocker.code, "message": blocker.message}
+                        for blocker in transition.blockers
+                    ],
+                }
+            )
+        return {
+            "status": "available",
+            "value": {
+                "source_schema": lifecycle.schema,
+                "method": lifecycle.method,
+                "current_state": lifecycle.current_state,
+                "terminal_state": lifecycle.terminal_state,
+                "states": [
+                    {
+                        "id": state.id,
+                        "initial": state.initial,
+                        "terminal": state.terminal,
+                    }
+                    for state in lifecycle.states
+                ],
+                "transitions": transitions,
+            },
+        }
+
+    @staticmethod
+    def _clarifications_projection_section(
+        clarifications: ClarificationsProjection,
+    ) -> dict[str, object]:
+        def serialize(items: tuple[ClarificationSummary, ...]) -> list[dict[str, object]]:
+            values = []
+            for item in items:
+                value = item.to_dict()
+                value.pop("schema")
+                values.append(value)
+            return values
+
+        return {
+            "status": "available",
+            "value": {
+                "source_schema": clarifications.schema,
+                "open": serialize(clarifications.open),
+                "resolved": serialize(clarifications.resolved),
+            },
+        }
+
+    def _timestamp(self) -> str:
+        value = self._now()
+        if value.tzinfo is None:
+            raise InvalidDurableStateError("Projection clock must return a timezone-aware value")
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
     def specification_history(self, swarm_id: str, work_id: str) -> SpecificationSummary:
         self._require_work_slugs(swarm_id, work_id)

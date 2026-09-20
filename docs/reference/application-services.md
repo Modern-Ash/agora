@@ -1,6 +1,6 @@
 # Application Services contracts
 
-Agora Core 0.8.1 exposes an in-process, provider-neutral boundary in `agora.application`. Agora CLI
+Agora Core exposes an in-process, provider-neutral boundary in `agora.application`. Agora CLI
 and Studio API are adapters over this boundary. Studio must not invoke CLI commands or parse
 `.agora/` records.
 
@@ -47,11 +47,13 @@ audit remains in the existing Markdown records and Activity Ledger.
 | `approvals()` | `agora/application/approval-summary/v2` |
 | `activity()` | `agora/application/activity-entry/v1` |
 | `work_traceability()` | `agora/application/traceability-summary/v2` |
+| `clarifications()` | `agora/application/clarifications-projection/v1` |
 | `specification_history()` | `agora/application/specification-summary/v1` |
 | `specification_revision()` | `agora/application/specification-revision-detail/v1` |
 | `gate_decision_options()` | `agora/application/gate-decision-options-projection/v3` |
 | `work_inspection()` | `agora/application/work-inspection/v1` |
 | `work_control_projection()` | `agora/application/work-control-projection/v3` |
+| `flavor_projection()` | Schema declared by the registered flavor projector |
 
 `WorkItemDetail v2` explicitly nests `ArtifactSummary v2`, `EvidenceSummary v2`, and
 `ApprovalSummary v2`. Core 0.6 removed `WorkItemDetail v1` from its public surface rather than
@@ -123,6 +125,38 @@ Core verifies the read-set twice and returns that envelope before loading work, 
 gate DTOs, so polling avoids both token volume and projection assembly.
 Both compact and full projections use a shared local read lock, so parallel readers coexist while
 remaining mutually exclusive with Core mutations.
+
+`clarifications()` returns normalized open and resolved clarification entries without exposing the
+durable Markdown path. Because the v1 durable table predates explicit clarification ids and answer
+actors, Core derives a stable id from the append-only row identity and reports `answered_by: null`.
+It does not invent answer provenance.
+
+`flavor_projection(projection_schema, selection_id, swarm_id, work_id)` is the generic extension
+boundary for an installed flavor. Projectors are passed to `AgoraReadService(...,
+flavor_projectors=(projector,))`; each declares one top-level schema and its required flavor-owned
+sections plus a self-contained JSON Schema with local references only. A projector receives an
+immutable `FlavorProjectionContext` containing public Core DTOs and a minimal project-local context;
+it does not receive global user state or a project path. Projectors must derive output solely from
+that context. They must not parse `.agora/`, perform network access, or recalculate lifecycle
+authority.
+
+Core owns `project`, `lifecycle`, `clarifications`, `generated_at`, and the SHA-256 snapshot. A
+projector contributes versioned section envelopes and `presentation`; every declared section must
+be explicitly `available` with a value or `unavailable` with a stable code and safe message.
+Unknown additive sections and policy values are preserved. `presentation.authoritative` must be
+false. Core rejects reserved-section replacement, malformed envelopes, non-JSON or oversized
+output, credentials, private keys, secrets, endpoints, URLs, and filesystem-shaped values before
+the DTO reaches a consumer. It also validates the complete aggregate against the projector's
+registered Draft 2020-12 JSON Schema, so a valid generic envelope cannot conceal malformed
+flavor-specific content.
+
+Assembly runs under the same shared project lock and complete work-control read-set fingerprint as
+the control projection. The projector context excludes user-scope state that is outside that lock
+and fingerprint. Core retries a changing durable snapshot three times and then returns
+`durable-state.concurrent-edit`. The opaque selection id is validated independently from the trusted
+workspace path and is the only project handle intended to cross a browser transport.
+Runtime provenance absent from current session contracts remains explicitly unavailable; flavor
+projectors must not infer it.
 
 ## Governed command
 

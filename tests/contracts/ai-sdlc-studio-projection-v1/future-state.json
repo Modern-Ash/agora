@@ -1,0 +1,74 @@
+{
+  "schema": "agora-ai-sdlc/studio-projection/v1",
+  "generated_at": "2026-09-20T12:00:00Z",
+  "project": {
+    "selection_id": "selected-01J7W9X6",
+    "id": "future-method-project",
+    "swarm_id": "delivery",
+    "work_id": "assurance-change",
+    "snapshot": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "flavor": {
+    "status": "available",
+    "value": {
+      "id": "agora-ai-sdlc",
+      "name": "Agora AI-SDLC",
+      "version": "0.2.0",
+      "manifest_schema": "agora/flavor/v1",
+      "supported_core": ">=0.9,<0.10"
+    }
+  },
+  "profiles": {
+    "status": "available",
+    "value": [{"id": "future-assurance", "depth": "future-depth", "active": true}]
+  },
+  "lifecycle": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora/application/lifecycle-projection/v4",
+      "method": "future-ai-sdlc",
+      "current_state": "assurance-review",
+      "terminal_state": "archived",
+      "states": [
+        {"id": "assurance-review", "initial": true, "terminal": false, "future_hint": "render-generically"},
+        {"id": "archived", "initial": false, "terminal": true}
+      ],
+      "transitions": [
+        {"source": "assurance-review", "target": "archived", "available": true, "blockers": []}
+      ],
+      "future_lifecycle_field": {"ignored_by_v1_consumers": true}
+    }
+  },
+  "clarifications": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora/application/traceability-summary/v3",
+      "open": [],
+      "resolved": []
+    }
+  },
+  "provenance": {
+    "status": "unavailable",
+    "reason": {"code": "projection.provenance-unavailable", "message": "No execution is associated with this work"}
+  },
+  "separation": {
+    "status": "unavailable",
+    "reason": {"code": "projection.separation-not-applicable", "message": "No reviewed artifact is selected"}
+  },
+  "metrics": {
+    "status": "available",
+    "value": {
+      "source_schema": "agora-ai-sdlc/operational-metrics/v2",
+      "window": "2026-W38",
+      "items": [],
+      "future_metric_field": true
+    }
+  },
+  "presentation": {
+    "authoritative": false,
+    "labels": {"assurance-review": "Assurance review"},
+    "section_order": ["lifecycle"],
+    "future_presentation_field": "ignored"
+  },
+  "future_top_level_section": {"status": "available", "value": {}}
+}
