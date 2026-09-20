@@ -96,6 +96,7 @@ from agora.identity import (
 from agora.issue_tracking import IssueTrackerPort, IssueTrackerService
 from agora.locking import WorkspaceLock, inspect_workspace_lock
 from agora.markdown import (
+    Attributes,
     MarkdownDocument,
     optional_integer_record_attribute,
     optional_string_attribute,
@@ -120,6 +121,8 @@ from agora.model import (
     MAX_SESSION_TIMEOUT_SECONDS,
     MAX_SESSION_TRANSCRIPT_BYTES,
     MIN_SESSION_TRANSCRIPT_BYTES,
+    PROVENANCE_BASES,
+    SESSION_SELECTION_REASONS,
     ActivityRecord,
     ActorKeyRecord,
     ActorRecord,
@@ -256,6 +259,7 @@ from agora.model import (
     PrepareUsageInput,
     PrepareWorkTransitionInput,
     ProjectConfiguration,
+    ProvenanceBasis,
     QuickstartInput,
     QuickstartResult,
     RecordEvaluationRunInput,
@@ -284,6 +288,7 @@ from agora.model import (
     RunPreview,
     SdlcMetricsRecord,
     SessionAuthorizationRecord,
+    SessionProvenance,
     SessionRecord,
     SetActorRuntimeInput,
     SpecificationHistoryRecord,
@@ -8428,7 +8433,7 @@ class AgoraWorkspace:
                 ),
             )
             context = self._validate_session_preparation(root, session)
-            _, swarm, actor, _, _, work, _, _, _, _, _, session_id, _, _ = context
+            _, swarm, actor, _, _, work, _, _, _, _, _, session_id, _, _, _ = context
             if session_id != record.parameters["session"]:
                 raise ValueError(f"Lifecycle Action session context is not canonical: {record.id}")
             session_preparation_context = (session, context)
@@ -10490,7 +10495,7 @@ class AgoraWorkspace:
             raise ValueError("Prepared session.prepare cannot replace an existing session")
         root = self.project_root()
         context = self._validate_session_preparation(root, data.session)
-        _, swarm, actor, executor, _, work, _, _, _, _, _, session_id, _, _ = context
+        _, swarm, actor, executor, _, work, _, _, _, _, _, session_id, _, _, _ = context
         assert_actor_identity_available(actor)
         self._assert_current_actor_key(actor)
         return self._prepare_lifecycle_action(
@@ -10528,6 +10533,7 @@ class AgoraWorkspace:
         str,
         Path,
         str,
+        SessionProvenance,
     ]:
         project = self._load_project_configuration(root)
         swarm = self._load_swarm(root, data.swarm_id)
@@ -10572,9 +10578,10 @@ class AgoraWorkspace:
             data.max_transcript_bytes,
         )
         self._execution_profile(data.execution_profile)
-        integration, provider, model = self._resolve_actor_runtime(
-            root, executor, project, data.runner
+        (integration, provider, model), selection_reason, fallback_from = (
+            self._select_actor_runtime(root, executor, project, data.runner)
         )
+        provenance = self._session_provenance(data, selection_reason, fallback_from)
         command = self._runtime_command(
             integration,
             data.runner,
@@ -10623,6 +10630,7 @@ class AgoraWorkspace:
             session_id,
             session_path,
             context_contents,
+            provenance,
         )
 
     def _apply_session_preparation(
@@ -10644,6 +10652,7 @@ class AgoraWorkspace:
             str,
             Path,
             str,
+            SessionProvenance,
         ],
         preparation_action_id: str | None,
     ) -> SessionRecord:
@@ -10662,6 +10671,7 @@ class AgoraWorkspace:
             session_id,
             session_path,
             context_contents,
+            provenance,
         ) = context
         context_path = session_path / "CONTEXT.md"
         record = SessionRecord(
@@ -10687,6 +10697,7 @@ class AgoraWorkspace:
             context_sha256=hashlib.sha256(context_contents.encode()).hexdigest(),
             preparation_action_id=preparation_action_id,
             retry_of=data.retry_of,
+            provenance=provenance,
         )
         write_new(context_path, context_contents, data.force)
         write_new(session_path / "SESSION.md", self._render_session(record), data.force)
@@ -17615,13 +17626,45 @@ class AgoraWorkspace:
         project: ProjectConfiguration,
         runner: str | None,
     ) -> tuple[Integration, str, str]:
+        return self._select_actor_runtime(root, actor, project, runner)[0]
+
+    @staticmethod
+    def _session_provenance(
+        data: StartSessionInput,
+        selection_reason: str,
+        fallback_from: tuple[Integration, str, str] | None,
+    ) -> SessionProvenance:
+        runtime_version = data.runtime_version
+        if runtime_version is not None:
+            _assert_safe_provenance_text(runtime_version, "Session runtime version")
+        return SessionProvenance(
+            runtime_basis="declared",
+            provider_basis="declared",
+            model_basis="declared",
+            selection_reason=selection_reason,
+            runtime_version=runtime_version,
+            fallback_used=fallback_from is not None,
+            fallback_from_integration=fallback_from[0] if fallback_from else None,
+            fallback_from_provider=fallback_from[1] if fallback_from else None,
+            fallback_from_model=fallback_from[2] if fallback_from else None,
+            fallback_reason=selection_reason if fallback_from else None,
+        )
+
+    def _select_actor_runtime(
+        self,
+        root: Path,
+        actor: ActorRecord,
+        project: ProjectConfiguration,
+        runner: str | None,
+    ) -> tuple[tuple[Integration, str, str], str, tuple[Integration, str, str] | None]:
+        """Return the runtime plus why it was chosen and, when a fallback won, what it replaced."""
         primary: tuple[Integration, str, str] = (
             actor.integration or project.integration,
             actor.provider or project.provider,
             actor.model or project.model,
         )
         if runner is not None:
-            return primary
+            return primary, "runner-override", None
         candidates = [
             primary,
             *[
@@ -17633,14 +17676,26 @@ class AgoraWorkspace:
                 for item in actor.runtime_fallbacks
             ],
         ]
-        for integration, provider, model in candidates:
+        primary_rejection: str | None = None
+        for index, (integration, provider, model) in enumerate(candidates):
             command = self._runtime_command(integration, None, model)
             executable_available = bool(command and shutil.which(command[0]))
-            if executable_available and not self._runtime_recently_rate_limited(
+            rate_limited = executable_available and self._runtime_recently_rate_limited(
                 root, actor.reference, integration, provider, model
-            ):
-                return integration, provider, model
-        return candidates[0]
+            )
+            if executable_available and not rate_limited:
+                if index == 0:
+                    return candidates[0], "primary", None
+                return (
+                    (integration, provider, model),
+                    primary_rejection or "fallback-executable-unavailable",
+                    primary,
+                )
+            if index == 0:
+                primary_rejection = (
+                    "fallback-rate-limited" if rate_limited else "fallback-executable-unavailable"
+                )
+        return candidates[0], "no-candidate-available", None
 
     def _runtime_recently_rate_limited(
         self,
@@ -17837,7 +17892,7 @@ class AgoraWorkspace:
                     parameters.get("execution-profile", "balanced")
                 ),
             )
-            context = self._validate_session_preparation(root, session)[-1]
+            context = self._validate_session_preparation(root, session)[-2]
             return hashlib.sha256(context.encode()).hexdigest()
         if action == "handoff.create":
             swarm_path = Path(swarm.path) / "SWARM.md"
@@ -18481,6 +18536,7 @@ class AgoraWorkspace:
             "preparation-action": record.preparation_action_id,
             "retry-of": record.retry_of,
         }
+        attributes.update(_render_session_provenance(record.provenance))
         return render_markdown(
             MarkdownDocument(
                 attributes=attributes,
@@ -18600,6 +18656,7 @@ class AgoraWorkspace:
             authorization_signature=authorization_signature,
             preparation_action_id=preparation_action_id,
             retry_of=optional_string_attribute(document.attributes, "retry-of"),
+            provenance=_load_session_provenance(document.attributes, path),
         )
         if record.retry_of is not None:
             assert_slug(record.retry_of, "Session retry source id")
@@ -20253,6 +20310,91 @@ def _assert_project_standards(document: MarkdownDocument, path: Path) -> None:
     standards = strings_attribute(document.attributes, "standards")
     if "conventional-commits/v1.0.0" not in standards:
         raise ValueError(f"Project must enable conventional-commits/v1.0.0: {path}")
+
+
+_PROVENANCE_UNSAFE_TEXT = re.compile(
+    r"[a-z][a-z0-9+.-]*://|-----BEGIN |\b(?:sk|gh[pousr])[_-][A-Za-z0-9_-]{8,}"
+    r"|(?:token|secret|password|api[_-]?key)\s*[=:]",
+    re.IGNORECASE,
+)
+_PROVENANCE_TEXT_LIMIT = 200
+
+
+def _assert_safe_provenance_text(value: str, label: str) -> None:
+    if (
+        not value
+        or len(value) > _PROVENANCE_TEXT_LIMIT
+        or "\n" in value
+        or _PROVENANCE_UNSAFE_TEXT.search(value)
+    ):
+        raise ValueError(f"{label} must be short plain text without credentials or endpoints")
+
+
+def _render_session_provenance(provenance: SessionProvenance | None) -> dict[str, object]:
+    if provenance is None:
+        return {}
+    attributes: dict[str, object] = {
+        "provenance-runtime-basis": provenance.runtime_basis,
+        "provenance-provider-basis": provenance.provider_basis,
+        "provenance-model-basis": provenance.model_basis,
+        "provenance-selection-reason": provenance.selection_reason,
+        "provenance-fallback-used": provenance.fallback_used,
+    }
+    optional = {
+        "provenance-runtime-version": provenance.runtime_version,
+        "provenance-fallback-from-integration": provenance.fallback_from_integration,
+        "provenance-fallback-from-provider": provenance.fallback_from_provider,
+        "provenance-fallback-from-model": provenance.fallback_from_model,
+        "provenance-fallback-reason": provenance.fallback_reason,
+    }
+    attributes.update({key: value for key, value in optional.items() if value is not None})
+    return attributes
+
+
+def _load_session_provenance(attributes: Attributes, path: Path) -> SessionProvenance | None:
+    keys = [key for key in attributes if key.startswith("provenance-")]
+    if not keys:
+        return None
+
+    def basis(key: str) -> ProvenanceBasis:
+        value = optional_string_attribute(attributes, key)
+        if value not in PROVENANCE_BASES:
+            raise ValueError(f"Unsupported Session provenance basis {key}: {path}")
+        return value  # type: ignore[return-value]
+
+    def text(key: str) -> str | None:
+        value = optional_string_attribute(attributes, key)
+        if value is not None:
+            _assert_safe_provenance_text(value, f"Session {key}")
+        return value
+
+    reason = text("provenance-selection-reason")
+    if reason not in SESSION_SELECTION_REASONS:
+        raise ValueError(f"Unsupported Session selection reason: {path}")
+    fallback_used = _boolean_attribute(attributes, "provenance-fallback-used")
+    provenance = SessionProvenance(
+        runtime_basis=basis("provenance-runtime-basis"),
+        provider_basis=basis("provenance-provider-basis"),
+        model_basis=basis("provenance-model-basis"),
+        selection_reason=reason,
+        runtime_version=text("provenance-runtime-version"),
+        fallback_used=fallback_used,
+        fallback_from_integration=text("provenance-fallback-from-integration"),
+        fallback_from_provider=text("provenance-fallback-from-provider"),
+        fallback_from_model=text("provenance-fallback-from-model"),
+        fallback_reason=text("provenance-fallback-reason"),
+    )
+    origin = (
+        provenance.fallback_from_integration,
+        provenance.fallback_from_provider,
+        provenance.fallback_from_model,
+        provenance.fallback_reason,
+    )
+    if fallback_used != all(item is not None for item in origin) or (
+        not fallback_used and any(item is not None for item in origin)
+    ):
+        raise ValueError(f"Session fallback provenance is inconsistent: {path}")
+    return provenance
 
 
 def _boolean_attribute(attributes: dict[str, object], key: str) -> bool:

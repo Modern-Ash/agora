@@ -7,6 +7,7 @@ import json
 import math
 import re
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
@@ -30,6 +31,7 @@ from agora.application.dto import (
     MethodStateSummary,
     MethodSummary,
     ProjectOverview,
+    SessionProvenanceSummary,
     SessionSummary,
     SpecificationRevisionDetail,
     SpecificationRevisionSummary,
@@ -1244,6 +1246,7 @@ class AgoraReadService:
             authorization_signature=record.authorization_signature,
             preparation_action_id=record.preparation_action_id,
             retry_of=record.retry_of,
+            provenance=_session_provenance_summary(record),
         )
 
     @staticmethod
@@ -1401,3 +1404,21 @@ class AgoraReadService:
             tool_run_id=record.tool_run_id,
             source=record.source,
         )
+
+
+def _session_provenance_summary(record: SessionRecord) -> SessionProvenanceSummary:
+    provenance = record.provenance
+    if provenance is None:
+        return SessionProvenanceSummary(
+            runtime_basis="unavailable",
+            provider_basis="unavailable",
+            model_basis="unavailable",
+            selection_reason=None,
+            runtime_version=None,
+            fallback_used=False,
+            fallback_from_integration=None,
+            fallback_from_provider=None,
+            fallback_from_model=None,
+            fallback_reason=None,
+        )
+    return SessionProvenanceSummary(**asdict(provenance))

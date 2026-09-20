@@ -525,6 +525,37 @@ class ApprovalDelegationRecord:
     revocation_action_id: str | None = None
 
 
+ProvenanceBasis = Literal["declared", "observed", "unavailable"]
+PROVENANCE_BASES: tuple[str, ...] = ("declared", "observed", "unavailable")
+SESSION_SELECTION_REASONS: tuple[str, ...] = (
+    "primary",
+    "runner-override",
+    "fallback-executable-unavailable",
+    "fallback-rate-limited",
+    "no-candidate-available",
+)
+
+
+@dataclass(frozen=True)
+class SessionProvenance:
+    """Provider-neutral facts about the runtime selection actually used for one Session.
+
+    ``None`` bases are never persisted: an absent record means the Session predates provenance.
+    Values must not carry credentials, tokens or endpoint URLs.
+    """
+
+    runtime_basis: ProvenanceBasis
+    provider_basis: ProvenanceBasis
+    model_basis: ProvenanceBasis
+    selection_reason: str
+    runtime_version: str | None = None
+    fallback_used: bool = False
+    fallback_from_integration: str | None = None
+    fallback_from_provider: str | None = None
+    fallback_from_model: str | None = None
+    fallback_reason: str | None = None
+
+
 @dataclass(frozen=True)
 class SessionRecord:
     id: str
@@ -557,6 +588,7 @@ class SessionRecord:
     preparation_action_id: str | None = None
     executor: str | None = None
     retry_of: str | None = None
+    provenance: SessionProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -2131,6 +2163,7 @@ class StartSessionInput:
     execution_profile: ExecutionProfile = "balanced"
     executor_id: str | None = None
     retry_of: str | None = None
+    runtime_version: str | None = None
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@ import binascii
 import hashlib
 import json
 import re
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
@@ -296,6 +296,10 @@ def session_authorization_payload(record: SessionRecord) -> bytes:
     }
     if record.executor is not None and record.executor != record.actor:
         value["executor"] = record.executor
+    if record.provenance is not None:
+        value["provenance"] = {
+            key: item for key, item in asdict(record.provenance).items() if item is not None
+        }
     return (
         json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode()
