@@ -57,7 +57,8 @@ Describe the lifecycle, its intent, and its completion expectations here.
 | `name` | Non-empty human-readable name |
 | `version` | Numeric `MAJOR.MINOR.PATCH`; omitted legacy versions resolve as `0.0.0` |
 | `dependencies` | Optional array of version-constrained Method or Tool Pack references |
-| `required-roles` | Non-empty array of role ids |
+| `required-roles` | Non-empty array of role ids; every one must be assigned before a swarm is `ready` |
+| `optional-roles` | Optional array of role ids, unique and disjoint from `required-roles`. Each needs a role file. They can be assigned, hold handoffs and sessions, and appear in criterion-stage roles, transition roles and gate approval roles, but a swarm is `ready` without them. A gate that requires an optional role blocks until it is assigned |
 | `work-states` | Non-empty array of unique state ids |
 | `terminal-state` | Must identify one of the declared states |
 | `wip-limits` | Optional map of state ids to positive integer limits |
