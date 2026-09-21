@@ -189,6 +189,7 @@ def test_summarizes_unbounded_usage_through_cli(tmp_path: Path, monkeypatch) -> 
     assert result == {
         "budget_limits": None,
         "consumed": {"gpu-seconds": 12},
+        "consumed_measurement": {"gpu-seconds": "unknown"},
         "records": 1,
         "remaining": None,
         "swarm_id": "delivery",

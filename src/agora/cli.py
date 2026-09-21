@@ -48,6 +48,7 @@ from agora.model import (
     DEFAULT_SESSION_TRANSCRIPT_BYTES,
     EXECUTION_PROFILES,
     INTEGRATIONS,
+    USAGE_MEASUREMENTS,
     ActorRecord,
     AddActorInput,
     AddApprovalInput,
@@ -3246,6 +3247,12 @@ def _build_parser() -> argparse.ArgumentParser:
     usage_add.add_argument("--by", required=True)
     usage_add.add_argument("--amount", action="append", default=[], metavar="DIMENSION=VALUE")
     usage_add.add_argument("--evidence", action="append", default=[])
+    usage_add.add_argument(
+        "--measurement",
+        choices=USAGE_MEASUREMENTS,
+        default=None,
+        help="how the amounts were obtained; omitted means unknown",
+    )
     usage_prepare = usage.add_parser("prepare", help="Prepare a signed usage intent")
     usage_prepare.add_argument("--action-id", required=True)
     usage_prepare.add_argument("--id", required=True)
@@ -3254,6 +3261,12 @@ def _build_parser() -> argparse.ArgumentParser:
     usage_prepare.add_argument("--by", required=True)
     usage_prepare.add_argument("--amount", action="append", default=[], metavar="DIMENSION=VALUE")
     usage_prepare.add_argument("--evidence", action="append", default=[])
+    usage_prepare.add_argument(
+        "--measurement",
+        choices=USAGE_MEASUREMENTS,
+        default=None,
+        help="how the amounts were obtained; omitted means unknown",
+    )
     usage_list = usage.add_parser("list", help="List durable usage records")
     usage_list.add_argument("--swarm", required=True)
     usage_list.add_argument("--work", required=True)
@@ -4719,6 +4732,7 @@ def _dispatch(
             actor_id=args.by,
             amounts=_parse_usage_amounts(args.amount),
             evidence_refs=args.evidence,
+            measurement=args.measurement,
         )
         if args.usage_command == "prepare":
             return workspace.prepare_add_usage(
