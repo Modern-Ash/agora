@@ -280,6 +280,12 @@ class ArtifactSummary(SerializableDTO):
     activity: ActivityEntry | None = None
     schema: str = field(default="agora/application/artifact-summary/v3", init=False)
 
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        if self.session_id is None:
+            payload.pop("session_id", None)
+        return payload
+
 
 @dataclass(frozen=True)
 class EvidenceSummary(SerializableDTO):
@@ -292,6 +298,12 @@ class EvidenceSummary(SerializableDTO):
     session_id: str | None = None
     activity: ActivityEntry | None = None
     schema: str = field(default="agora/application/evidence-summary/v3", init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        if self.session_id is None:
+            payload.pop("session_id", None)
+        return payload
 
 
 @dataclass(frozen=True)
