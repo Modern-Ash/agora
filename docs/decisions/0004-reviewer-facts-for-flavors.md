@@ -1,6 +1,6 @@
 # ADR 0004: Reviewer facts for flavor projections
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-21
 - Related: Agora #60 (flavor projection inputs), #54 (session provenance), #55 (flavor projection boundary); Agora AI-SDLC independent-review policy
 
