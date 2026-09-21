@@ -9,6 +9,7 @@ from typing import Protocol
 from agora.application.dto import (
     ClarificationsProjection,
     LifecycleProjection,
+    MetricWindowSummary,
     SerializableDTO,
     SessionSummary,
     TraceabilitySummary,
@@ -40,6 +41,7 @@ class FlavorProjectionContext(SerializableDTO):
     traceability: TraceabilitySummary
     sessions: tuple[SessionSummary, ...]
     usage: UsageSummaryProjection
+    metrics: tuple[MetricWindowSummary, ...] = ()
     schema: str = field(default="agora/application/flavor-projection-context/v1", init=False)
 
 
