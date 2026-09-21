@@ -1,10 +1,22 @@
 from pathlib import Path
 
 import pytest
+import json
+
 from test_adr_0002 import _project
+from test_identity import _authenticated_project, _create_authenticated_work
 
 from agora.application import AgoraReadService
-from agora.model import AddArtifactInput, AddEvidenceInput, CreateWorkInput, StartSessionInput
+from agora.model import (
+    AddArtifactInput,
+    AddEvidenceInput,
+    ApplyLifecycleActionInput,
+    CreateWorkInput,
+    PrepareArtifactInput,
+    PrepareLifecycleAuthorizationInput,
+    PrepareSessionInput,
+    StartSessionInput,
+)
 
 
 def _session(workspace, session_id: str, actor_id: str, work_id: str = "feature"):
@@ -207,3 +219,78 @@ def test_legacy_artifact_and_evidence_records_have_no_session_link(tmp_path: Pat
 
     assert workspace.list_work_artifacts("delivery", "feature")[-1].session_id is None
     assert workspace.list_work_evidence("delivery", "feature")[-1].session_id is None
+
+
+def test_signed_artifact_payload_binds_session_only_when_present(tmp_path: Path, monkeypatch) -> None:
+    root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
+    _create_authenticated_work(workspace, private_key, tmp_path)
+
+    session_action = workspace.prepare_session(
+        PrepareSessionInput(
+            action_id="prepare-review-session",
+            session=StartSessionInput(
+                id="review-session",
+                actor_id="developer",
+                swarm_id="delivery",
+                work_id="signed-work",
+                runner="/bin/true --agent",
+            ),
+        )
+    )
+    session_payload = tmp_path / "prepare-review-session.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=session_action.id,
+            output=str(session_payload),
+        )
+    )
+    session_signature = tmp_path / "prepare-review-session.sig"
+    session_signature.write_bytes(private_key.sign(session_payload.read_bytes()))
+    workspace.apply_lifecycle_action(
+        ApplyLifecycleActionInput(
+            action_id=session_action.id,
+            signature=str(session_signature),
+        )
+    )
+
+    legacy = workspace.prepare_add_artifact(
+        PrepareArtifactInput(
+            id="legacy-artifact-action",
+            swarm_id="delivery",
+            work_id="signed-work",
+            actor_id="developer",
+            kind="implementation",
+            uri="repo://delivery/signed-materials.md",
+        )
+    )
+    legacy_payload = tmp_path / "legacy-artifact-action.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=legacy.id,
+            output=str(legacy_payload),
+        )
+    )
+    legacy_parameters = json.loads(legacy_payload.read_text(encoding="ascii"))["parameters"]
+    assert "session" not in legacy_parameters
+
+    linked = workspace.prepare_add_artifact(
+        PrepareArtifactInput(
+            id="linked-artifact-action",
+            swarm_id="delivery",
+            work_id="signed-work",
+            actor_id="developer",
+            kind="implementation",
+            uri="repo://delivery/signed-materials.md",
+            session_id="review-session",
+        )
+    )
+    linked_payload = tmp_path / "linked-artifact-action.json"
+    workspace.prepare_lifecycle_authorization(
+        PrepareLifecycleAuthorizationInput(
+            action_id=linked.id,
+            output=str(linked_payload),
+        )
+    )
+    linked_parameters = json.loads(linked_payload.read_text(encoding="ascii"))["parameters"]
+    assert linked_parameters["session"] == "review-session"
+    assert linked_payload.read_bytes() != legacy_payload.read_bytes()
