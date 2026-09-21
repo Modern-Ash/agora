@@ -18,6 +18,13 @@ from agora.model import (
 )
 
 
+def _stub_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agora.workspace.shutil.which",
+        lambda executable: f"/usr/bin/{executable}",
+    )
+
+
 def _session(workspace, session_id: str, actor_id: str, work_id: str = "feature"):
     return workspace.start_session(
         StartSessionInput(
@@ -32,9 +39,7 @@ def _session(workspace, session_id: str, actor_id: str, work_id: str = "feature"
 def test_artifact_and_review_evidence_bind_exact_sessions_and_digest(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(
-        "agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}"
-    )
+    _stub_runtime(monkeypatch)
     workspace = _project(tmp_path, monkeypatch)
     target = tmp_path / "review-target.md"
     target.write_text("# revision one\n", encoding="utf-8")
@@ -69,10 +74,8 @@ def test_artifact_and_review_evidence_bind_exact_sessions_and_digest(
     assert artifact.session_id == "producer-session"
     assert evidence.session_id == "reviewer-session"
     assert artifact.content_sha256 is not None
-    assert (
-        evidence.artifact_content_sha256["repo://review-target.md"]
-        == artifact.content_sha256
-    )
+    reviewed = evidence.artifact_content_sha256["repo://review-target.md"]
+    assert reviewed == artifact.content_sha256
 
     detail = AgoraReadService(workspace).get_work_item("delivery", "feature")
     assert detail.artifacts[-1].session_id == "producer-session"
@@ -82,9 +85,7 @@ def test_artifact_and_review_evidence_bind_exact_sessions_and_digest(
 def test_review_digest_becomes_stale_after_new_artifact_revision(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(
-        "agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}"
-    )
+    _stub_runtime(monkeypatch)
     workspace = _project(tmp_path, monkeypatch)
     target = tmp_path / "review-target.md"
     target.write_text("# revision one\n", encoding="utf-8")
@@ -125,11 +126,10 @@ def test_review_digest_becomes_stale_after_new_artifact_revision(
 
 
 def test_session_link_rejects_cross_work_and_foreign_executor(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}"
-    )
+    _stub_runtime(monkeypatch)
     workspace = _project(tmp_path, monkeypatch)
     target = tmp_path / "review-target.md"
     target.write_text("# target\n", encoding="utf-8")
@@ -172,11 +172,10 @@ def test_session_link_rejects_cross_work_and_foreign_executor(
 
 
 def test_flavor_projection_context_contains_only_referenced_actors(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "agora.workspace.shutil.which", lambda executable: f"/usr/bin/{executable}"
-    )
+    _stub_runtime(monkeypatch)
     workspace = _project(tmp_path, monkeypatch)
     target = tmp_path / "review-target.md"
     target.write_text("# target\n", encoding="utf-8")
@@ -217,7 +216,8 @@ def test_flavor_projection_context_contains_only_referenced_actors(
 
 
 def test_legacy_artifact_and_evidence_records_have_no_session_link(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     workspace = _project(tmp_path, monkeypatch)
     target = tmp_path / "legacy.md"
@@ -248,7 +248,8 @@ def test_legacy_artifact_and_evidence_records_have_no_session_link(
 
 
 def test_signed_artifact_payload_binds_session_only_when_present(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     root, workspace, private_key, _ = _authenticated_project(tmp_path, monkeypatch)
     _create_authenticated_work(workspace, private_key, tmp_path)
