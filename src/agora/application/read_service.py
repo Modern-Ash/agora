@@ -484,7 +484,9 @@ class AgoraReadService:
             "artifacts.count": (
                 len(artifacts),
                 tuple(
-                    self._metric_source_ref("artifact", item.content_sha256, item.kind, item.timestamp)
+                    self._metric_source_ref(
+                        "artifact", item.content_sha256, item.kind, item.timestamp
+                    )
                     for item in artifacts
                 ),
             ),
