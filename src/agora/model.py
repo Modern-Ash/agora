@@ -473,6 +473,10 @@ class UsageRecord:
     path: str
     action_id: str | None = None
     session_id: str | None = None
+    measurement: str | None = None
+
+
+USAGE_MEASUREMENTS: tuple[str, ...] = ("measured", "provider-reported", "unknown")
 
 
 @dataclass(frozen=True)
@@ -483,6 +487,9 @@ class UsageSummary:
     consumed: dict[str, int]
     remaining: dict[str, int] | None
     records: int
+    # Lowest-trust measurement contributing to each consumed dimension; a record without a
+    # measurement contributes "unknown", so nothing unverified is ever reported as measured.
+    consumed_measurement: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -2020,6 +2027,7 @@ class AddUsageInput(WorkActorInput):
     amounts: dict[str, int] = field(default_factory=dict)
     evidence_refs: list[str] = field(default_factory=list)
     session_id: str | None = None
+    measurement: str | None = None
 
 
 @dataclass(frozen=True)

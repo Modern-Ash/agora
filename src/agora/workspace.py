@@ -123,6 +123,7 @@ from agora.model import (
     MIN_SESSION_TRANSCRIPT_BYTES,
     PROVENANCE_BASES,
     SESSION_SELECTION_REASONS,
+    USAGE_MEASUREMENTS,
     ActivityRecord,
     ActorKeyRecord,
     ActorRecord,
@@ -6767,6 +6768,18 @@ class AgoraWorkspace:
         swarm, actor, work, amounts = self._validate_add_usage(root, data.usage)
         assert_actor_identity_available(actor)
         self._assert_current_actor_key(actor)
+        parameters = {
+            "usage": data.usage.id,
+            "amounts": json.dumps(amounts, ensure_ascii=True, separators=(",", ":")),
+            "evidence": json.dumps(
+                data.usage.evidence_refs,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ),
+        }
+        if data.usage.measurement is not None:
+            # Bound into the signed authorization only when set, so legacy actions are unchanged.
+            parameters["measurement"] = data.usage.measurement
         return self._prepare_lifecycle_action(
             root,
             id_=data.action_id,
@@ -6774,21 +6787,15 @@ class AgoraWorkspace:
             actor=actor,
             swarm=swarm,
             work=work,
-            parameters={
-                "usage": data.usage.id,
-                "amounts": json.dumps(amounts, ensure_ascii=True, separators=(",", ":")),
-                "evidence": json.dumps(
-                    data.usage.evidence_refs,
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                ),
-            },
+            parameters=parameters,
         )
 
     def _validate_add_usage(
         self, root: Path, data: AddUsageInput
     ) -> tuple[SwarmRecord, ActorRecord, WorkRecord, dict[str, int]]:
         assert_slug(data.id, "Usage id")
+        if data.measurement is not None and data.measurement not in USAGE_MEASUREMENTS:
+            raise ValueError("Usage measurement must be one of: " + ", ".join(USAGE_MEASUREMENTS))
         swarm = self._load_swarm(root, data.swarm_id)
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "usage.add")
         work = self._load_work(swarm, data.work_id)
@@ -6845,6 +6852,7 @@ class AgoraWorkspace:
             path=str(path),
             action_id=action_id,
             session_id=data.session_id,
+            measurement=data.measurement,
         )
         write_new(path, self._render_usage(record))
         self._append_work_event(
@@ -6874,6 +6882,16 @@ class AgoraWorkspace:
             for dimension, amount in record.amounts.items():
                 consumed[dimension] = consumed.get(dimension, 0) + amount
         consumed = dict(sorted(consumed.items()))
+        rank = {"measured": 2, "provider-reported": 1, "unknown": 0}
+        weakest: dict[str, int] = {}
+        for record in records:
+            level = rank[record.measurement or "unknown"]
+            for dimension in record.amounts:
+                weakest[dimension] = min(weakest.get(dimension, level), level)
+        names = {level: name for name, level in rank.items()}
+        consumed_measurement = {
+            dimension: names[weakest[dimension]] for dimension in sorted(weakest)
+        }
         remaining = (
             None
             if work.budget_limits is None
@@ -6889,6 +6907,7 @@ class AgoraWorkspace:
             consumed=consumed,
             remaining=remaining,
             records=len(records),
+            consumed_measurement=consumed_measurement,
         )
 
     @_locked_mutation("project")
@@ -8575,6 +8594,7 @@ class AgoraWorkspace:
                 actor_id=record.actor,
                 amounts=self._usage_amounts_parameter(record),
                 evidence_refs=self._string_list_parameter(record, "evidence"),
+                measurement=record.parameters.get("measurement"),
             )
             swarm, actor, work, amounts = self._validate_add_usage(root, usage)
             usage_context = (usage, swarm, actor, work, amounts)
@@ -10956,6 +10976,7 @@ class AgoraWorkspace:
                             amounts={"tokens": measured_tokens},
                             evidence_refs=[f"repo://.agora/sessions/{running.id}/SUMMARY.md"],
                             session_id=running.id,
+                            measurement="provider-reported",
                         ),
                         {"tokens": measured_tokens},
                         None,
@@ -15471,6 +15492,7 @@ class AgoraWorkspace:
                         or usage.amounts != expected_amounts
                         or usage.evidence_refs != expected_evidence
                         or usage.action_id != action.id
+                        or usage.measurement != action.parameters.get("measurement")
                     ):
                         issue(
                             "lifecycle-action.usage-mismatch",
@@ -17310,20 +17332,23 @@ class AgoraWorkspace:
 
     @staticmethod
     def _render_usage(record: UsageRecord) -> str:
+        attributes: dict[str, object] = {
+            "schema": "agora/usage/v1",
+            "id": record.id,
+            "swarm": record.swarm_id,
+            "work": record.work_id,
+            "actor": record.actor,
+            "amounts": record.amounts,
+            "evidence-refs": record.evidence_refs,
+            "created-at": record.created_at,
+            "action": record.action_id,
+            "session": record.session_id,
+        }
+        if record.measurement is not None:
+            attributes["measurement"] = record.measurement
         return render_markdown(
             MarkdownDocument(
-                attributes={
-                    "schema": "agora/usage/v1",
-                    "id": record.id,
-                    "swarm": record.swarm_id,
-                    "work": record.work_id,
-                    "actor": record.actor,
-                    "amounts": record.amounts,
-                    "evidence-refs": record.evidence_refs,
-                    "created-at": record.created_at,
-                    "action": record.action_id,
-                    "session": record.session_id,
-                },
+                attributes=attributes,
                 body=(
                     f"# Usage {record.id}\n\n"
                     "This append-only record contains externally measured resource usage. Agora "
@@ -17351,8 +17376,11 @@ class AgoraWorkspace:
             path=str(path),
             action_id=optional_string_attribute(document.attributes, "action"),
             session_id=optional_string_attribute(document.attributes, "session"),
+            measurement=optional_string_attribute(document.attributes, "measurement"),
         )
         assert_slug(record.id, "Usage id")
+        if record.measurement is not None and record.measurement not in USAGE_MEASUREMENTS:
+            raise ValueError(f"Usage measurement is not supported: {path}")
         if not record.evidence_refs or any(
             not reference.strip() for reference in record.evidence_refs
         ):
@@ -18148,6 +18176,9 @@ class AgoraWorkspace:
             and (expected_parameters - parameter_keys).issubset(optional_delegation_parameters)
             and parameter_keys.issubset(expected_parameters)
         )
+        optional_usage_parameters = action == "usage.add" and parameter_keys in (
+            {"usage", "amounts", "evidence", "measurement"},
+        )
         legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
         legacy_artifact_parameters = action == "artifact.add" and parameter_keys == {"kind", "uri"}
         legacy_criterion_parameters = action == "criterion.satisfy" and parameter_keys == {
@@ -18180,6 +18211,7 @@ class AgoraWorkspace:
         }
         if (
             parameter_keys != expected_parameters
+            and not optional_usage_parameters
             and not legacy_delegation_parameters
             and not legacy_approval_parameters
             and not legacy_artifact_parameters
@@ -18352,6 +18384,8 @@ class AgoraWorkspace:
                 raise ValueError(f"Lifecycle Action evidence artifacts must be strings: {path}")
         if action == "usage.add":
             assert_slug(parameters["usage"], "Lifecycle Action usage id")
+            if "measurement" in parameters and parameters["measurement"] not in USAGE_MEASUREMENTS:
+                raise ValueError(f"Lifecycle Action usage measurement is not supported: {path}")
             try:
                 amounts = json.loads(parameters["amounts"])
                 evidence = json.loads(parameters["evidence"])

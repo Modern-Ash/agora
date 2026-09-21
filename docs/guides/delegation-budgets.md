@@ -100,9 +100,21 @@ Query cumulative consumption and remaining capacity without calculating it manua
 agora usage status --swarm specialists --work child-slice
 ```
 
-The derived response includes `budget_limits`, `consumed`, `remaining`, and `records`. For unbounded
-work, `budget_limits` and `remaining` are `null`; observed dimensions still appear under `consumed`.
-The query creates no artifact and does not change the work precondition.
+The derived response includes `budget_limits`, `consumed`, `consumed_measurement`, `remaining`, and
+`records`. For unbounded work, `budget_limits` and `remaining` are `null`; observed dimensions still
+appear under `consumed`. The query creates no artifact and does not change the work precondition.
+
+### Measurement basis
+
+`--measurement measured|provider-reported|unknown` records how the amounts were obtained: `measured`
+by the recording actor or a reviewed adapter, `provider-reported` as stated by the model provider or
+its CLI, or `unknown`. Omitting it means `unknown`, never zero, so records written before this field
+existed keep loading unchanged. `consumed_measurement` reports, per dimension, the weakest basis
+among the records that contributed to it (`measured` > `provider-reported` > `unknown`); one unknown or
+provider-reported record means the dimension is never reported as `measured`. Token usage that Core
+captures from a launched session is recorded as `provider-reported`. The basis is metadata only:
+budget checks are unchanged. A signed `usage prepare` binds the basis when it is set, and validation
+detects a basis edited after the action was applied.
 
 An authenticated actor uses `agora usage prepare --action-id ...` and the ordinary
 `agora action authorization` / `agora action apply` sequence. The signature binds the exact usage
