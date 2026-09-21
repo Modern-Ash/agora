@@ -256,6 +256,7 @@ class ArtifactRecord:
     produced_by: str
     timestamp: str
     content_sha256: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -277,6 +278,7 @@ class EvidenceRecord:
     tests_failed: int | None = None
     environment: str | None = None
     dedupe_key: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1961,6 +1963,7 @@ class AddArtifactInput(WorkActorInput):
     kind: str = ""
     uri: str = ""
     content_sha256: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1978,6 +1981,7 @@ class AddEvidenceInput(WorkActorInput):
     tests_failed: int | None = None
     environment: str | None = None
     dedupe_key: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)
