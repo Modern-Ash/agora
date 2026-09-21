@@ -59,9 +59,9 @@ from agora.application.extensions import (
     FlavorProjectContext,
     FlavorProjection,
     FlavorProjectionContext,
-    FlavorSelectionSummary,
     FlavorProjectionContribution,
     FlavorProjectionProvider,
+    FlavorSelectionSummary,
 )
 from agora.application.queries import (
     ActivityFilters,
