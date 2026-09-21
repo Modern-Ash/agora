@@ -1228,6 +1228,7 @@ class AgoraReadService:
             required_roles=record.required_roles,
             assignments=record.assignments,
             work_states=contract.work_states,
+            optional_roles=tuple(record.optional_roles),
         )
 
     def _session_summary(self, record: SessionRecord) -> SessionSummary:

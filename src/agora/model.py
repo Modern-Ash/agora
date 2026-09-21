@@ -180,6 +180,7 @@ class MethodContract:
     transitions: list[TransitionRule]
     gates: dict[str, GatePolicy]
     wip_limits: dict[str, int]
+    optional_roles: list[str] = field(default_factory=list)
     criterion_stages: list[str] = field(default_factory=lambda: ["satisfied"])
     criterion_stage_roles: dict[str, list[str]] = field(default_factory=dict)
     gate_decision_ttl_seconds: int | None = None
@@ -340,6 +341,7 @@ class SwarmRecord:
     assignments: dict[str, str]
     objective: str
     path: str
+    optional_roles: list[str] = field(default_factory=list)
 
 
 @dataclass

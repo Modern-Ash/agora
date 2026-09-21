@@ -4062,6 +4062,7 @@ class AgoraWorkspace:
             assignments={},
             objective=data.objective,
             path=str(swarm_path),
+            optional_roles=contract.optional_roles,
         )
         write_new(swarm_path / "SWARM.md", self._render_swarm(record))
         write_new(swarm_path / "events.md", "# Swarm events\n\n")
@@ -4107,8 +4108,8 @@ class AgoraWorkspace:
         swarm = self._load_swarm(root, data.swarm_id)
         if swarm.status not in {"forming", "ready"}:
             raise ValueError(f"Cannot change assignments while swarm {swarm.id} is {swarm.status}")
-        if data.role_id not in swarm.required_roles:
-            raise ValueError(f"Role {data.role_id} is not required by swarm {swarm.id}")
+        if data.role_id not in swarm.required_roles and data.role_id not in swarm.optional_roles:
+            raise ValueError(f"Role {data.role_id} is not defined by swarm {swarm.id}")
         if data.role_id in swarm.assignments:
             raise ValueError(
                 f"Role {data.role_id} is already assigned in swarm {swarm.id}; use a handoff"
@@ -13230,7 +13231,7 @@ class AgoraWorkspace:
                 f"Default Method Pack is not valid or installed: {project.default_method}",
             )
         for method_id, contract in methods.items():
-            for role_id in contract.required_roles:
+            for role_id in [*contract.required_roles, *contract.optional_roles]:
                 role_path = method_root / method_id / "roles" / f"{role_id}.md"
                 role = read_markdown(role_path)
                 allowed_environments = role.attributes.get("allowed-environments", ["*"])
@@ -13242,7 +13243,9 @@ class AgoraWorkspace:
                         f"Role {role_id} allows missing environments: {', '.join(unknown)}",
                     )
         known_role_ids = {
-            role_id for contract in methods.values() for role_id in contract.required_roles
+            role_id
+            for contract in methods.values()
+            for role_id in [*contract.required_roles, *contract.optional_roles]
         }
         for environment in environments.values():
             unknown_roles = sorted(set(environment.required_approval_roles) - known_role_ids)
@@ -13571,13 +13574,18 @@ class AgoraWorkspace:
                     f"Method Pack is not valid or installed: {swarm.method}",
                 )
                 continue
-            if swarm.required_roles != contract.required_roles:
+            if (
+                swarm.required_roles != contract.required_roles
+                or swarm.optional_roles != contract.optional_roles
+            ):
                 issue(
                     "swarm.roles-mismatch",
                     path,
                     "Swarm required roles do not match its Method Pack",
                 )
-            unknown_roles = sorted(set(swarm.assignments) - set(swarm.required_roles))
+            unknown_roles = sorted(
+                set(swarm.assignments) - set(swarm.required_roles) - set(swarm.optional_roles)
+            )
             if unknown_roles:
                 issue(
                     "swarm.assignment-role-invalid",
@@ -13586,7 +13594,7 @@ class AgoraWorkspace:
                 )
             for role_id, reference in swarm.assignments.items():
                 actor = resolve_actor(reference, path)
-                if actor is None or role_id not in swarm.required_roles:
+                if actor is None or role_id not in [*swarm.required_roles, *swarm.optional_roles]:
                     continue
                 try:
                     self._assert_actor_role_compatibility(root, swarm.method, role_id, actor)
@@ -14307,7 +14315,10 @@ class AgoraWorkspace:
                         )
                     grantor = resolve_actor(delegation.from_actor, delegation_path)
                     target = resolve_actor(delegation.to_actor, delegation_path)
-                    if contract is None or delegation.role_id not in contract.required_roles:
+                    if contract is None or delegation.role_id not in [
+                        *contract.required_roles,
+                        *contract.optional_roles,
+                    ]:
                         issue(
                             "approval-delegation.role-invalid",
                             delegation_path,
@@ -14418,7 +14429,7 @@ class AgoraWorkspace:
                         path,
                         "Handoff id or swarm does not match its filesystem owner",
                     )
-                if handoff.role_id not in swarm.required_roles:
+                if handoff.role_id not in [*swarm.required_roles, *swarm.optional_roles]:
                     issue(
                         "handoff.role-invalid",
                         path,
@@ -14957,7 +14968,11 @@ class AgoraWorkspace:
             else:
                 contract = methods.get(swarm.method)
                 unknown_roles = (
-                    sorted(set(session.roles) - set(contract.required_roles))
+                    sorted(
+                        set(session.roles)
+                        - set(contract.required_roles)
+                        - set(contract.optional_roles)
+                    )
                     if contract is not None
                     else []
                 )
@@ -16786,24 +16801,32 @@ class AgoraWorkspace:
             assignments=record_attribute(document.attributes, "assignments"),
             objective=_extract_section(document.body, "Objective"),
             path=str(path),
+            optional_roles=(
+                strings_attribute(document.attributes, "optional-roles")
+                if "optional-roles" in document.attributes
+                else []
+            ),
         )
 
     def _render_swarm(self, swarm: SwarmRecord) -> str:
         assignments = "\n".join(
             f"| {role} | {swarm.assignments.get(role, 'unassigned')} |"
-            for role in swarm.required_roles
+            for role in [*swarm.required_roles, *swarm.optional_roles]
         )
+        attributes: dict[str, object] = {
+            "schema": "agora/swarm/v1",
+            "id": swarm.id,
+            "method": swarm.method,
+            "status": swarm.status,
+            "branch": swarm.branch,
+            "required-roles": swarm.required_roles,
+            "assignments": swarm.assignments,
+        }
+        if swarm.optional_roles:
+            attributes["optional-roles"] = swarm.optional_roles
         return render_markdown(
             MarkdownDocument(
-                attributes={
-                    "schema": "agora/swarm/v1",
-                    "id": swarm.id,
-                    "method": swarm.method,
-                    "status": swarm.status,
-                    "branch": swarm.branch,
-                    "required-roles": swarm.required_roles,
-                    "assignments": swarm.assignments,
-                },
+                attributes=attributes,
                 body=(
                     f"# Swarm {swarm.id}\n\n## Objective\n\n{swarm.objective}\n\n"
                     "## Assignments\n\n| Role | Actor |\n| --- | --- |\n"

@@ -123,6 +123,7 @@ class SwarmSummary(SerializableDTO):
     required_roles: tuple[str, ...]
     assignments: Mapping[str, str]
     work_states: tuple[str, ...] = ()
+    optional_roles: tuple[str, ...] = ()
     schema: str = field(default="agora/application/swarm-summary/v1", init=False)
 
 

@@ -17,6 +17,11 @@ TOOL_CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
 ACTION_PATTERN = re.compile(r"[a-z][a-z0-9.-]*")
 
 
+def method_id_hint(document) -> str:
+    value = document.attributes.get("id")
+    return value if isinstance(value, str) else "<unknown>"
+
+
 def load_method_contract(root: Path) -> MethodContract:
     document = read_markdown(root / "METHOD.md")
     if string_attribute(document.attributes, "schema") != "agora/method/v1":
@@ -27,6 +32,17 @@ def load_method_contract(root: Path) -> MethodContract:
     name = string_attribute(document.attributes, "name")
     version, dependencies = pack_manifest_metadata(document.attributes, f"method/{method_id}")
     required_roles = strings_attribute(document.attributes, "required-roles")
+    optional_roles = (
+        strings_attribute(document.attributes, "optional-roles")
+        if "optional-roles" in document.attributes
+        else []
+    )
+    if len(set(optional_roles)) != len(optional_roles) or set(optional_roles) & set(required_roles):
+        raise ValueError(
+            f"Method Pack {method_id_hint(document)} optional-roles must be unique and disjoint "
+            "from required-roles"
+        )
+    assignable_roles = [*required_roles, *optional_roles]
     states = strings_attribute(document.attributes, "work-states")
     criterion_stages = _string_list(document.attributes, "criterion-stages", default=["satisfied"])
     criterion_stage_roles = (
@@ -64,7 +80,7 @@ def load_method_contract(root: Path) -> MethodContract:
                 f"Method Pack {method_id} criterion stage {stage} roles must be unique "
                 "and non-empty"
             )
-        unknown_roles = sorted(set(roles) - set(required_roles))
+        unknown_roles = sorted(set(roles) - set(assignable_roles))
         if unknown_roles:
             raise ValueError(
                 f"Method Pack {method_id} criterion stage {stage} uses unknown roles: "
@@ -72,13 +88,13 @@ def load_method_contract(root: Path) -> MethodContract:
             )
 
     missing_roles = [
-        role for role in required_roles if not (root / "roles" / f"{role}.md").is_file()
+        role for role in assignable_roles if not (root / "roles" / f"{role}.md").is_file()
     ]
     if missing_roles:
         raise ValueError(
             f"Method Pack {method_id} is missing role files: {', '.join(missing_roles)}"
         )
-    for role in required_roles:
+    for role in assignable_roles:
         role_path = root / "roles" / f"{role}.md"
         attributes = read_markdown(role_path).attributes
         if string_attribute(attributes, "schema") != "agora/role/v1":
@@ -135,7 +151,7 @@ def load_method_contract(root: Path) -> MethodContract:
         for evidence_type in gate.required_evidence_types:
             assert_slug(evidence_type, f"Gate {gate.id} required evidence type")
         unknown_approval_roles = [
-            role for role in gate.required_approval_roles if role not in required_roles
+            role for role in gate.required_approval_roles if role not in assignable_roles
         ]
         if unknown_approval_roles:
             raise ValueError(
@@ -145,7 +161,7 @@ def load_method_contract(root: Path) -> MethodContract:
         root,
         method_id=method_id,
         states=states,
-        required_roles=required_roles,
+        required_roles=assignable_roles,
         terminal_state=terminal_state,
         gates=gates,
     )
@@ -156,6 +172,7 @@ def load_method_contract(root: Path) -> MethodContract:
         version=version,
         dependencies=dependencies,
         required_roles=required_roles,
+        optional_roles=optional_roles,
         work_states=states,
         terminal_state=terminal_state,
         transitions=transitions,

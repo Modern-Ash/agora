@@ -376,6 +376,7 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
             "assignments": dict(value.assignments),
             "objective": value.objective,
             "path": workspace.show_swarm(value.id).path,
+            "optional_roles": list(value.optional_roles),
         }
     if isinstance(value, (WorkItemSummary, WorkItemDetail)):
         return {
