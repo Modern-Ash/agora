@@ -531,10 +531,20 @@ class AgoraWorkspace:
             ),
             created_at=self._timestamp(),
             gate_decision_ttl_seconds=data.gate_decision_ttl_seconds,
+            active_flavor=data.active_flavor,
+            active_profile=data.active_profile,
+            active_depth=data.active_depth,
         )
         self._assert_integration(configuration.integration)
         self._assert_delegation_depth(configuration.max_delegation_depth)
         self._assert_gate_decision_ttl(configuration.gate_decision_ttl_seconds)
+        for label, value in (
+            ("Active flavor", configuration.active_flavor),
+            ("Active profile", configuration.active_profile),
+            ("Active depth", configuration.active_depth),
+        ):
+            if value is not None:
+                assert_slug(value, label)
         self._assert_method_available(
             configuration.default_method,
             packs_root() / "methods",
@@ -556,6 +566,21 @@ class AgoraWorkspace:
                         "default-method": configuration.default_method,
                         "max-delegation-depth": configuration.max_delegation_depth,
                         "gate-decision-ttl-seconds": (configuration.gate_decision_ttl_seconds or 0),
+                        **(
+                            {"active-flavor": configuration.active_flavor}
+                            if configuration.active_flavor is not None
+                            else {}
+                        ),
+                        **(
+                            {"active-profile": configuration.active_profile}
+                            if configuration.active_profile is not None
+                            else {}
+                        ),
+                        **(
+                            {"active-depth": configuration.active_depth}
+                            if configuration.active_depth is not None
+                            else {}
+                        ),
                         "created-at": configuration.created_at,
                     },
                     body=(
@@ -16234,6 +16259,16 @@ class AgoraWorkspace:
             raise ValueError(
                 f"Project gate-decision-ttl-seconds must be a non-negative integer: {path}"
             )
+        optional_selection: dict[str, str | None] = {}
+        for field in ("active-flavor", "active-profile", "active-depth"):
+            value = attributes.get(field)
+            if value is None:
+                optional_selection[field] = None
+                continue
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Project {field} must be a non-empty string: {path}")
+            assert_slug(value, f"Project {field}")
+            optional_selection[field] = value
         return ProjectConfiguration(
             project=string_attribute(attributes, "project"),
             version=validate_version(string_attribute(attributes, "version")),
@@ -16244,6 +16279,9 @@ class AgoraWorkspace:
             max_delegation_depth=self._delegation_depth(attributes),
             created_at=string_attribute(attributes, "created-at"),
             gate_decision_ttl_seconds=raw_ttl or None,
+            active_flavor=optional_selection["active-flavor"],
+            active_profile=optional_selection["active-profile"],
+            active_depth=optional_selection["active-depth"],
         )
 
     def _install_integration(

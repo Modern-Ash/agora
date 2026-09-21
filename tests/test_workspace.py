@@ -4842,3 +4842,48 @@ def test_next_gate_readiness_previews_gate_requirements(
     transition = readiness["transitions"][0]
     assert transition["target_state"] == "planned"
     assert "gate" in transition
+
+
+def test_project_active_flavor_selection_round_trips_from_initialization(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = tmp_path / "selected-project"
+    workspace = AgoraWorkspace(cwd=root)
+    configuration = workspace.initialize(
+        InitInput(
+            integration="generic",
+            provider="local",
+            model="local",
+            default_method="spec-driven",
+            active_flavor="ai-sdlc",
+            active_profile="lg-enterprise",
+            active_depth="regulated",
+        )
+    )
+
+    assert configuration.active_flavor == "ai-sdlc"
+    assert configuration.active_profile == "lg-enterprise"
+    assert configuration.active_depth == "regulated"
+
+    loaded = workspace.show_project()
+    assert loaded.active_flavor == "ai-sdlc"
+    assert loaded.active_profile == "lg-enterprise"
+    assert loaded.active_depth == "regulated"
+
+
+def test_project_without_active_flavor_selection_remains_backward_compatible(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGORA_HOME", str(tmp_path / "home"))
+    root = tmp_path / "legacy-project"
+    workspace = AgoraWorkspace(cwd=root)
+    workspace.initialize(
+        InitInput(
+            integration="generic",
+            provider="local",
+            model="local",
+            default_method="spec-driven",
+        )
+    )
+
+    loaded = workspace.show_project()
+    assert loaded.active_flavor is None
+    assert loaded.active_profile is None
+    assert loaded.active_depth is None
