@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from test_adr_0002 import _project
+import test_adr_0002
 
 from agora.application import AgoraReadService
 from agora.model import AddUsageInput
@@ -31,7 +31,7 @@ def _by_key(items):
 
 
 def test_unknown_metric_key_is_unavailable_not_zero(tmp_path: Path, monkeypatch) -> None:
-    workspace = _project(tmp_path, monkeypatch)
+    workspace = test_adr_0002._project(tmp_path, monkeypatch)
     service = AgoraReadService(workspace)
 
     item = service.metric_windows(
@@ -51,7 +51,7 @@ def test_unknown_metric_key_is_unavailable_not_zero(tmp_path: Path, monkeypatch)
 def test_known_usage_dimension_can_be_available_zero_in_empty_window(
     tmp_path: Path, monkeypatch
 ) -> None:
-    workspace = _project(tmp_path, monkeypatch)
+    workspace = test_adr_0002._project(tmp_path, monkeypatch)
     _usage(workspace, "known-tokens", {"tokens": 10}, "measured")
     service = AgoraReadService(workspace)
 
@@ -70,7 +70,7 @@ def test_known_usage_dimension_can_be_available_zero_in_empty_window(
 
 
 def test_unknown_measurement_marks_usage_window_partial(tmp_path: Path, monkeypatch) -> None:
-    workspace = _project(tmp_path, monkeypatch)
+    workspace = test_adr_0002._project(tmp_path, monkeypatch)
     _usage(workspace, "measured", {"tokens": 10}, "measured")
     _usage(workspace, "legacy", {"tokens": 5})
     service = AgoraReadService(workspace)
@@ -93,7 +93,7 @@ def test_unknown_measurement_marks_usage_window_partial(tmp_path: Path, monkeypa
 def test_populated_windows_preserve_provider_neutral_sources_and_measurement(
     tmp_path: Path, monkeypatch
 ) -> None:
-    workspace = _project(tmp_path, monkeypatch)
+    workspace = test_adr_0002._project(tmp_path, monkeypatch)
     _usage(workspace, "m1", {"cost-cents": 7}, "measured")
     _usage(workspace, "r1", {"cost-cents": 3}, "provider-reported")
     service = AgoraReadService(workspace)
@@ -124,7 +124,7 @@ def test_populated_windows_preserve_provider_neutral_sources_and_measurement(
 def test_flavor_projection_context_contains_derived_metric_windows(
     tmp_path: Path, monkeypatch
 ) -> None:
-    workspace = _project(tmp_path, monkeypatch)
+    workspace = test_adr_0002._project(tmp_path, monkeypatch)
     _usage(workspace, "m1", {"tokens": 12}, "measured")
     service = AgoraReadService(workspace)
 
