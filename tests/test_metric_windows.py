@@ -87,7 +87,7 @@ def test_unknown_measurement_marks_usage_window_partial(tmp_path: Path, monkeypa
     assert item.value == 15
     assert item.count == 2
     assert item.measurement == "unknown"
-    assert item.source_refs == ("usage:measured", "usage:legacy")
+    assert item.source_refs == ("usage:legacy", "usage:measured")
 
 
 def test_populated_windows_preserve_provider_neutral_sources_and_measurement(
@@ -135,4 +135,8 @@ def test_flavor_projection_context_contains_derived_metric_windows(
     assert metrics["usage.tokens"].measurement == "measured"
     assert metrics["usage.tokens"].status == "available"
     assert "artifacts.count" in metrics
-    assert all(not ref.startswith(("/", "file:", "http:", "https:")) for item in context.metrics for ref in item.source_refs)
+    assert all(
+        not ref.startswith(("/", "file:", "http:", "https:"))
+        for item in context.metrics
+        for ref in item.source_refs
+    )
