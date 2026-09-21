@@ -890,7 +890,7 @@ def test_rejects_repository_artifact_paths_resolving_outside_project(
     artifacts_path = swarm_dir(root, "delivery") / "work" / "read-boundary" / "artifacts.md"
     artifacts_path.write_text(
         f"{artifacts_path.read_text(encoding='utf-8').rstrip()}\n"
-        "| test-report | repo://escape.txt | none | project:developer | none | "
+        "| test-report | repo://escape.txt | none | project:developer | "
         f"{TIMESTAMP.isoformat()} |\n",
         encoding="utf-8",
     )
@@ -910,7 +910,7 @@ def test_specification_revision_rejects_repository_uri_traversal(
     artifacts_path = swarm_dir(root, "delivery") / "work" / "read-boundary" / "artifacts.md"
     artifacts_path.write_text(
         f"{artifacts_path.read_text(encoding='utf-8').rstrip()}\n"
-        f"| spec | repo://../outside.md | none | project:developer | none | {TIMESTAMP.isoformat()} |\n",
+        f"| spec | repo://../outside.md | none | project:developer | {TIMESTAMP.isoformat()} |\n",
         encoding="utf-8",
     )
 
