@@ -247,7 +247,6 @@ def test_produces_complete_path_free_projection_from_real_application_services(
     assert "repo://" not in projection.to_json()
 
 
-
 def test_projector_context_exposes_optional_active_flavor_selection(projection_project):
     root, _ = projection_project
     project_file = root / ".agora" / "project.md"
