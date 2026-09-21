@@ -6317,11 +6317,26 @@ class AgoraWorkspace:
                 ArtifactRecord(kind=row[0], uri=row[1], produced_by=row[2], timestamp=row[3])
                 for row in rows
             ]
-        if schema != "agora/artifacts/v2":
+        if schema == "agora/artifacts/v2":
+            rows = cls._markdown_table_rows(
+                document.body,
+                ("Kind", "URI", "Content SHA-256", "Produced by", "Timestamp"),
+            )
+            return [
+                ArtifactRecord(
+                    kind=row[0],
+                    uri=row[1],
+                    content_sha256=cls._optional_content_sha256(row[2]),
+                    produced_by=row[3],
+                    timestamp=row[4],
+                )
+                for row in rows
+            ]
+        if schema != "agora/artifacts/v3":
             raise ValueError(f"Unsupported artifacts schema: {schema}")
         rows = cls._markdown_table_rows(
             document.body,
-            ("Kind", "URI", "Content SHA-256", "Produced by", "Timestamp"),
+            ("Kind", "URI", "Content SHA-256", "Produced by", "Session", "Timestamp"),
         )
         return [
             ArtifactRecord(
@@ -6329,7 +6344,8 @@ class AgoraWorkspace:
                 uri=row[1],
                 content_sha256=cls._optional_content_sha256(row[2]),
                 produced_by=row[3],
-                timestamp=row[4],
+                session_id=None if row[4] == "none" else row[4],
+                timestamp=row[5],
             )
             for row in rows
         ]
@@ -6357,7 +6373,32 @@ class AgoraWorkspace:
                 )
                 for row in rows
             ]
-        if schema != "agora/evidence/v2":
+        if schema == "agora/evidence/v2":
+            rows = cls._markdown_table_rows(
+                document.body,
+                (
+                    "Type",
+                    "Result",
+                    "Artifact references",
+                    "Content SHA-256",
+                    "Produced by",
+                    "Timestamp",
+                ),
+            )
+            return [
+                EvidenceRecord(
+                    type=row[0],
+                    result=row[1],
+                    artifact_references=(
+                        [] if row[2] == "none" else [item.strip() for item in row[2].split(", ")]
+                    ),
+                    artifact_content_sha256=cls._evidence_digest_map(row[2], row[3]),
+                    produced_by=row[4],
+                    timestamp=row[5],
+                )
+                for row in rows
+            ]
+        if schema != "agora/evidence/v3":
             raise ValueError(f"Unsupported evidence schema: {schema}")
         rows = cls._markdown_table_rows(
             document.body,
@@ -6367,6 +6408,7 @@ class AgoraWorkspace:
                 "Artifact references",
                 "Content SHA-256",
                 "Produced by",
+                "Session",
                 "Timestamp",
             ),
         )
@@ -6379,7 +6421,8 @@ class AgoraWorkspace:
                 ),
                 artifact_content_sha256=cls._evidence_digest_map(row[2], row[3]),
                 produced_by=row[4],
-                timestamp=row[5],
+                session_id=None if row[5] == "none" else row[5],
+                timestamp=row[6],
             )
             for row in rows
         ]
@@ -6408,13 +6451,13 @@ class AgoraWorkspace:
     @staticmethod
     def _render_artifact_register(records: list[ArtifactRecord]) -> str:
         body = (
-            "# Artifacts\n\n| Kind | URI | Content SHA-256 | Produced by | Timestamp |\n"
-            "| --- | --- | --- | --- | --- |"
+            "# Artifacts\n\n| Kind | URI | Content SHA-256 | Produced by | Session | Timestamp |\n"
+            "| --- | --- | --- | --- | --- | --- |"
         )
         for record in records:
             body += (
                 f"\n| {record.kind} | {record.uri} | {record.content_sha256 or 'none'} | "
-                f"{record.produced_by} | {record.timestamp} |"
+                f"{record.produced_by} | {record.session_id or 'none'} | {record.timestamp} |"
             )
         return body
 
@@ -6734,7 +6777,7 @@ class AgoraWorkspace:
     def _render_evidence_register(records: list[EvidenceRecord]) -> str:
         body = (
             "# Evidence\n\n| Type | Result | Artifact references | Content SHA-256 | "
-            "Produced by | Timestamp |\n| --- | --- | --- | --- | --- | --- |"
+            "Produced by | Session | Timestamp |\n| --- | --- | --- | --- | --- | --- | --- |"
         )
         for record in records:
             references = ", ".join(record.artifact_references) or "none"
@@ -6747,7 +6790,7 @@ class AgoraWorkspace:
             )
             body += (
                 f"\n| {record.type} | {record.result} | {references} | {digests} | "
-                f"{record.produced_by} | {record.timestamp} |"
+                f"{record.produced_by} | {record.session_id or 'none'} | {record.timestamp} |"
             )
         return body
 
