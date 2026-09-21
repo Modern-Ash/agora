@@ -18283,7 +18283,16 @@ class AgoraWorkspace:
             {"usage", "amounts", "evidence", "measurement"},
         )
         legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
-        legacy_artifact_parameters = action == "artifact.add" and parameter_keys == {"kind", "uri"}
+        optional_artifact_parameters = action == "artifact.add" and parameter_keys in (
+            {"kind", "uri", "content-sha256"},
+            {"kind", "uri", "content-sha256", "session"},
+            {"kind", "uri"},
+            {"kind", "uri", "session"},
+        )
+        optional_evidence_parameters = action == "evidence.add" and parameter_keys in (
+            {"type", "result", "artifacts"},
+            {"type", "result", "artifacts", "session"},
+        )
         legacy_criterion_parameters = action == "criterion.satisfy" and parameter_keys == {
             "criterion"
         }
@@ -18317,7 +18326,8 @@ class AgoraWorkspace:
             and not optional_usage_parameters
             and not legacy_delegation_parameters
             and not legacy_approval_parameters
-            and not legacy_artifact_parameters
+            and not optional_artifact_parameters
+            and not optional_evidence_parameters
             and not legacy_criterion_parameters
             and not legacy_session_parameters
             and not legacy_actor_runtime_parameters
@@ -18472,6 +18482,8 @@ class AgoraWorkspace:
                 not isinstance(value, str) for value in artifacts
             ):
                 raise ValueError(f"Lifecycle Action has invalid work required artifacts: {path}")
+        if action in {"artifact.add", "evidence.add"} and parameters.get("session"):
+            assert_slug(parameters["session"], "Lifecycle Action session id")
         if action == "evidence.add":
             if parameters["result"] not in {"success", "failure"}:
                 raise ValueError(f"Lifecycle Action has invalid evidence result: {path}")
