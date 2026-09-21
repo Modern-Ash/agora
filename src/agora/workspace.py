@@ -17160,11 +17160,13 @@ class AgoraWorkspace:
         if string_attribute(artifacts.attributes, "schema") not in {
             "agora/artifacts/v1",
             "agora/artifacts/v2",
+            "agora/artifacts/v3",
         }:
             raise ValueError(f"Artifacts schema is unsupported: {path / 'artifacts.md'}")
         if string_attribute(evidence.attributes, "schema") not in {
             "agora/evidence/v1",
             "agora/evidence/v2",
+            "agora/evidence/v3",
         }:
             raise ValueError(f"Evidence schema is unsupported: {path / 'evidence.md'}")
         approvals_path = path / "approvals.md"
