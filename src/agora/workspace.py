@@ -5273,8 +5273,28 @@ class AgoraWorkspace:
                 "uri": data.uri,
                 "content-sha256": self._artifact_content_sha256(root, data.uri, data.content_sha256)
                 or "",
+                **({"session": data.session_id} if data.session_id is not None else {}),
             },
         )
+
+    def _validate_recording_session(
+        self,
+        root: Path,
+        work: WorkRecord,
+        actor: ActorRecord,
+        session_id: str | None,
+    ) -> None:
+        if session_id is None:
+            return
+        assert_slug(session_id, "Session id")
+        session = self._load_session(root / ".agora" / "sessions" / session_id)
+        if session.swarm_id != work.swarm_id or session.work_id != work.id:
+            raise ValueError("Recording Session must belong to the same work item")
+        executor = session.executor or session.actor
+        if executor != actor.reference:
+            raise PermissionError(
+                f"Recording actor {actor.reference} must match Session executor {executor}"
+            )
 
     def _validate_add_artifact(
         self, root: Path, data: AddArtifactInput
@@ -5287,6 +5307,7 @@ class AgoraWorkspace:
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "artifact.add")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        self._validate_recording_session(root, work, actor, data.session_id)
         return swarm, actor, work
 
     def _apply_add_artifact(
@@ -5303,6 +5324,7 @@ class AgoraWorkspace:
             data.uri,
             actor.reference,
             self._artifact_content_sha256(root, data.uri, data.content_sha256),
+            data.session_id,
         )
         return self._load_work(swarm, data.work_id)
 
@@ -5313,9 +5335,12 @@ class AgoraWorkspace:
         uri: str,
         actor_reference: str,
         content_sha256: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         with filesystem_transaction():
-            self._record_artifact_writes(work, kind, uri, actor_reference, content_sha256)
+            self._record_artifact_writes(
+                work, kind, uri, actor_reference, content_sha256, session_id
+            )
 
     def _record_artifact_writes(
         self,
@@ -5324,6 +5349,7 @@ class AgoraWorkspace:
         uri: str,
         actor_reference: str,
         content_sha256: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         path = Path(work.path) / "artifacts.md"
         pending = staged_contents(path)
@@ -5331,15 +5357,15 @@ class AgoraWorkspace:
         kinds = strings_attribute(document.attributes, "artifact-kinds")
         document.attributes["artifact-kinds"] = list(dict.fromkeys([*kinds, kind]))
         schema = string_attribute(document.attributes, "schema")
-        if schema == "agora/artifacts/v1":
-            document.attributes["schema"] = "agora/artifacts/v2"
+        if schema in {"agora/artifacts/v1", "agora/artifacts/v2"}:
             existing = self._work_artifact_records(work)
+            document.attributes["schema"] = "agora/artifacts/v3"
             document.body = self._render_artifact_register(existing)
-        elif schema != "agora/artifacts/v2":
+        elif schema != "agora/artifacts/v3":
             raise ValueError(f"Unsupported artifacts schema: {schema}")
         document.body = (
             f"{document.body.rstrip()}\n| {kind} | {uri} | {content_sha256 or 'none'} | "
-            f"{actor_reference} | {self._timestamp()} |"
+            f"{actor_reference} | {session_id or 'none'} | {self._timestamp()} |"
         )
         atomic_write(path, render_markdown(document))
         self._append_work_event(
@@ -6106,6 +6132,7 @@ class AgoraWorkspace:
                 "artifacts": json.dumps(
                     data.artifact_refs, ensure_ascii=True, separators=(",", ":")
                 ),
+                **({"session": data.session_id} if data.session_id is not None else {}),
             },
         )
 
@@ -6145,6 +6172,7 @@ class AgoraWorkspace:
         actor = self._require_actor_for_action(root, swarm, data.actor_id, "evidence.add")
         work = self._load_work(swarm, data.work_id)
         self._assert_work_mutable(root, swarm, work)
+        self._validate_recording_session(root, work, actor, data.session_id)
         references = [item.strip() for item in data.artifact_refs]
         if any(not item for item in references):
             raise ValueError("Evidence artifact references cannot be empty")
@@ -6624,15 +6652,16 @@ class AgoraWorkspace:
             or "none"
         )
         schema = string_attribute(document.attributes, "schema")
-        if schema == "agora/evidence/v1":
-            document.attributes["schema"] = "agora/evidence/v2"
-            document.body = self._render_evidence_register(self._work_evidence_records(work))
-        elif schema != "agora/evidence/v2":
+        if schema in {"agora/evidence/v1", "agora/evidence/v2"}:
+            existing = self._work_evidence_records(work)
+            document.attributes["schema"] = "agora/evidence/v3"
+            document.body = self._render_evidence_register(existing)
+        elif schema != "agora/evidence/v3":
             raise ValueError(f"Unsupported evidence schema: {schema}")
         timestamp = self._timestamp()
         document.body = (
             f"{document.body.rstrip()}\n| {type_} | {result} | {references} | {digest_values} | "
-            f"{actor_reference} | {timestamp} |"
+            f"{actor_reference} | {(data.session_id if data is not None else None) or 'none'} | {timestamp} |"
         )
         atomic_write(path, render_markdown(document))
         evidence_data = data or AddEvidenceInput(
@@ -6667,6 +6696,7 @@ class AgoraWorkspace:
             tests_failed=evidence_data.tests_failed,
             environment=evidence_data.environment,
             dedupe_key=evidence_data.dedupe_key,
+            session_id=evidence_data.session_id,
         )
         write_new(
             evidence_root / evidence_id / "EVIDENCE.md",
@@ -6702,6 +6732,7 @@ class AgoraWorkspace:
                     "tests-failed": record.tests_failed,
                     "environment": record.environment,
                     "dedupe-key": record.dedupe_key,
+                    "session": record.session_id,
                 },
                 body=(
                     f"# Evidence {record.id}\n\n"
@@ -6748,6 +6779,7 @@ class AgoraWorkspace:
             tests_failed=_optional_integer_attribute(document.attributes, "tests-failed"),
             environment=optional_string_attribute(document.attributes, "environment"),
             dedupe_key=optional_string_attribute(document.attributes, "dedupe-key"),
+            session_id=optional_string_attribute(document.attributes, "session"),
         )
 
     @classmethod
@@ -6771,6 +6803,7 @@ class AgoraWorkspace:
             and record.tests_passed == data.tests_passed
             and record.tests_failed == data.tests_failed
             and record.environment == data.environment
+            and record.session_id == data.session_id
         )
 
     @staticmethod
@@ -8611,6 +8644,7 @@ class AgoraWorkspace:
                 kind=record.parameters["kind"],
                 uri=record.parameters["uri"],
                 content_sha256=record.parameters.get("content-sha256") or None,
+                session_id=record.parameters.get("session") or None,
             )
             swarm, actor, work = self._validate_add_artifact(root, artifact)
             artifact_context = (artifact, swarm, actor, work)
@@ -8625,6 +8659,7 @@ class AgoraWorkspace:
                 type=record.parameters["type"],
                 result=record.parameters["result"],
                 artifact_refs=self._string_list_parameter(record, "artifacts"),
+                session_id=record.parameters.get("session") or None,
             )
             swarm, actor, work = self._validate_add_evidence(root, evidence)
             evidence_context = (evidence, swarm, actor, work)
