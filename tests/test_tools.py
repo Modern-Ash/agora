@@ -146,6 +146,18 @@ def test_loads_the_github_issues_cli_adapter_and_restricts_transitions() -> None
     assert contract.provider == "github"
     assert contract.transport == "cli"
     assert contract.implements == "work-management"
+    search = contract.operations["search"]
+    assert search.inputs == ["query", "project", "state"]
+    assert search.input_values == {"state": ["open", "closed"]}
+    assert search.arguments[:7] == [
+        "search",
+        "issues",
+        "{query}",
+        "--repo",
+        "{project}",
+        "--state",
+        "{state}",
+    ]
     transition = contract.operations["transition"]
     assert transition.input_values == {"state": ["close", "reopen"]}
     validate_operation_inputs(transition, {"issue": "42", "state": "close"})
