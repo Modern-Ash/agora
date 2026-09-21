@@ -374,6 +374,21 @@ class UsageSummaryProjection(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class MetricWindowSummary(SerializableDTO):
+    """Provider-neutral metric fact derived from durable Core records over one time window."""
+
+    key: str
+    start: str
+    end: str
+    value: int | None
+    count: int
+    status: str
+    source_refs: tuple[str, ...] = ()
+    measurement: str | None = None
+    schema: str = field(default="agora/application/metric-window-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
 class TraceabilitySummary(SerializableDTO):
     swarm_id: str
     work_id: str

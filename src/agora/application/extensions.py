@@ -10,6 +10,7 @@ from agora.application.dto import (
     ActorSummary,
     ClarificationsProjection,
     LifecycleProjection,
+    MetricWindowSummary,
     SerializableDTO,
     SessionSummary,
     TraceabilitySummary,
