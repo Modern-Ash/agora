@@ -30,6 +30,7 @@ from agora.application.dto import (
     LifecycleProjection,
     MethodStateSummary,
     MethodSummary,
+    MetricWindowSummary,
     ProjectOverview,
     SessionProvenanceSummary,
     SessionSummary,
@@ -423,6 +424,173 @@ class AgoraReadService:
 
         return self._read(f"usage {swarm_id}/{work_id}", read)
 
+    @staticmethod
+    def _metric_timestamp(value: str, label: str) -> datetime:
+        if not isinstance(value, str) or not value:
+            raise InvalidReadQueryError(f"{label} must be a timezone-aware timestamp")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise InvalidReadQueryError(f"{label} must be an ISO-8601 timestamp") from error
+        if parsed.tzinfo is None:
+            raise InvalidReadQueryError(f"{label} must be timezone-aware")
+        return parsed.astimezone(UTC)
+
+    @staticmethod
+    def _metric_time(value: datetime) -> str:
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _metric_source_ref(kind: str, *parts: str | None) -> str:
+        safe = [str(part).replace(":", "_") for part in parts if part]
+        return f"{kind}:" + ":".join(safe)
+
+    def metric_windows(
+        self,
+        swarm_id: str,
+        work_id: str,
+        *,
+        start: str,
+        end: str,
+        keys: tuple[str, ...] = (),
+    ) -> tuple[MetricWindowSummary, ...]:
+        """Derive provider-neutral metric facts from existing durable Core records."""
+
+        self._require_work_slugs(swarm_id, work_id)
+        start_at = self._metric_timestamp(start, "Metric window start")
+        end_at = self._metric_timestamp(end, "Metric window end")
+        if start_at > end_at:
+            raise InvalidReadQueryError("Metric window start must not be after end")
+
+        work = self.get_work_item(swarm_id, work_id)
+        sessions = tuple(
+            item
+            for item in self.list_sessions()
+            if item.swarm_id == swarm_id and item.work_id == work_id
+        )
+        usage_records = tuple(self._workspace.list_usage(swarm_id, work_id))
+
+        def within(timestamp: str) -> bool:
+            value = self._metric_timestamp(timestamp, "Durable record timestamp")
+            return start_at <= value <= end_at
+
+        artifacts = tuple(item for item in work.artifacts if within(item.timestamp))
+        evidence = tuple(item for item in work.evidence if within(item.timestamp))
+        approvals = tuple(item for item in work.approvals if within(item.timestamp))
+        window_sessions = tuple(item for item in sessions if within(item.created_at))
+        window_usage = tuple(item for item in usage_records if within(item.created_at))
+
+        base: dict[str, tuple[int, tuple[str, ...]]] = {
+            "artifacts.count": (
+                len(artifacts),
+                tuple(
+                    self._metric_source_ref("artifact", item.content_sha256, item.kind, item.timestamp)
+                    for item in artifacts
+                ),
+            ),
+            "evidence.count": (
+                len(evidence),
+                tuple(
+                    self._metric_source_ref("evidence", item.type, item.timestamp)
+                    for item in evidence
+                ),
+            ),
+            "evidence.success.count": (
+                sum(item.result == "success" for item in evidence),
+                tuple(
+                    self._metric_source_ref("evidence", item.type, item.timestamp)
+                    for item in evidence
+                    if item.result == "success"
+                ),
+            ),
+            "evidence.failure.count": (
+                sum(item.result == "failure" for item in evidence),
+                tuple(
+                    self._metric_source_ref("evidence", item.type, item.timestamp)
+                    for item in evidence
+                    if item.result == "failure"
+                ),
+            ),
+            "approvals.count": (
+                len(approvals),
+                tuple(
+                    self._metric_source_ref("approval", item.role, item.timestamp)
+                    for item in approvals
+                ),
+            ),
+            "sessions.count": (
+                len(window_sessions),
+                tuple(self._metric_source_ref("session", item.id) for item in window_sessions),
+            ),
+            "sessions.completed.count": (
+                sum(item.status == "completed" for item in window_sessions),
+                tuple(
+                    self._metric_source_ref("session", item.id)
+                    for item in window_sessions
+                    if item.status == "completed"
+                ),
+            ),
+        }
+
+        usage_dimensions = set(work.budget_limits or {})
+        for record in usage_records:
+            usage_dimensions.update(record.amounts)
+        available_keys = set(base) | {f"usage.{dimension}" for dimension in usage_dimensions}
+        selected = tuple(sorted(available_keys)) if not keys else tuple(dict.fromkeys(keys))
+        start_text, end_text = self._metric_time(start_at), self._metric_time(end_at)
+
+        results: list[MetricWindowSummary] = []
+        rank = {"measured": 2, "provider-reported": 1, "unknown": 0}
+        basis = {value: name for name, value in rank.items()}
+        for key in selected:
+            if key in base:
+                value, refs = base[key]
+                results.append(
+                    MetricWindowSummary(
+                        key=key,
+                        start=start_text,
+                        end=end_text,
+                        value=value,
+                        count=value,
+                        status="available",
+                        source_refs=refs,
+                    )
+                )
+                continue
+            if not key.startswith("usage.") or key not in available_keys:
+                results.append(
+                    MetricWindowSummary(
+                        key=key,
+                        start=start_text,
+                        end=end_text,
+                        value=None,
+                        count=0,
+                        status="unavailable",
+                    )
+                )
+                continue
+            dimension = key.removeprefix("usage.")
+            contributors = tuple(record for record in window_usage if dimension in record.amounts)
+            value = sum(record.amounts[dimension] for record in contributors)
+            levels = [rank[record.measurement or "unknown"] for record in contributors]
+            measurement = basis[min(levels)] if levels else None
+            status = "partial" if measurement == "unknown" and contributors else "available"
+            results.append(
+                MetricWindowSummary(
+                    key=key,
+                    start=start_text,
+                    end=end_text,
+                    value=value,
+                    count=len(contributors),
+                    status=status,
+                    source_refs=tuple(
+                        self._metric_source_ref("usage", record.id) for record in contributors
+                    ),
+                    measurement=measurement,
+                )
+            )
+        return tuple(results)
+
     def work_traceability(self, swarm_id: str, work_id: str) -> TraceabilitySummary:
         self._require_work_slugs(swarm_id, work_id)
 
@@ -644,6 +812,12 @@ class AgoraReadService:
             traceability=self.work_traceability(swarm_id, work_id),
             sessions=sessions,
             usage=self.usage_summary(swarm_id, work_id),
+            metrics=self.metric_windows(
+                swarm_id,
+                work_id,
+                start=configuration.created_at,
+                end=self._timestamp(),
+            ),
         )
 
     def _validate_flavor_contribution(
