@@ -566,9 +566,21 @@ class AgoraWorkspace:
                         "default-method": configuration.default_method,
                         "max-delegation-depth": configuration.max_delegation_depth,
                         "gate-decision-ttl-seconds": (configuration.gate_decision_ttl_seconds or 0),
-                        **({"active-flavor": configuration.active_flavor} if configuration.active_flavor is not None else {}),
-                        **({"active-profile": configuration.active_profile} if configuration.active_profile is not None else {}),
-                        **({"active-depth": configuration.active_depth} if configuration.active_depth is not None else {}),
+                        **(
+                            {"active-flavor": configuration.active_flavor}
+                            if configuration.active_flavor is not None
+                            else {}
+                        ),
+                        **(
+                            {"active-profile": configuration.active_profile}
+                            if configuration.active_profile is not None
+                            else {}
+                        ),
+                        **(
+                            {"active-depth": configuration.active_depth}
+                            if configuration.active_depth is not None
+                            else {}
+                        ),
                         "created-at": configuration.created_at,
                     },
                     body=(
@@ -6694,8 +6706,8 @@ class AgoraWorkspace:
             elif schema != "agora/evidence/v3":
                 raise ValueError(f"Unsupported evidence schema: {schema}")
             document.body = (
-                f"{document.body.rstrip()}\n| {type_} | {result} | {references} | {digest_values} | "
-                f"{actor_reference} | {session_id} | {timestamp} |"
+                f"{document.body.rstrip()}\n| {type_} | {result} | {references} | "
+                f"{digest_values} | {actor_reference} | {session_id} | {timestamp} |"
             )
         else:
             if schema == "agora/evidence/v1":
