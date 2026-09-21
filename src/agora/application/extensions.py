@@ -30,6 +30,16 @@ class FlavorProjectContext(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class FlavorSelectionSummary(SerializableDTO):
+    """Optional provider-neutral active flavor/profile/depth selection."""
+
+    flavor: str | None
+    profile: str | None
+    depth: str | None
+    schema: str = field(default="agora/application/flavor-selection-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
 class FlavorProjectionContext(SerializableDTO):
     """Core-owned facts available to a flavor projector for one work item."""
 
@@ -40,6 +50,7 @@ class FlavorProjectionContext(SerializableDTO):
     traceability: TraceabilitySummary
     sessions: tuple[SessionSummary, ...]
     usage: UsageSummaryProjection
+    selection: FlavorSelectionSummary | None = None
     schema: str = field(default="agora/application/flavor-projection-context/v1", init=False)
 
 
