@@ -47,6 +47,7 @@ audit remains in the existing Markdown records and Activity Ledger.
 | `approvals()` | `agora/application/approval-summary/v2` |
 | `activity()` | `agora/application/activity-entry/v1` |
 | `work_traceability()` | `agora/application/traceability-summary/v2` |
+| `usage_summary()` | `agora/application/usage-summary/v1` |
 | `clarifications()` | `agora/application/clarifications-projection/v1` |
 | `specification_history()` | `agora/application/specification-summary/v1` |
 | `specification_revision()` | `agora/application/specification-revision-detail/v1` |
@@ -146,7 +147,7 @@ It does not invent answer provenance.
 boundary for an installed flavor. Projectors are passed to `AgoraReadService(...,
 flavor_projectors=(projector,))`; each declares one top-level schema and its required flavor-owned
 sections plus a self-contained JSON Schema with local references only. A projector receives an
-immutable `FlavorProjectionContext` containing public Core DTOs and a minimal project-local context;
+immutable `FlavorProjectionContext` containing public Core DTOs (work, lifecycle, clarifications, traceability, sessions and the work's `usage_summary()`) and a minimal project-local context;
 it does not receive global user state or a project path. Projectors must derive output solely from
 that context. They must not parse `.agora/`, perform network access, or recalculate lifecycle
 authority.

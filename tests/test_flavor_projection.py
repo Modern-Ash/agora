@@ -499,3 +499,61 @@ def test_projection_snapshot_is_stable_across_observation_times(projection_proje
     assert first.generated_at != later.generated_at
     assert first.project["snapshot"] == later.project["snapshot"]
     assert json.loads(first.to_json()) == first.to_dict()
+
+
+def _record_usage(workspace, usage_id, amounts, measurement=None):
+    from agora.model import AddUsageInput
+
+    return workspace.add_usage(
+        AddUsageInput(
+            id=usage_id,
+            swarm_id="delivery",
+            work_id="projection",
+            actor_id="developer",
+            amounts=amounts,
+            evidence_refs=["repo://evidence/metering.md"],
+            measurement=measurement,
+        )
+    )
+
+
+def test_projector_context_carries_core_usage_with_the_weakest_measurement_basis(
+    projection_project,
+):
+    _, workspace = projection_project
+    projector = ExampleProjector()
+    service = service_for(workspace, projector)
+
+    service.flavor_projection(SCHEMA, "selected-usage", "delivery", "projection")
+    empty = projector.contexts[-1].usage
+    assert (empty.records, dict(empty.consumed), dict(empty.consumed_measurement)) == (0, {}, {})
+
+    _record_usage(workspace, "m1", {"tokens": 10, "cost-cents": 5}, "measured")
+    _record_usage(workspace, "r1", {"tokens": 4}, "provider-reported")
+    _record_usage(workspace, "legacy", {"cost-cents": 1})
+    service.flavor_projection(SCHEMA, "selected-usage", "delivery", "projection")
+    usage = projector.contexts[-1].usage
+
+    assert usage.schema == "agora/application/usage-summary/v1"
+    assert usage.records == 3 and dict(usage.consumed) == {"cost-cents": 6, "tokens": 14}
+    assert dict(usage.consumed_measurement) == {
+        "cost-cents": "unknown",
+        "tokens": "provider-reported",
+    }
+    assert usage.budget_limits is None and usage.remaining is None
+    assert json.loads(usage.to_json())["consumed_measurement"]["tokens"] == "provider-reported"
+
+
+def test_usage_summary_is_a_public_read_with_validated_scope(projection_project):
+    _, workspace = projection_project
+    service = AgoraReadService(workspace, now=lambda: TIMESTAMP)
+    _record_usage(workspace, "m1", {"tokens": 10}, "measured")
+
+    summary = service.usage_summary("delivery", "projection")
+    assert summary.consumed_measurement == {"tokens": "measured"}
+    assert summary.swarm_id == "delivery" and summary.work_id == "projection"
+
+    with pytest.raises(InvalidReadQueryError):
+        service.usage_summary("../escape", "projection")
+    with pytest.raises(ReadResourceNotFoundError):
+        service.usage_summary("delivery", "missing-work")

@@ -345,6 +345,20 @@ class ActivityEntry(SerializableDTO):
 
 
 @dataclass(frozen=True)
+class UsageSummaryProjection(SerializableDTO):
+    """Durable usage totals for one work item with the weakest measurement basis per dimension."""
+
+    swarm_id: str
+    work_id: str
+    budget_limits: Mapping[str, int] | None
+    consumed: Mapping[str, int]
+    remaining: Mapping[str, int] | None
+    records: int
+    consumed_measurement: Mapping[str, str]
+    schema: str = field(default="agora/application/usage-summary/v1", init=False)
+
+
+@dataclass(frozen=True)
 class TraceabilitySummary(SerializableDTO):
     swarm_id: str
     work_id: str

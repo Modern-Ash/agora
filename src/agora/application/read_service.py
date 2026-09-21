@@ -39,6 +39,7 @@ from agora.application.dto import (
     SwarmSummary,
     TraceabilitySummary,
     TransitionSummary,
+    UsageSummaryProjection,
     WorkControlProjection,
     WorkInspection,
     WorkInspectionBlocker,
@@ -405,6 +406,23 @@ class AgoraReadService:
             ),
         )
 
+    def usage_summary(self, swarm_id: str, work_id: str) -> UsageSummaryProjection:
+        self._require_work_slugs(swarm_id, work_id)
+
+        def read() -> UsageSummaryProjection:
+            record = self._workspace.summarize_usage(swarm_id, work_id)
+            return UsageSummaryProjection(
+                swarm_id=record.swarm_id,
+                work_id=record.work_id,
+                budget_limits=None if record.budget_limits is None else dict(record.budget_limits),
+                consumed=dict(record.consumed),
+                remaining=None if record.remaining is None else dict(record.remaining),
+                records=record.records,
+                consumed_measurement=dict(record.consumed_measurement),
+            )
+
+        return self._read(f"usage {swarm_id}/{work_id}", read)
+
     def work_traceability(self, swarm_id: str, work_id: str) -> TraceabilitySummary:
         self._require_work_slugs(swarm_id, work_id)
 
@@ -625,6 +643,7 @@ class AgoraReadService:
             clarifications=self.clarifications(swarm_id, work_id),
             traceability=self.work_traceability(swarm_id, work_id),
             sessions=sessions,
+            usage=self.usage_summary(swarm_id, work_id),
         )
 
     def _validate_flavor_contribution(

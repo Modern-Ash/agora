@@ -12,6 +12,7 @@ from agora.application.dto import (
     SerializableDTO,
     SessionSummary,
     TraceabilitySummary,
+    UsageSummaryProjection,
     WorkItemDetail,
 )
 
@@ -38,6 +39,7 @@ class FlavorProjectionContext(SerializableDTO):
     clarifications: ClarificationsProjection
     traceability: TraceabilitySummary
     sessions: tuple[SessionSummary, ...]
+    usage: UsageSummaryProjection
     schema: str = field(default="agora/application/flavor-projection-context/v1", init=False)
 
 
