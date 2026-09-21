@@ -234,6 +234,7 @@ def test_produces_complete_path_free_projection_from_real_application_services(
     ]
     assert payload["presentation"]["authoritative"] is False
     assert projector.contexts[0].project.id == "project"
+    assert projector.contexts[0].selection is None
     assert set(projector.contexts[0].project.to_dict()) == {
         "id",
         "version",
@@ -244,6 +245,35 @@ def test_produces_complete_path_free_projection_from_real_application_services(
     }
     assert str(root) not in projection.to_json()
     assert "repo://" not in projection.to_json()
+
+
+
+def test_projector_context_exposes_optional_active_flavor_selection(projection_project):
+    root, _ = projection_project
+    project_file = root / ".agora" / "project.md"
+    contents = project_file.read_text(encoding="utf-8")
+    contents = contents.replace(
+        'created-at: "2026-09-20T12:00:00Z"',
+        'active-flavor: "ai-sdlc"\n'
+        'active-profile: "lg-enterprise"\n'
+        'active-depth: "regulated"\n'
+        'created-at: "2026-09-20T12:00:00Z"',
+    )
+    project_file.write_text(contents, encoding="utf-8")
+
+    workspace = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP)
+    projector = ExampleProjector()
+    service_for(workspace, projector).flavor_projection(
+        SCHEMA, "selected-active-profile", "delivery", "projection"
+    )
+
+    assert projector.contexts[0].selection is not None
+    assert projector.contexts[0].selection.to_dict() == {
+        "flavor": "ai-sdlc",
+        "profile": "lg-enterprise",
+        "depth": "regulated",
+        "schema": "agora/application/flavor-selection-summary/v1",
+    }
 
 
 @pytest.mark.parametrize("fixture_name", ["complete", "unavailable", "future-state"])
