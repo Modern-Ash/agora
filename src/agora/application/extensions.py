@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from agora.application.dto import (
+    ActorSummary,
     ClarificationsProjection,
     LifecycleProjection,
     SerializableDTO,
@@ -40,6 +41,7 @@ class FlavorProjectionContext(SerializableDTO):
     traceability: TraceabilitySummary
     sessions: tuple[SessionSummary, ...]
     usage: UsageSummaryProjection
+    actors: tuple[ActorSummary, ...] = ()
     schema: str = field(default="agora/application/flavor-projection-context/v1", init=False)
 
 
