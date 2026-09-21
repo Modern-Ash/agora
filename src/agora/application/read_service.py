@@ -61,6 +61,7 @@ from agora.application.extensions import (
     FlavorProjectionContext,
     FlavorProjectionContribution,
     FlavorProjectionProvider,
+    FlavorSelectionSummary,
 )
 from agora.application.queries import (
     ActivityFilters,
@@ -641,6 +642,20 @@ class AgoraReadService:
             actor for actor in self.list_actors() if actor.reference in referenced_actors
         )
         configuration = self._workspace.show_project()
+        selection = None
+        if any(
+            value is not None
+            for value in (
+                configuration.active_flavor,
+                configuration.active_profile,
+                configuration.active_depth,
+            )
+        ):
+            selection = FlavorSelectionSummary(
+                flavor=configuration.active_flavor,
+                profile=configuration.active_profile,
+                depth=configuration.active_depth,
+            )
         return FlavorProjectionContext(
             project=FlavorProjectContext(
                 id=configuration.project,
@@ -656,6 +671,7 @@ class AgoraReadService:
             sessions=sessions,
             usage=self.usage_summary(swarm_id, work_id),
             actors=actors,
+            selection=selection,
         )
 
     def _validate_flavor_contribution(

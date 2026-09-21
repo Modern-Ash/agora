@@ -53,6 +53,9 @@ class ProjectConfiguration(UserConfiguration):
     version: str
     created_at: str
     gate_decision_ttl_seconds: int | None = DEFAULT_GATE_DECISION_TTL_SECONDS
+    active_flavor: str | None = None
+    active_profile: str | None = None
+    active_depth: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1449,6 +1452,9 @@ class InitInput:
     default_method: Method | None = None
     max_delegation_depth: int | None = None
     gate_decision_ttl_seconds: int | None = DEFAULT_GATE_DECISION_TTL_SECONDS
+    active_flavor: str | None = None
+    active_profile: str | None = None
+    active_depth: str | None = None
     force: bool = False
 
 
