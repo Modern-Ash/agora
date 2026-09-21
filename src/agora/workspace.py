@@ -5370,16 +5370,35 @@ class AgoraWorkspace:
         kinds = strings_attribute(document.attributes, "artifact-kinds")
         document.attributes["artifact-kinds"] = list(dict.fromkeys([*kinds, kind]))
         schema = string_attribute(document.attributes, "schema")
-        if schema in {"agora/artifacts/v1", "agora/artifacts/v2"}:
-            existing = self._work_artifact_records(work)
-            document.attributes["schema"] = "agora/artifacts/v3"
-            document.body = self._render_artifact_register(existing)
-        elif schema != "agora/artifacts/v3":
-            raise ValueError(f"Unsupported artifacts schema: {schema}")
-        document.body = (
-            f"{document.body.rstrip()}\n| {kind} | {uri} | {content_sha256 or 'none'} | "
-            f"{actor_reference} | {session_id or 'none'} | {self._timestamp()} |"
-        )
+        if session_id is not None:
+            if schema in {"agora/artifacts/v1", "agora/artifacts/v2"}:
+                existing = self._work_artifact_records(work)
+                document.attributes["schema"] = "agora/artifacts/v3"
+                document.body = self._render_artifact_register(existing)
+            elif schema != "agora/artifacts/v3":
+                raise ValueError(f"Unsupported artifacts schema: {schema}")
+            document.body = (
+                f"{document.body.rstrip()}\n| {kind} | {uri} | {content_sha256 or 'none'} | "
+                f"{actor_reference} | {session_id} | {self._timestamp()} |"
+            )
+        else:
+            if schema == "agora/artifacts/v1":
+                existing = self._work_artifact_records(work)
+                document.attributes["schema"] = "agora/artifacts/v2"
+                document.body = self._render_artifact_register_v2(existing)
+                schema = "agora/artifacts/v2"
+            if schema == "agora/artifacts/v2":
+                document.body = (
+                    f"{document.body.rstrip()}\n| {kind} | {uri} | {content_sha256 or 'none'} | "
+                    f"{actor_reference} | {self._timestamp()} |"
+                )
+            elif schema == "agora/artifacts/v3":
+                document.body = (
+                    f"{document.body.rstrip()}\n| {kind} | {uri} | {content_sha256 or 'none'} | "
+                    f"{actor_reference} | none | {self._timestamp()} |"
+                )
+            else:
+                raise ValueError(f"Unsupported artifacts schema: {schema}")
         atomic_write(path, render_markdown(document))
         self._append_work_event(
             work,
@@ -6665,17 +6684,37 @@ class AgoraWorkspace:
             or "none"
         )
         schema = string_attribute(document.attributes, "schema")
-        if schema in {"agora/evidence/v1", "agora/evidence/v2"}:
-            existing = self._work_evidence_records(work)
-            document.attributes["schema"] = "agora/evidence/v3"
-            document.body = self._render_evidence_register(existing)
-        elif schema != "agora/evidence/v3":
-            raise ValueError(f"Unsupported evidence schema: {schema}")
+        session_id = data.session_id if data is not None else None
         timestamp = self._timestamp()
-        document.body = (
-            f"{document.body.rstrip()}\n| {type_} | {result} | {references} | {digest_values} | "
-            f"{actor_reference} | {(data.session_id if data is not None else None) or 'none'} | {timestamp} |"
-        )
+        if session_id is not None:
+            if schema in {"agora/evidence/v1", "agora/evidence/v2"}:
+                existing = self._work_evidence_records(work)
+                document.attributes["schema"] = "agora/evidence/v3"
+                document.body = self._render_evidence_register(existing)
+            elif schema != "agora/evidence/v3":
+                raise ValueError(f"Unsupported evidence schema: {schema}")
+            document.body = (
+                f"{document.body.rstrip()}\n| {type_} | {result} | {references} | {digest_values} | "
+                f"{actor_reference} | {session_id} | {timestamp} |"
+            )
+        else:
+            if schema == "agora/evidence/v1":
+                existing = self._work_evidence_records(work)
+                document.attributes["schema"] = "agora/evidence/v2"
+                document.body = self._render_evidence_register_v2(existing)
+                schema = "agora/evidence/v2"
+            if schema == "agora/evidence/v2":
+                document.body = (
+                    f"{document.body.rstrip()}\n| {type_} | {result} | {references} | "
+                    f"{digest_values} | {actor_reference} | {timestamp} |"
+                )
+            elif schema == "agora/evidence/v3":
+                document.body = (
+                    f"{document.body.rstrip()}\n| {type_} | {result} | {references} | "
+                    f"{digest_values} | {actor_reference} | none | {timestamp} |"
+                )
+            else:
+                raise ValueError(f"Unsupported evidence schema: {schema}")
         atomic_write(path, render_markdown(document))
         evidence_data = data or AddEvidenceInput(
             swarm_id=work.swarm_id,
@@ -6745,7 +6784,7 @@ class AgoraWorkspace:
                     "tests-failed": record.tests_failed,
                     "environment": record.environment,
                     "dedupe-key": record.dedupe_key,
-                    "session": record.session_id,
+                    **({"session": record.session_id} if record.session_id is not None else {}),
                 },
                 body=(
                     f"# Evidence {record.id}\n\n"
