@@ -795,10 +795,21 @@ class AgoraReadService:
                 cls._reject_remote_schema_references(item)
 
     def _flavor_projection_context(self, swarm_id: str, work_id: str) -> FlavorProjectionContext:
+        work = self.get_work_item(swarm_id, work_id)
         sessions = tuple(
             session
             for session in self.list_sessions()
             if session.swarm_id == swarm_id and session.work_id == work_id
+        )
+        referenced_actors = {
+            *[artifact.produced_by for artifact in work.artifacts],
+            *[evidence.produced_by for evidence in work.evidence],
+            *[approval.actor for approval in work.approvals],
+            *[session.actor for session in sessions],
+            *[session.executor for session in sessions],
+        }
+        actors = tuple(
+            actor for actor in self.list_actors() if actor.reference in referenced_actors
         )
         configuration = self._workspace.show_project()
         selection = None
@@ -823,18 +834,13 @@ class AgoraReadService:
                 default_method=configuration.default_method,
                 created_at=configuration.created_at,
             ),
-            work=self.get_work_item(swarm_id, work_id),
+            work=work,
             lifecycle=self.lifecycle(swarm_id, work_id),
             clarifications=self.clarifications(swarm_id, work_id),
             traceability=self.work_traceability(swarm_id, work_id),
             sessions=sessions,
             usage=self.usage_summary(swarm_id, work_id),
-            metrics=self.metric_windows(
-                swarm_id,
-                work_id,
-                start=configuration.created_at,
-                end=self._timestamp(),
-            ),
+            actors=actors,
             selection=selection,
         )
 
@@ -1554,6 +1560,7 @@ class AgoraReadService:
             produced_by=record.produced_by,
             timestamp=record.timestamp,
             content_sha256=record.content_sha256,
+            session_id=record.session_id,
         )
 
     @staticmethod
@@ -1565,6 +1572,7 @@ class AgoraReadService:
             artifact_content_sha256=record.artifact_content_sha256,
             produced_by=record.produced_by,
             timestamp=record.timestamp,
+            session_id=record.session_id,
         )
 
     @staticmethod

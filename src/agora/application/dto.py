@@ -276,8 +276,15 @@ class ArtifactSummary(SerializableDTO):
     produced_by: str
     timestamp: str
     content_sha256: str | None
+    session_id: str | None = None
     activity: ActivityEntry | None = None
     schema: str = field(default="agora/application/artifact-summary/v3", init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        if self.session_id is None:
+            payload.pop("session_id", None)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -288,8 +295,15 @@ class EvidenceSummary(SerializableDTO):
     artifact_content_sha256: Mapping[str, str | None]
     produced_by: str
     timestamp: str
+    session_id: str | None = None
     activity: ActivityEntry | None = None
     schema: str = field(default="agora/application/evidence-summary/v3", init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        if self.session_id is None:
+            payload.pop("session_id", None)
+        return payload
 
 
 @dataclass(frozen=True)
