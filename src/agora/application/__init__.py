@@ -82,6 +82,7 @@ from agora.application.extensions import (
     FlavorProjectionContext,
     FlavorProjectionContribution,
     FlavorProjectionProvider,
+    FlavorSelectionSummary,
 )
 from agora.application.queries import (
     ActivityFilters,
@@ -122,6 +123,7 @@ __all__ = [
     "FlavorProjectionContext",
     "FlavorProjectionContribution",
     "FlavorProjectionProvider",
+    "FlavorSelectionSummary",
     "GateDecisionOptionSummary",
     "GateDecisionOptionsProjection",
     "GateBlockerSummary",
