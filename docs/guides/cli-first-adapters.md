@@ -144,7 +144,7 @@ agora tool invoke \
   --input state=close
 ```
 
-Search requires explicit repository and state inputs and uses bounded JSON fields; create and comment supply all content non-interactively.
+Search requires explicit repository and state inputs, maps them to native CLI flags, and uses bounded JSON fields; create and comment supply all content non-interactively.
 Transition maps the state into the native command position, so its manifest restricts the value to
 `close` or `reopen`. Values such as `delete`, `edit`, or `transfer` are rejected before `RUN.md` is
 created.
