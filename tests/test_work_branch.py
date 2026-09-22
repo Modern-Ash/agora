@@ -37,7 +37,7 @@ def _workspace(tmp_path: Path, monkeypatch) -> AgoraWorkspace:
     workspace.initialize(InitInput(integration="generic", default_method="scrum"))
     for actor in (
         AddActorInput("owner", "Owner", "human", ["backlog-management", "acceptance"], "project"),
-        AddActorInput("facilitator", "Facilitator", "human", ["facilitation"], "project"),
+        AddActorInput("facilitator", "Facilitator", "human", ["facilitation", "governance"], "project"),
         AddActorInput("developer", "Developer", "human", ["implementation"], "project"),
     ):
         workspace.add_actor(actor)
