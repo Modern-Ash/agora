@@ -9254,6 +9254,9 @@ class AgoraWorkspace:
             acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
             required_artifacts=cls._string_list_parameter(record, "required-artifacts"),
             description=record.parameters["description"],
+            base_branch=record.parameters.get("base-branch") or None,
+            branch=record.parameters.get("branch") or None,
+            create_branch=record.parameters.get("create-branch", "false") == "true",
         )
 
     @classmethod
@@ -15306,12 +15309,16 @@ class AgoraWorkspace:
                             creation.description or "No description provided.",
                             dict(creation.acceptance_criteria),
                             list(dict.fromkeys(creation.required_artifacts)),
+                            creation.base_branch,
+                            creation.branch,
                         )
                         actual = (
                             work.title,
                             work.description,
                             work.acceptance_criteria,
                             work.required_artifacts,
+                            work.base_branch,
+                            work.branch,
                         )
                         if actual != expected:
                             issue(
@@ -18387,6 +18394,9 @@ class AgoraWorkspace:
                 "description",
                 "acceptance-criteria",
                 "required-artifacts",
+                "base-branch",
+                "branch",
+                "create-branch",
             },
             "work.decompose": {
                 "child-work",
@@ -18406,6 +18416,12 @@ class AgoraWorkspace:
         optional_usage_parameters = action == "usage.add" and parameter_keys in (
             {"usage", "amounts", "evidence", "measurement"},
         )
+        legacy_work_create_parameters = action == "work.create" and parameter_keys == {
+            "title",
+            "description",
+            "acceptance-criteria",
+            "required-artifacts",
+        }
         legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
         optional_artifact_parameters = action == "artifact.add" and parameter_keys in (
             {"kind", "uri", "content-sha256"},
@@ -18449,6 +18465,7 @@ class AgoraWorkspace:
             parameter_keys != expected_parameters
             and not optional_usage_parameters
             and not legacy_delegation_parameters
+            and not legacy_work_create_parameters
             and not legacy_approval_parameters
             and not optional_artifact_parameters
             and not optional_evidence_parameters
@@ -18501,6 +18518,9 @@ class AgoraWorkspace:
             assert_slug(parameters["session"], "Lifecycle Action session id")
             if parameters.get("executor") and ":" not in parameters["executor"]:
                 raise ValueError(f"Lifecycle Action session executor must be scoped: {path}")
+        if action == "work.create" and "create-branch" in parameters:
+            if parameters["create-branch"] not in {"true", "false"}:
+                raise ValueError(f"Lifecycle Action has invalid work branch flag: {path}")
         if action == "criterion.satisfy" and parameters.get("stage"):
             assert_slug(parameters["stage"], "Lifecycle Action criterion stage")
         if action == "swarm.assign":
