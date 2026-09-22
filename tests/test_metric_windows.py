@@ -1,9 +1,9 @@
 from pathlib import Path
 
+import test_adr_0002
+
 from agora.application import AgoraReadService
 from agora.model import AddUsageInput
-
-import test_adr_0002
 
 
 START = "2000-01-01T00:00:00Z"
