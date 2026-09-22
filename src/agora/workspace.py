@@ -17367,9 +17367,11 @@ class AgoraWorkspace:
             "required-artifacts": work.required_artifacts,
             "child-work-refs": work.child_work_refs,
             "budget-limits": work.budget_limits,
-            "base-branch": work.base_branch,
-            "branch": work.branch,
         }
+        if work.base_branch is not None:
+            attributes["base-branch"] = work.base_branch
+        if work.branch is not None:
+            attributes["branch"] = work.branch
         if work.delegation_id is not None:
             attributes["delegation"] = work.delegation_id
         if work.parent_work_ref is not None:
