@@ -52,6 +52,7 @@ class FlavorProjectionContext(SerializableDTO):
     traceability: TraceabilitySummary
     sessions: tuple[SessionSummary, ...]
     usage: UsageSummaryProjection
+    metrics: tuple[MetricWindowSummary, ...]
     actors: tuple[ActorSummary, ...] = ()
     selection: FlavorSelectionSummary | None = None
     schema: str = field(default="agora/application/flavor-projection-context/v1", init=False)

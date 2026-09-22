@@ -1,7 +1,7 @@
+# ruff: noqa: I001
 from pathlib import Path
 
 import test_adr_0002
-
 from agora.application import AgoraReadService
 from agora.model import AddUsageInput
 

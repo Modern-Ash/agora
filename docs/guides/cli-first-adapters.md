@@ -118,10 +118,22 @@ profiles remain owned by GitHub CLI and must never be Tool Pack inputs.
 
 ## GitHub Issues through `gh`
 
-The `github-issues` adapter implements `work-management` through native issue commands:
+The `github-issues` adapter implements `work-management` through native issue commands. Repository
+and state filters are structured adapter inputs so they map to `gh search issues --repo/--state`
+rather than being embedded into one query argument:
 
 ```bash
 agora tool adapter install --id github-issues --scope project
+agora tool invoke \
+  --id inspect-open-governance-work \
+  --tool github-issues \
+  --operation search \
+  --actor developer \
+  --swarm delivery \
+  --input query=label:governance \
+  --input project=example/agora \
+  --input state=open
+
 agora tool invoke \
   --id close-reviewed-issue \
   --tool github-issues \
@@ -132,7 +144,7 @@ agora tool invoke \
   --input state=close
 ```
 
-Search and view use bounded JSON fields; create and comment supply all content non-interactively.
+Search requires explicit repository and state inputs, maps them to native CLI flags, and uses bounded JSON fields; create and comment supply all content non-interactively.
 Transition maps the state into the native command position, so its manifest restricts the value to
 `close` or `reopen`. Values such as `delete`, `edit`, or `transfer` are rejected before `RUN.md` is
 created.

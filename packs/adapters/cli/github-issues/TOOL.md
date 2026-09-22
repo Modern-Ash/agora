@@ -2,7 +2,7 @@
 schema: "agora/tool/v1"
 id: "github-issues"
 name: "GitHub Issues CLI adapter"
-version: "1.0.0"
+version: "1.0.1"
 dependencies: []
 category: "issue-tracker"
 executable: "gh"
