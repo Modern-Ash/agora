@@ -4583,7 +4583,7 @@ class AgoraWorkspace:
         assert_slug(data.id, "Work id")
         swarm = self._load_swarm(root, data.swarm_id)
         allowed_statuses = {"ready", "running"} | (
-            {"completed"} if allow_completed_swarm else set()
+            {"completed"} if allow_completed_swarm or action == "work.create" else set()
         )
         if swarm.status not in allowed_statuses:
             raise ValueError(f"Swarm {swarm.id} must be ready before work can be created")
@@ -4728,6 +4728,7 @@ class AgoraWorkspace:
             self._append_work_event(
                 work, "work.created", f"state={work.state} actor={actor.reference}"
             )
+            self._refresh_swarm_status(root, swarm, changed_work=work)
         return work
 
     @_locked_mutation("project")
