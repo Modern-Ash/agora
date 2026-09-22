@@ -373,6 +373,8 @@ class WorkRecord:
     parent_work_ref: str | None = None
     criterion_statuses: dict[str, list[str]] = field(default_factory=dict)
     revision: int = 1
+    base_branch: str | None = None
+    branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1814,6 +1816,9 @@ class CreateWorkInput:
     acceptance_criteria: list[tuple[str, str]] = field(default_factory=list)
     required_artifacts: list[str] = field(default_factory=list)
     description: str = ""
+    base_branch: str | None = None
+    branch: str | None = None
+    create_branch: bool = False
 
 
 @dataclass(frozen=True)
