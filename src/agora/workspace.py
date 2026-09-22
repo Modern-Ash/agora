@@ -4643,7 +4643,8 @@ class AgoraWorkspace:
             base_branch = data.base_branch
             if active_branch != work_branch:
                 raise ValueError(
-                    f"Cannot bind Work to inactive branch {work_branch}; current branch is {active_branch}"
+                    f"Cannot bind Work to inactive branch {work_branch}; "
+                    f"current branch is {active_branch}"
                 )
 
         work = WorkRecord(
