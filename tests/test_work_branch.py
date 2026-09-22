@@ -111,12 +111,16 @@ def test_create_work_branch_fails_closed_on_dirty_tree(tmp_path: Path, monkeypat
     assert _git(tmp_path, "branch", "--show-current") == "main"
 
 
-def test_create_work_reopens_completed_swarm_from_derived_status(tmp_path: Path, monkeypatch) -> None:
+def test_create_work_reopens_completed_swarm_from_derived_status(
+    tmp_path: Path, monkeypatch
+) -> None:
     workspace = _workspace(tmp_path, monkeypatch)
     swarm_file = Path(workspace.show_swarm("delivery").path) / "SWARM.md"
     content = swarm_file.read_text(encoding="utf-8")
     assert 'status: "ready"' in content
-    swarm_file.write_text(content.replace('status: "ready"', 'status: "completed"', 1), encoding="utf-8")
+    swarm_file.write_text(
+        content.replace('status: "ready"', 'status: "completed"', 1), encoding="utf-8"
+    )
 
     work = workspace.create_work(
         CreateWorkInput(
@@ -127,5 +131,5 @@ def test_create_work_reopens_completed_swarm_from_derived_status(tmp_path: Path,
         )
     )
 
-    assert work.state == "backlog"
+    assert work.state == "specified"
     assert workspace.show_swarm("delivery").status == "ready"
