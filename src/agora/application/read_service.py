@@ -840,6 +840,12 @@ class AgoraReadService:
             traceability=self.work_traceability(swarm_id, work_id),
             sessions=sessions,
             usage=self.usage_summary(swarm_id, work_id),
+            metrics=self.metric_windows(
+                swarm_id,
+                work_id,
+                start=configuration.created_at,
+                end=self._metric_time(self._now()),
+            ),
             actors=actors,
             selection=selection,
         )
