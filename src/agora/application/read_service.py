@@ -294,6 +294,8 @@ class AgoraReadService:
                 budget_limits=work.budget_limits,
                 delegation_id=work.delegation_id,
                 parent_work_ref=work.parent_work_ref,
+                base_branch=work.base_branch,
+                branch=work.branch,
                 artifacts=artifacts,
                 evidence=evidence,
                 approvals=approvals,
@@ -1613,6 +1615,8 @@ class AgoraReadService:
             budget_limits=record.budget_limits,
             delegation_id=record.delegation_id,
             parent_work_ref=record.parent_work_ref,
+            base_branch=record.base_branch,
+            branch=record.branch,
             criterion_statuses=record.criterion_statuses,
         )
 
