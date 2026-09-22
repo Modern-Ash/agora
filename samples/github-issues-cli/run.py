@@ -68,7 +68,7 @@ def main() -> None:
             operation_id="search",
             actor_id="developer",
             swarm_id="delivery",
-            inputs={"query": "repo:example/agora is:open label:governance"},
+            inputs={"query": "label:governance", "project": "example/agora", "state": "open"},
         )
     )
     transition = agora.invoke_tool(

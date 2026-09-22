@@ -2278,7 +2278,7 @@ def test_installs_and_governs_the_github_issues_cli_adapter(
             operation_id="search",
             actor_id="developer",
             swarm_id="delivery",
-            inputs={"query": "repo:openai/codex is:open label:bug"},
+            inputs={"query": "label:bug", "project": "openai/codex", "state": "open"},
         )
     )
     created = workspace.invoke_tool(
@@ -2307,7 +2307,17 @@ def test_installs_and_governs_the_github_issues_cli_adapter(
         )
     )
 
-    assert searched.command[:3] == ["gh", "search", "issues"]
+    assert searched.command[:9] == [
+        "gh",
+        "search",
+        "issues",
+        "label:bug",
+        "--repo",
+        "openai/codex",
+        "--state",
+        "open",
+        "--limit",
+    ]
     assert created.command[:5] == [
         "gh",
         "issue",

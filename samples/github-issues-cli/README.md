@@ -1,7 +1,8 @@
 # GitHub Issues CLI adapter sample
 
 This sample installs the reviewed GitHub Issues adapter and prepares native search and transition
-commands through the developer's existing `gh` profile. It does not contact GitHub.
+commands through the developer's existing `gh` profile. Search keeps repository/state as structured
+native flags instead of embedding them in one free-form query argument. It does not contact GitHub.
 
 The Product Owner can close or reopen an issue through `issue.transition`. An `input-values` rule
 rejects every other dynamic issue subcommand before Agora creates a Tool Run.
