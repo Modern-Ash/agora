@@ -4566,6 +4566,9 @@ class AgoraWorkspace:
                     ensure_ascii=True,
                     separators=(",", ":"),
                 ),
+                "base-branch": data.work.base_branch or "",
+                "branch": data.work.branch or "",
+                "create-branch": "true" if data.work.create_branch else "false",
             },
         )
 
@@ -4605,6 +4608,44 @@ class AgoraWorkspace:
         budget_limits: dict[str, int] | None = None,
     ) -> WorkRecord:
         swarm, actor, contract, criteria, path = context
+        root = self.project_root()
+        base_branch: str | None = None
+        work_branch: str | None = None
+        if data.create_branch:
+            if not is_git_repository(root):
+                raise ValueError("Per-work branch creation requires a Git repository")
+            changes = working_tree_changes(root)
+            if changes:
+                raise ValueError(
+                    "Per-work branch creation requires a clean working tree; "
+                    f"found {len(changes)} change(s)"
+                )
+            active_branch = current_branch(root)
+            base_branch = data.base_branch or active_branch
+            if active_branch != base_branch:
+                raise ValueError(
+                    f"Per-work branch must start from base branch {base_branch}; "
+                    f"current branch is {active_branch}"
+                )
+            work_branch = data.branch or f"agora/{swarm.id}/{data.id}"
+            if ref_exists(root, f"refs/heads/{work_branch}") or ref_exists(
+                root, f"refs/remotes/origin/{work_branch}"
+            ):
+                raise FileExistsError(
+                    f"Per-work branch already exists without a Work binding: {work_branch}"
+                )
+            create_branch(root, work_branch)
+        elif data.branch is not None or data.base_branch is not None:
+            if not is_git_repository(root):
+                raise ValueError("Per-work branch binding requires a Git repository")
+            active_branch = current_branch(root)
+            work_branch = data.branch or active_branch
+            base_branch = data.base_branch
+            if active_branch != work_branch:
+                raise ValueError(
+                    f"Cannot bind Work to inactive branch {work_branch}; current branch is {active_branch}"
+                )
+
         work = WorkRecord(
             id=data.id,
             swarm_id=swarm.id,
@@ -4622,6 +4663,8 @@ class AgoraWorkspace:
             budget_limits=budget_limits,
             parent_work_ref=parent_work_ref,
             revision=1,
+            base_branch=base_branch,
+            branch=work_branch,
         )
         with filesystem_transaction():
             write_new(path / "WORK.md", self._render_work(work))
@@ -17286,6 +17329,8 @@ class AgoraWorkspace:
                 else {}
             ),
             revision=_optional_integer_attribute(document.attributes, "revision") or 1,
+            base_branch=optional_string_attribute(document.attributes, "base-branch"),
+            branch=optional_string_attribute(document.attributes, "branch"),
         )
 
     def _render_work(self, work: WorkRecord) -> str:
@@ -17315,6 +17360,8 @@ class AgoraWorkspace:
             "required-artifacts": work.required_artifacts,
             "child-work-refs": work.child_work_refs,
             "budget-limits": work.budget_limits,
+            "base-branch": work.base_branch,
+            "branch": work.branch,
         }
         if work.delegation_id is not None:
             attributes["delegation"] = work.delegation_id
