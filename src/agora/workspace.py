@@ -4566,6 +4566,9 @@ class AgoraWorkspace:
                     ensure_ascii=True,
                     separators=(",", ":"),
                 ),
+                "base-branch": data.work.base_branch or "",
+                "branch": data.work.branch or "",
+                "create-branch": "true" if data.work.create_branch else "false",
             },
         )
 
@@ -4605,6 +4608,45 @@ class AgoraWorkspace:
         budget_limits: dict[str, int] | None = None,
     ) -> WorkRecord:
         swarm, actor, contract, criteria, path = context
+        root = self.project_root()
+        base_branch: str | None = None
+        work_branch: str | None = None
+        if data.create_branch:
+            if not is_git_repository(root):
+                raise ValueError("Per-work branch creation requires a Git repository")
+            changes = working_tree_changes(root)
+            if changes:
+                raise ValueError(
+                    "Per-work branch creation requires a clean working tree; "
+                    f"found {len(changes)} change(s)"
+                )
+            active_branch = current_branch(root)
+            base_branch = data.base_branch or active_branch
+            if active_branch != base_branch:
+                raise ValueError(
+                    f"Per-work branch must start from base branch {base_branch}; "
+                    f"current branch is {active_branch}"
+                )
+            work_branch = data.branch or f"agora/{swarm.id}/{data.id}"
+            if ref_exists(root, f"refs/heads/{work_branch}") or ref_exists(
+                root, f"refs/remotes/origin/{work_branch}"
+            ):
+                raise FileExistsError(
+                    f"Per-work branch already exists without a Work binding: {work_branch}"
+                )
+            create_branch(root, work_branch)
+        elif data.branch is not None or data.base_branch is not None:
+            if not is_git_repository(root):
+                raise ValueError("Per-work branch binding requires a Git repository")
+            active_branch = current_branch(root)
+            work_branch = data.branch or active_branch
+            base_branch = data.base_branch
+            if active_branch != work_branch:
+                raise ValueError(
+                    f"Cannot bind Work to inactive branch {work_branch}; "
+                    f"current branch is {active_branch}"
+                )
+
         work = WorkRecord(
             id=data.id,
             swarm_id=swarm.id,
@@ -4622,6 +4664,8 @@ class AgoraWorkspace:
             budget_limits=budget_limits,
             parent_work_ref=parent_work_ref,
             revision=1,
+            base_branch=base_branch,
+            branch=work_branch,
         )
         with filesystem_transaction():
             write_new(path / "WORK.md", self._render_work(work))
@@ -9211,6 +9255,9 @@ class AgoraWorkspace:
             acceptance_criteria=[(item[0], item[1]) for item in raw_criteria],
             required_artifacts=cls._string_list_parameter(record, "required-artifacts"),
             description=record.parameters["description"],
+            base_branch=record.parameters.get("base-branch") or None,
+            branch=record.parameters.get("branch") or None,
+            create_branch=record.parameters.get("create-branch", "false") == "true",
         )
 
     @classmethod
@@ -15263,12 +15310,16 @@ class AgoraWorkspace:
                             creation.description or "No description provided.",
                             dict(creation.acceptance_criteria),
                             list(dict.fromkeys(creation.required_artifacts)),
+                            creation.base_branch,
+                            creation.branch,
                         )
                         actual = (
                             work.title,
                             work.description,
                             work.acceptance_criteria,
                             work.required_artifacts,
+                            work.base_branch,
+                            work.branch,
                         )
                         if actual != expected:
                             issue(
@@ -17286,6 +17337,8 @@ class AgoraWorkspace:
                 else {}
             ),
             revision=_optional_integer_attribute(document.attributes, "revision") or 1,
+            base_branch=optional_string_attribute(document.attributes, "base-branch"),
+            branch=optional_string_attribute(document.attributes, "branch"),
         )
 
     def _render_work(self, work: WorkRecord) -> str:
@@ -17316,6 +17369,10 @@ class AgoraWorkspace:
             "child-work-refs": work.child_work_refs,
             "budget-limits": work.budget_limits,
         }
+        if work.base_branch is not None:
+            attributes["base-branch"] = work.base_branch
+        if work.branch is not None:
+            attributes["branch"] = work.branch
         if work.delegation_id is not None:
             attributes["delegation"] = work.delegation_id
         if work.parent_work_ref is not None:
@@ -18340,6 +18397,9 @@ class AgoraWorkspace:
                 "description",
                 "acceptance-criteria",
                 "required-artifacts",
+                "base-branch",
+                "branch",
+                "create-branch",
             },
             "work.decompose": {
                 "child-work",
@@ -18359,6 +18419,12 @@ class AgoraWorkspace:
         optional_usage_parameters = action == "usage.add" and parameter_keys in (
             {"usage", "amounts", "evidence", "measurement"},
         )
+        legacy_work_create_parameters = action == "work.create" and parameter_keys == {
+            "title",
+            "description",
+            "acceptance-criteria",
+            "required-artifacts",
+        }
         legacy_approval_parameters = action == "approval.add" and parameter_keys == {"role", "note"}
         optional_artifact_parameters = action == "artifact.add" and parameter_keys in (
             {"kind", "uri", "content-sha256"},
@@ -18402,6 +18468,7 @@ class AgoraWorkspace:
             parameter_keys != expected_parameters
             and not optional_usage_parameters
             and not legacy_delegation_parameters
+            and not legacy_work_create_parameters
             and not legacy_approval_parameters
             and not optional_artifact_parameters
             and not optional_evidence_parameters
@@ -18454,6 +18521,9 @@ class AgoraWorkspace:
             assert_slug(parameters["session"], "Lifecycle Action session id")
             if parameters.get("executor") and ":" not in parameters["executor"]:
                 raise ValueError(f"Lifecycle Action session executor must be scoped: {path}")
+        if action == "work.create" and "create-branch" in parameters:
+            if parameters["create-branch"] not in {"true", "false"}:
+                raise ValueError(f"Lifecycle Action has invalid work branch flag: {path}")
         if action == "criterion.satisfy" and parameters.get("stage"):
             assert_slug(parameters["stage"], "Lifecycle Action criterion stage")
         if action == "swarm.assign":

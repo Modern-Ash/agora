@@ -406,6 +406,8 @@ def _cli_read_payload(value: Any, workspace: AgoraWorkspace) -> Any:
                 key: list(items) for key, items in value.criterion_statuses.items()
             },
             "revision": workspace.show_work(value.swarm_id, value.id).revision,
+            "base_branch": value.base_branch,
+            "branch": value.branch,
         }
     if isinstance(value, ActivityEntry):
         root = workspace.project_root()

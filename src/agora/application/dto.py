@@ -259,6 +259,8 @@ class WorkItemSummary(SerializableDTO):
     budget_limits: Mapping[str, int] | None
     delegation_id: str | None
     parent_work_ref: str | None
+    base_branch: str | None = None
+    branch: str | None = None
     description: str = ""
     acceptance_criteria: Mapping[str, str] = field(default_factory=dict)
     satisfied_criteria: tuple[str, ...] = ()
@@ -336,6 +338,8 @@ class WorkItemDetail(SerializableDTO):
     budget_limits: Mapping[str, int] | None
     delegation_id: str | None
     parent_work_ref: str | None
+    base_branch: str | None
+    branch: str | None
     artifacts: tuple[ArtifactSummary, ...]
     evidence: tuple[EvidenceSummary, ...]
     approvals: tuple[ApprovalSummary, ...]
