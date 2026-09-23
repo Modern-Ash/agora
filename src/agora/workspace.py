@@ -20819,7 +20819,8 @@ def _run_tool_process(
                     break
                 if time.monotonic() - started >= timeout_seconds:
                     boundary = (
-                        f"Agora terminated the {boundary_subject} after {timeout_seconds:g} seconds."
+                        f"Agora terminated the {boundary_subject} after "
+                        f"{timeout_seconds:g} seconds."
                     )
                     boundary_exit_code = 124
                     process.kill()
