@@ -11083,6 +11083,7 @@ class AgoraWorkspace:
         session_path = Path(running.path)
         environment = {
             **os.environ,
+            "PWD": str(root),
             "AGORA_PROJECT": str(root),
             # Chat-launched Codex and Claude sessions do not normally have a TTY. Keep
             # engine progress visible there while preserving command results on stdout.
