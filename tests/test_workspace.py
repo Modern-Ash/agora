@@ -1663,6 +1663,40 @@ def test_tool_running_commit_blocks_external_execution_and_can_retry(
     assert runner_calls == [["git", "status", "--short"]]
 
 
+def test_session_launcher_receives_consistent_governed_cwd_and_pwd(
+    project: tuple[Path, AgoraWorkspace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace = project
+    _prepare_scrum_team(workspace)
+    monkeypatch.setenv("PWD", "/caller/checkout")
+    observed: dict[str, object] = {}
+
+    def launcher(command: list[str], cwd: Path, environment: dict[str, str]) -> int:
+        observed["cwd"] = cwd
+        observed["pwd"] = environment["PWD"]
+        observed["project"] = environment["AGORA_PROJECT"]
+        return 0
+
+    governed = AgoraWorkspace(cwd=root, now=lambda: TIMESTAMP, launcher=launcher)
+    session = governed.start_session(
+        StartSessionInput(
+            id="pwd-consistency",
+            actor_id="developer",
+            swarm_id="delivery",
+            runner="/bin/true",
+            launch=True,
+        )
+    )
+
+    assert session.status == "completed"
+    assert observed == {
+        "cwd": root,
+        "pwd": str(root),
+        "project": str(root),
+    }
+
+
 def test_resume_session_reuses_prepared_and_failed_limits_without_partial_attempts(
     project: tuple[Path, AgoraWorkspace],
     atomic_write_fault,
