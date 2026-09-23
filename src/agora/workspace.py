@@ -20804,27 +20804,33 @@ def _run_tool_process(
             stdout=stdout_file,
             stderr=stderr_file,
         )
-        while process.poll() is None:
-            output_size = (
-                os.fstat(stdout_file.fileno()).st_size + os.fstat(stderr_file.fileno()).st_size
-            )
-            if output_size > max_output_bytes:
-                boundary = (
-                    f"Agora terminated the {boundary_subject} after output exceeded "
-                    f"{max_output_bytes} bytes."
+        try:
+            while process.poll() is None:
+                output_size = (
+                    os.fstat(stdout_file.fileno()).st_size + os.fstat(stderr_file.fileno()).st_size
                 )
-                boundary_exit_code = 125
+                if output_size > max_output_bytes:
+                    boundary = (
+                        f"Agora terminated the {boundary_subject} after output exceeded "
+                        f"{max_output_bytes} bytes."
+                    )
+                    boundary_exit_code = 125
+                    process.kill()
+                    break
+                if time.monotonic() - started >= timeout_seconds:
+                    boundary = (
+                        f"Agora terminated the {boundary_subject} after {timeout_seconds:g} seconds."
+                    )
+                    boundary_exit_code = 124
+                    process.kill()
+                    break
+                time.sleep(0.01)
+            process.wait()
+        except BaseException:
+            if process.poll() is None:
                 process.kill()
-                break
-            if time.monotonic() - started >= timeout_seconds:
-                boundary = (
-                    f"Agora terminated the {boundary_subject} after {timeout_seconds:g} seconds."
-                )
-                boundary_exit_code = 124
-                process.kill()
-                break
-            time.sleep(0.01)
-        process.wait()
+            process.wait()
+            raise
         actual_output_size = (
             os.fstat(stdout_file.fileno()).st_size + os.fstat(stderr_file.fileno()).st_size
         )
