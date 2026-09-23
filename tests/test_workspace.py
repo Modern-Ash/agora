@@ -46,9 +46,51 @@ from agora.model import (
     WaiveGateInput,
     WorkActorInput,
 )
-from agora.workspace import AgoraWorkspace
+from agora.workspace import AgoraWorkspace, _run_tool_process
 
 TIMESTAMP = datetime(2026, 8, 14, 12, tzinfo=UTC)
+
+
+def test_run_tool_process_kills_and_reaps_child_on_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = {"killed": False, "waited": False}
+
+    class Process:
+        returncode = -9
+
+        def poll(self):
+            return self.returncode if observed["killed"] else None
+
+        def kill(self):
+            observed["killed"] = True
+
+        def wait(self):
+            observed["waited"] = True
+            return self.returncode
+
+    monkeypatch.setattr(
+        "agora.workspace.subprocess.Popen",
+        lambda *args, **kwargs: Process(),
+    )
+
+    def interrupt(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("agora.workspace.time.sleep", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        _run_tool_process(
+            ["/bin/true"],
+            tmp_path,
+            {},
+            timeout_seconds=60,
+            max_output_bytes=1024,
+            boundary_subject="session",
+        )
+
+    assert observed == {"killed": True, "waited": True}
 
 
 @pytest.fixture
